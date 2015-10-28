@@ -37,7 +37,6 @@ type t = {
   version: Version.t;
   backing_file_offset: offset;        (** offset of the backing file path *)
   backing_file_size: int32;           (** length of the backing file path *)
-  backing_file: string option;        (** a path, if this is a copy-on-write image *)
   cluster_bits: int32;                (** a cluster is 2 ** cluster_bits in size *)
   size: int64;                        (** virtual size of the image *)
   crypt_method: CryptMethod.t;
@@ -46,7 +45,7 @@ type t = {
   refcount_table_offset: offset;      (** offset of the refcount table *)
   refcount_table_clusters: int32;     (** size of the refcount table in clusters *)
   nb_snapshots: int32;                (** the number of internal snapshots *)
-  snapshots_offsets: offset;          (** offset of the snapshot header *)
+  snapshots_offset: offset;           (** offset of the snapshot header *)
 } with sexp
 (** The qcow2 header *)
 

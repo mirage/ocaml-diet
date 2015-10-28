@@ -64,7 +64,6 @@ type t = {
   version: Version.t;
   backing_file_offset: offset;
   backing_file_size: int32;
-  backing_file: string option;
   cluster_bits: int32;
   size: int64;
   crypt_method: CryptMethod.t;
@@ -73,7 +72,7 @@ type t = {
   refcount_table_offset: offset;
   refcount_table_clusters: int32;
   nb_snapshots: int32;
-  snapshots_offsets: offset;
+  snapshots_offset: offset;
 } with sexp
 
 let sizeof _ = 4 + 4 + 8 + 4 + 4 + 8 + 4 + 4 + 8 + 8 + 4 + 4 + 8
@@ -111,15 +110,59 @@ let write t rest =
   >>= fun rest ->
   Int32.write t.nb_snapshots rest
   >>= fun rest ->
-  Int64.write t.snapshots_offsets rest
+  Int64.write t.snapshots_offset rest
 
 let read rest =
- big_enough_for "Header" rest (sizeof ())
- >>= fun () ->
- Int8.read rest
- >>= fun (x, rest) ->
- ( if char_of_int x = 'Q'
-   then return rest
-   else error_msg "Expected magic: got %02x" x )
- >>= fun rest ->
- failwith "unimplemented"
+  big_enough_for "Header" rest (sizeof ())
+  >>= fun () ->
+  Int8.read rest
+  >>= fun (x, rest) ->
+  ( if char_of_int x = 'Q'
+    then return rest
+    else error_msg "Expected magic: got %02x" x )
+  >>= fun rest ->
+  Int8.read rest
+  >>= fun (x, rest) ->
+  ( if char_of_int x = 'F'
+    then return rest
+    else error_msg "Expected magic: got %02x" x )
+  >>= fun rest ->
+  Int8.read rest
+  >>= fun (x, rest) ->
+  ( if char_of_int x = 'I'
+    then return rest
+    else error_msg "Expected magic: got %02x" x )
+  >>= fun rest ->
+  Int8.read rest
+  >>= fun (x, rest) ->
+  ( if x = 0xfb
+    then return rest
+    else error_msg "Expected magic: got %02x" x )
+  >>= fun rest ->
+  Version.read rest
+  >>= fun (version, rest) ->
+  Int64.read rest
+  >>= fun (backing_file_offset, rest) ->
+  Int32.read rest
+  >>= fun (backing_file_size, rest) ->
+  Int32.read rest
+  >>= fun (cluster_bits, rest) ->
+  Int64.read rest
+  >>= fun (size, rest) ->
+  CryptMethod.read rest
+  >>= fun (crypt_method, rest) ->
+  Int32.read rest
+  >>= fun (ll_size, rest) ->
+  Int64.read rest
+  >>= fun (ll_table_offset, rest) ->
+  Int64.read rest
+  >>= fun (refcount_table_offset, rest) ->
+  Int32.read rest
+  >>= fun (refcount_table_clusters, rest) ->
+  Int32.read rest
+  >>= fun (nb_snapshots, rest) ->
+  Int64.read rest
+  >>= fun (snapshots_offset, rest) ->
+  return ({ version; backing_file_offset; backing_file_size; cluster_bits;
+    size; crypt_method; ll_size; ll_table_offset; refcount_table_offset;
+    refcount_table_clusters; nb_snapshots; snapshots_offset }, rest)
