@@ -19,6 +19,7 @@ module Version : sig
   type t = [
     | `One
     | `Two
+    | `Three
   ] with sexp
 
   include S.SERIALISABLE with type t := t

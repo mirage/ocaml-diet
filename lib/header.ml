@@ -23,13 +23,14 @@ module Version = struct
   type t = [
     | `One
     | `Two
+    | `Three
   ] with sexp
 
 
   let sizeof t = 4
   
   let write t rest =
-    Int32.write (match t with | `One -> 1l | `Two -> 2l) rest
+    Int32.write (match t with | `One -> 1l | `Two -> 2l | `Three -> 3l) rest
 
   let read rest =
     Int32.read rest
@@ -37,6 +38,7 @@ module Version = struct
     match version with
     | 1l -> return (`One, rest)
     | 2l -> return (`Two, rest)
+    | 3l -> return (`Three, rest)
     | _ -> error_msg "Unknown version: %ld" version
 end
 
