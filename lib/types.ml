@@ -48,12 +48,12 @@ module Int16 = struct
   let read buf =
     big_enough_for "Int16.read" buf 2
     >>= fun () ->
-    return (Cstruct.LE.get_uint16 buf 0, Cstruct.shift buf 2)
+    return (Cstruct.BE.get_uint16 buf 0, Cstruct.shift buf 2)
 
   let write t buf =
     big_enough_for "Int16.write" buf 2
     >>= fun () ->
-    Cstruct.LE.set_uint16 buf 0 t;
+    Cstruct.BE.set_uint16 buf 0 t;
     return (Cstruct.shift buf 2)
 end
 
@@ -69,12 +69,12 @@ module Int32 = struct
   let read buf =
     big_enough_for "Int32.read" buf 4
     >>= fun () ->
-    return (Cstruct.LE.get_uint32 buf 0, Cstruct.shift buf 4)
+    return (Cstruct.BE.get_uint32 buf 0, Cstruct.shift buf 4)
 
   let write t buf =
     big_enough_for "Int32.read" buf 4
     >>= fun () ->
-    Cstruct.LE.set_uint32 buf 0 t;
+    Cstruct.BE.set_uint32 buf 0 t;
     return (Cstruct.shift buf 4)
 end
 
@@ -86,11 +86,11 @@ module Int64 = struct
   let read buf =
     big_enough_for "Int64.read" buf 8
     >>= fun () ->
-    return (Cstruct.LE.get_uint64 buf 0, Cstruct.shift buf 8)
+    return (Cstruct.BE.get_uint64 buf 0, Cstruct.shift buf 8)
 
   let write t buf =
     big_enough_for "Int64.read" buf 8
     >>= fun () ->
-    Cstruct.LE.set_uint64 buf 0 t;
+    Cstruct.BE.set_uint64 buf 0 t;
     return (Cstruct.shift buf 8)
 end
