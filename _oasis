@@ -1,0 +1,25 @@
+OASISFormat: 0.3
+Name:        qcow
+Version:     0.1
+Synopsis:    Qcow2 image format
+Authors:     David Scott
+License:     ISC
+Plugins:     META (0.3)
+BuildTools:  ocamlbuild
+
+Library format_qcow
+  Pack:               true
+  CompiledObject:     best
+  Path:               lib
+  Findlibname:        qcow
+  Modules:            S, Header, Error
+  BuildDepends:       result, cstruct, sexplib, sexplib.syntax, mirage-types.lwt
+
+Document format_qcow
+  Title:                Qcow docs
+  Type:                 ocamlbuild (0.3)
+  BuildTools+:          ocamldoc
+  Install:              true
+  XOCamlbuildPath:      lib
+  XOCamlbuildLibraries: qcow
+
