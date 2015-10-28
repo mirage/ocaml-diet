@@ -35,17 +35,17 @@ type offset = int64
 
 type t = {
   version: Version.t;
-  backing_file_offset: offset;        (** offset of the backing file path *)
-  backing_file_size: int32;           (** length of the backing file path *)
-  cluster_bits: int32;                (** a cluster is 2 ** cluster_bits in size *)
-  size: int64;                        (** virtual size of the image *)
+  backing_file_offset: offset;    (** offset of the backing file path *)
+  backing_file_size: int32;       (** length of the backing file path *)
+  cluster_bits: int32;            (** a cluster is 2 ** cluster_bits in size *)
+  size: int64;                    (** virtual size of the image *)
   crypt_method: CryptMethod.t;
-  ll_size: int32;                     (** number of 8-byte entries in the L1 table *)
-  ll_table_offset: offset;            (** offset of the L1 table *)
-  refcount_table_offset: offset;      (** offset of the refcount table *)
-  refcount_table_clusters: int32;     (** size of the refcount table in clusters *)
-  nb_snapshots: int32;                (** the number of internal snapshots *)
-  snapshots_offset: offset;           (** offset of the snapshot header *)
+  ll_size: int32;                 (** number of 8-byte entries in the L1 table *)
+  ll_table_offset: offset;        (** offset of the L1 table *)
+  refcount_table_offset: offset;  (** offset of the refcount table *)
+  refcount_table_clusters: int32; (** size of the refcount table in clusters *)
+  nb_snapshots: int32;            (** the number of internal snapshots *)
+  snapshots_offset: offset;       (** offset of the snapshot header *)
 } with sexp
 (** The qcow2 header *)
 
