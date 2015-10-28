@@ -1,0 +1,10 @@
+language: c
+install:
+  - wget https://raw.githubusercontent.com/ocaml/ocaml-travisci-skeleton/master/.travis-opam.sh
+  - wget https://raw.githubusercontent.com/simonjbeaumont/ocaml-travis-coveralls/master/travis-coveralls.sh
+script: bash -ex .travis-opam.sh && bash -ex travis-coveralls.sh
+sudo: required
+env:
+  global:
+    - PACKAGE="qcow" OCAML_VERSION=4.02
+    - COV_CONF="export TESTS=--enable-tests"
