@@ -7,7 +7,7 @@ License:     ISC
 Plugins:     META (0.3)
 BuildTools:  ocamlbuild
 
-Library format_qcow
+Library qcow
   Pack:               true
   CompiledObject:     best
   Path:               lib
@@ -15,7 +15,7 @@ Library format_qcow
   Modules:            S, Header, Error, Types
   BuildDepends:       result, cstruct, sexplib, sexplib.syntax, mirage-types.lwt
 
-Document format_qcow
+Document qcow
   Title:                Qcow docs
   Type:                 ocamlbuild (0.3)
   BuildTools+:          ocamldoc
@@ -23,3 +23,10 @@ Document format_qcow
   XOCamlbuildPath:      lib
   XOCamlbuildLibraries: qcow
 
+Executable "qcow-tool"
+  CompiledObject:     best
+  Path:               cli
+  MainIs:             main.ml
+  Custom:             true
+  Install:            false
+  BuildDepends:       lwt, lwt.unix, qcow, cmdliner, cstruct.lwt
