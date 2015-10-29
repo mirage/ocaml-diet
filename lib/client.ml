@@ -42,4 +42,15 @@ module Make(B: V1_LWT.BLOCK) = struct
   let write t ofs bufs = B.write t.base ofs bufs
 
   let disconnect t = B.disconnect t.base
+
+  let connect base =
+    let open Lwt in
+    B.get_info base
+    >>= fun info ->
+    let info' = {
+      read_write = false;
+      sector_size = info.B.sector_size;
+      size_sectors = info.B.size_sectors
+    } in
+    Lwt.return (`Ok { base; info = info' })
 end

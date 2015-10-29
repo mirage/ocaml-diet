@@ -29,4 +29,4 @@ Executable "qcow-tool"
   MainIs:             main.ml
   Custom:             true
   Install:            false
-  BuildDepends:       lwt, lwt.unix, qcow, cmdliner, cstruct.lwt
+  BuildDepends:       lwt, lwt.unix, qcow, cmdliner, cstruct.lwt, mirage-block-unix

@@ -15,4 +15,8 @@
  *
  *)
 
-module Make(B: V1_LWT.BLOCK) : V1_LWT.BLOCK
+module Make(B: V1_LWT.BLOCK) : sig
+  include V1_LWT.BLOCK
+
+  val connect: B.t -> [ `Ok of t | `Error of error ] io
+end

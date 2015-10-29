@@ -36,3 +36,18 @@ let info filename =
     Printf.printf "%s\n" (Sexplib.Sexp.to_string_hum (Header.sexp_of_t h));
     return (`Ok ()) in
   Lwt_main.run t
+
+let cat filename =
+  let module B = Qcow.Client.Make(Block) in
+  let open Lwt in
+  let t =
+    Block.connect filename
+    >>= function
+    | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
+    | `Ok x ->
+      B.connect x
+      >>= function
+      | `Error _ -> failwith (Printf.sprintf "Failed to read qcow formatted data on %s" filename)
+      | `Ok x ->
+        return (`Ok ()) in
+  Lwt_main.run t
