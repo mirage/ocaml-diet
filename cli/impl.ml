@@ -17,7 +17,6 @@
 open Sexplib.Std
 open Result
 open Qcow
-open Types
 open Error
 
 let expect_ok = function
@@ -37,7 +36,7 @@ let info filename =
     return (`Ok ()) in
   Lwt_main.run t
 
-let cat filename =
+let cat filename output =
   let module B = Qcow.Client.Make(Block) in
   let open Lwt in
   let t =
@@ -49,5 +48,17 @@ let cat filename =
       >>= function
       | `Error _ -> failwith (Printf.sprintf "Failed to read qcow formatted data on %s" filename)
       | `Ok x ->
-        return (`Ok ()) in
+        B.get_info x
+        >>= fun info ->
+        let total_size = Int64.(mul info.B.size_sectors (of_int info.B.sector_size)) in
+        Lwt_unix.LargeFile.truncate output total_size
+        >>= fun () ->
+        Block.connect output
+        >>= function
+        | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
+        | `Ok y ->
+          Mirage_block.copy (module B) x (module Block) y
+          >>= function
+          | `Error _ -> failwith "copy failed"
+          | `Ok () -> return (`Ok ()) in
   Lwt_main.run t

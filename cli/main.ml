@@ -46,6 +46,10 @@ let filename =
   let doc = Printf.sprintf "Path to the qcow2 file." in
   Arg.(value & pos 0 file "test.qcow2" & info [] ~doc)
 
+let output =
+  let doc = Printf.sprintf "Path to the output file." in
+  Arg.(value & pos 1 string "test.raw" & info [] ~doc)
+
 let info_cmd =
   let doc = "display general information about a qcow2" in
   let man = [
@@ -61,7 +65,7 @@ let cat_cmd =
     `S "DESCRIPTION";
     `P "Decode qcow2 formatted data and write to stdout.";
   ] @ help in
-  Term.(ret(pure Impl.cat $ filename)),
+  Term.(ret(pure Impl.cat $ filename $ output)),
   Term.info "cat" ~sdocs:_common_options ~doc ~man
 
 let default_cmd = 
