@@ -16,7 +16,6 @@
  *)
 open Sexplib.Std
 open Result
-open Types
 open Error
 
 module Make(B: V1_LWT.BLOCK) = struct
@@ -32,7 +31,9 @@ module Make(B: V1_LWT.BLOCK) = struct
   type id = B.id
   type page_aligned_buffer = B.page_aligned_buffer
   type t = {
+    h: Header.t;
     base: B.t;
+    base_info: B.info;
     info: info
   }
 
@@ -46,11 +47,20 @@ module Make(B: V1_LWT.BLOCK) = struct
   let connect base =
     let open Lwt in
     B.get_info base
-    >>= fun info ->
-    let info' = {
-      read_write = false;
-      sector_size = info.B.sector_size;
-      size_sectors = info.B.size_sectors
-    } in
-    Lwt.return (`Ok { base; info = info' })
+    >>= fun base_info ->
+    let sector = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 base_info.B.sector_size in
+    B.read base 0L [ sector ]
+    >>= function
+    | `Error x -> Lwt.return (`Error x)
+    | `Ok () ->
+      match Header.read sector with
+      | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
+      | Ok (h, _) ->
+        let size_sectors = Int64.(div h.Header.size (of_int base_info.B.sector_size)) in
+        let info' = {
+          read_write = false;
+          sector_size = 512;
+          size_sectors = size_sectors
+        } in
+        Lwt.return (`Ok { h; base; info = info'; base_info })
 end

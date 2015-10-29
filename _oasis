@@ -13,7 +13,7 @@ Library qcow
   Path:               lib
   Findlibname:        qcow
   Modules:            S, Header, Error, Types, Client
-  BuildDepends:       result, cstruct, sexplib, sexplib.syntax, mirage-types.lwt, lwt
+  BuildDepends:       result, cstruct, sexplib, sexplib.syntax, mirage-types.lwt, lwt, io-page
 
 Document qcow
   Title:                Qcow docs
