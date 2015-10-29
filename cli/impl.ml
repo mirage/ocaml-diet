@@ -51,7 +51,11 @@ let cat filename output =
         B.get_info x
         >>= fun info ->
         let total_size = Int64.(mul info.B.size_sectors (of_int info.B.sector_size)) in
-        Lwt_unix.LargeFile.truncate output total_size
+        Lwt_unix.openfile output [ Lwt_unix.O_WRONLY; Lwt_unix.O_CREAT ] 0o0644
+        >>= fun fd ->
+        Lwt_unix.LargeFile.ftruncate fd total_size
+        >>= fun () ->
+        Lwt_unix.close fd
         >>= fun () ->
         Block.connect output
         >>= function
