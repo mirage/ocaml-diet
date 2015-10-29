@@ -36,7 +36,7 @@ let info filename =
     return (`Ok ()) in
   Lwt_main.run t
 
-let cat filename output =
+let copy filename output =
   let module B = Qcow.Client.Make(Block) in
   let open Lwt in
   let t =

@@ -59,14 +59,14 @@ let info_cmd =
   Term.(ret(pure Impl.info $ filename)),
   Term.info "info" ~sdocs:_common_options ~doc ~man
 
-let cat_cmd =
+let copy_cmd =
   let doc = "decode qcow2 formatted data and write to stdout" in
   let man = [
     `S "DESCRIPTION";
     `P "Decode qcow2 formatted data and write to stdout.";
   ] @ help in
-  Term.(ret(pure Impl.cat $ filename $ output)),
-  Term.info "cat" ~sdocs:_common_options ~doc ~man
+  Term.(ret(pure Impl.copy $ filename $ output)),
+  Term.info "copy" ~sdocs:_common_options ~doc ~man
 
 let default_cmd = 
   let doc = "manipulate virtual disks stored in qcow2 files" in 
@@ -74,7 +74,7 @@ let default_cmd =
   Term.(ret (pure (fun _ -> `Help (`Pager, None)) $ common_options_t)),
   Term.info "qcow-tool" ~version:"1.0.0" ~sdocs:_common_options ~doc ~man
        
-let cmds = [info_cmd; cat_cmd]
+let cmds = [info_cmd; copy_cmd]
 
 let _ =
   match Term.eval_choice default_cmd cmds with 
