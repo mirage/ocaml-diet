@@ -83,11 +83,16 @@ module Make(B: V1_LWT.BLOCK) = struct
     read_field t l1_index_offset
     >>*= fun buf ->
     let l2_table_offset = Cstruct.LE.get_uint64 buf 0 in
-    let l2_index_offset = Int64.(add l2_table_offset (mul 8L a.l2_index)) in
-    read_field t l2_index_offset
-    >>*= fun buf ->
-    let cluster_offset = Cstruct.LE.get_uint64 buf 0 in
-    Lwt.return (`Ok (Int64.add cluster_offset a.cluster))
+    if l2_table_offset = 0L
+    then Lwt.return (`Ok None)
+    else
+      let l2_index_offset = Int64.(add l2_table_offset (mul 8L a.l2_index)) in
+      read_field t l2_index_offset
+      >>*= fun buf ->
+      let cluster_offset = Cstruct.LE.get_uint64 buf 0 in
+      if cluster_offset = 0L
+      then Lwt.return (`Ok None)
+      else Lwt.return (`Ok (Some (Int64.add cluster_offset a.cluster)))
 
   (* Decompose into single sector reads *)
   let rec chop into ofs = function
@@ -107,9 +112,13 @@ module Make(B: V1_LWT.BLOCK) = struct
       let offset = Int64.mul sector 512L in
       let address = address_of_offset (Int32.to_int t.h.Header.cluster_bits) offset in
       lookup t address
-      >>*= fun offset' ->
-      let base_sector = Int64.(div offset' (of_int t.base_info.B.sector_size)) in
-      B.read t.base base_sector [ buf ]
+      >>*= function
+      | None ->
+        Cstruct.memset buf 0;
+        Lwt.return (`Ok ())
+      | Some offset' ->
+        let base_sector = Int64.(div offset' (of_int t.base_info.B.sector_size)) in
+        B.read t.base base_sector [ buf ]
     ) (chop t.base_info.B.sector_size sector bufs)
   let write t ofs bufs = Lwt.return (`Error `Unimplemented)
 
