@@ -36,6 +36,27 @@ let info filename =
     return (`Ok ()) in
   Lwt_main.run t
 
+let check filename =
+  let module B = Qcow.Client.Make(Block) in
+  let open Lwt in
+  let t =
+    Block.connect filename
+    >>= function
+    | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
+    | `Ok x ->
+      B.connect x
+      >>= function
+      | `Error _ -> failwith (Printf.sprintf "Failed to read qcow formatted data on %s" filename)
+      | `Ok x ->
+        Mirage_block.fold_s ~f:(fun acc ofs buf ->
+          return ()
+        ) () (module B) x
+        >>= function
+        | `Error (`Msg m) -> failwith m
+        | `Ok () ->
+          return (`Ok ()) in
+  Lwt_main.run t
+
 let copy filename output =
   let module B = Qcow.Client.Make(Block) in
   let open Lwt in

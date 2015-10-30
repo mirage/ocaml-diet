@@ -59,6 +59,15 @@ let info_cmd =
   Term.(ret(pure Impl.info $ filename)),
   Term.info "info" ~sdocs:_common_options ~doc ~man
 
+let check_cmd =
+  let doc = "check the device for internal consistency" in
+  let man = [
+    `S "DESCRIPTION";
+    `P "Scan through the device and check for internal consistency"
+  ] @ help in
+  Term.(ret(pure Impl.check $ filename)),
+  Term.info "check" ~sdocs:_common_options ~doc ~man
+
 let copy_cmd =
   let doc = "decode qcow2 formatted data and write to stdout" in
   let man = [
