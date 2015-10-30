@@ -67,29 +67,59 @@ module Make(B: V1_LWT.BLOCK) = struct
     l2_index: int64; (* index in the L2 table *)
     cluster: int64;  (* index within the cluster *)
   } with sexp
+  
+  let ( <| ) = Int64.shift_left
+  let ( |> ) = Int64.shift_right_logical
+
   let address_of_offset cluster_bits x =
     let l2_bits = cluster_bits - 3 in
-    let ( <| ) = Int64.shift_left and ( |> ) = Int64.shift_right_logical in
     let l1_index = x |> (l2_bits + cluster_bits) in
     let l2_index = (x <| (64 - l2_bits - cluster_bits)) |> (64 - l2_bits) in
     let cluster  = (x <| (64 - cluster_bits)) |> (64 - cluster_bits) in
     { l1_index; l2_index; cluster }
 
+  type offset = {
+    offset: int64;
+    copied: bool; (* refcount = 1 implies no snapshots implies direct write ok *)
+    compressed: bool;
+  }
+
+  (* L1 and L2 entries have a "copied" bit which, if set, means that
+     the block isn't shared and therefore can be written to directly *)
+  let get_copied x = x |> 63 = 1L
+
+  (* L2 entries can be marked as compressed *)
+  let get_compressed x = (x <| 1) |> 63 = 1L
+
+  let parse_offset buf =
+    let raw = Cstruct.BE.get_uint64 buf 0 in
+    let copied = raw |> 63 = 1L in
+    let compressed = (raw <| 1) |> 63 = 1L in
+    let offset = (raw <| 2) |> 2 in
+    { offset; copied; compressed }
+
   let lookup t a =
     let table_offset = t.h.Header.l1_table_offset in
-    let l2_bits = Int32.to_int t.h.Header.cluster_bits - 3 in
     (* Read l1[l1_index] as a 64-bit offset *)
     let l1_index_offset = Int64.(add t.h.Header.l1_table_offset (mul 8L a.l1_index))in
     read_field t l1_index_offset
     >>*= fun buf ->
-    let l2_table_offset = Cstruct.LE.get_uint64 buf 0 in
+    let l2_table_offset = Cstruct.BE.get_uint64 buf 0 in
+    let compressed = get_compressed l2_table_offset in
+    if compressed then failwith "compressed";
+    (* mask off the copied and compressed bits *)
+    let l2_table_offset = (l2_table_offset <| 2) |> 2 in
     if l2_table_offset = 0L
     then Lwt.return (`Ok None)
     else
       let l2_index_offset = Int64.(add l2_table_offset (mul 8L a.l2_index)) in
       read_field t l2_index_offset
       >>*= fun buf ->
-      let cluster_offset = Cstruct.LE.get_uint64 buf 0 in
+      let cluster_offset = Cstruct.BE.get_uint64 buf 0 in
+      let compressed = get_compressed cluster_offset in
+      if compressed then failwith "compressed";
+      (* mask off the copied and compressed bits *)
+      let cluster_offset = (cluster_offset <| 2) |> 2 in
       if cluster_offset = 0L
       then Lwt.return (`Ok None)
       else Lwt.return (`Ok (Some (Int64.add cluster_offset a.cluster)))
