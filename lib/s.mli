@@ -45,3 +45,10 @@ module type SERIALISABLE = sig
   (** Write a [t] into the given buffer. If the buffer is too small,
       then return an error. Return the unused remainder of the buffer.*)
 end
+
+module type RESIZABLE_BLOCK = sig
+  include V1_LWT.BLOCK
+
+  val resize: t -> int64 -> [ `Ok of unit | `Error of error ] Lwt.t
+  (** Resize the file to the given number of sectors. *)
+end

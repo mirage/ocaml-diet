@@ -15,7 +15,7 @@
  *
  *)
 
-module Make(B: V1_LWT.BLOCK) : sig
+module Make(B: S.RESIZABLE_BLOCK) : sig
   include V1_LWT.BLOCK
 
   val connect: B.t -> [ `Ok of t | `Error of error ] io
