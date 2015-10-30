@@ -83,7 +83,7 @@ let default_cmd =
   Term.(ret (pure (fun _ -> `Help (`Pager, None)) $ common_options_t)),
   Term.info "qcow-tool" ~version:"1.0.0" ~sdocs:_common_options ~doc ~man
        
-let cmds = [info_cmd; copy_cmd]
+let cmds = [info_cmd; copy_cmd; check_cmd]
 
 let _ =
   match Term.eval_choice default_cmd cmds with 
