@@ -18,5 +18,7 @@
 module Make(B: S.RESIZABLE_BLOCK) : sig
   include V1_LWT.BLOCK
 
+  val create: unit -> int64 -> Header.t
+
   val connect: B.t -> [ `Ok of t | `Error of error ] io
 end

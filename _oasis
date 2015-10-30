@@ -30,3 +30,17 @@ Executable "qcow-tool"
   Custom:             true
   Install:            false
   BuildDepends:       lwt, lwt.unix, qcow, cmdliner, cstruct.lwt, mirage-block-unix, mirage-block, io-page.unix
+
+Executable test
+  Build$:             flag(tests)
+  CompiledObject:     best
+  Path:               lib_test
+  MainIs:             test.ml
+  Custom:             true
+  Install:            false
+  BuildDepends:       lwt, lwt.unix, qcow, mirage-block-unix, cstruct, oUnit, io-page.unix, io-page
+
+Test test
+  Run$:               flag(tests)
+  Command:            $test -runner sequential
+  WorkingDirectory:   lib_test

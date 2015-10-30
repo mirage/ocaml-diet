@@ -173,4 +173,70 @@ module Make(B: V1_LWT.BLOCK) = struct
           size_sectors = size_sectors
         } in
         Lwt.return (`Ok { h; base; info = info'; base_info })
+
+  let create base size =
+    let version = `Two in
+    let backing_file_offset = 0L in
+    let backing_file_size = 0l in
+    let cluster_bits = 16 in
+    let crypt_method = `None in
+    (* qemu-img places the refcount table next in the file. *)
+    let cluster_size = 1L <| cluster_bits in
+    let refcount_table_offset = cluster_size in
+    let size_in_clusters = Int64.(div (add size (pred cluster_size)) cluster_size) in
+    (* Each reference count is 2 bytes long *)
+    let refs_per_cluster = Int64.div cluster_size 2L in
+    let refs_clusters_required = Int64.(div (add size_in_clusters (pred refs_per_cluster)) refs_per_cluster) in
+    (* Each cluster containing references consumes 8 bytes in the
+       refcount_table. How much space is that? *)
+    let refcount_table_bytes = Int64.mul refs_clusters_required 8L in
+    let refcount_table_clusters = Int64.(div (add refcount_table_bytes (pred cluster_size)) cluster_size) in
+
+    (* qemu-img places the L1 table after the refcount table *)
+    let l1_table_offset = Int64.(mul (add 1L refcount_table_clusters) (1L <| cluster_bits)) in
+    (* The L2 table is of size (1L <| cluster_bits) bytes
+       and contains (1L <| (cluster_bits - 3)) 8-byte pointers.
+       A single L2 table therefore manages
+       (1L <| (cluster_bits - 3)) * (1L <| cluster_bits) bytes
+       = (1L <| (2 * cluster_bits - 3)) bytes. *)
+    let bytes_per_l2 = 1L <| (2 * cluster_bits - 3) in
+    let l2_tables_required = Int64.(div (add size (pred bytes_per_l2)) bytes_per_l2) in
+    (* Each L2 table needs an 8 byte pointer in the L1 table *)
+    let l1_size = Int64.mul 8L l2_tables_required in
+    let nb_snapshots = 0l in
+    let snapshots_offset = 0L in
+    let h = {
+      Header.version; backing_file_offset; backing_file_size;
+      cluster_bits = Int32.of_int cluster_bits; size; crypt_method;
+      l1_size = Int64.to_int32 l1_size;
+      l1_table_offset; refcount_table_offset;
+      refcount_table_clusters = Int64.to_int32 refcount_table_clusters;
+      nb_snapshots; snapshots_offset
+    } in
+    Printf.fprintf stderr "%s\n%!" (Sexplib.Sexp.to_string (Header.sexp_of_t
+    h));
+    h
 end
+(*
+168:ocaml-qcow2 djs$ ./main.native info 1M.qcow2 
+((version Three) (backing_file_offset 0) (backing_file_size 0)
+ (cluster_bits 16) (size 1048576) (crypt_method None) (l1_size 1)
+ (l1_table_offset 196608) (refcount_table_offset 65536)
+ (refcount_table_clusters 1) (nb_snapshots 0) (snapshots_offset 0))
+168:ocaml-qcow2 djs$ ./main.native info 1G.qcow2 
+((version Three) (backing_file_offset 0) (backing_file_size 0)
+ (cluster_bits 16) (size 1073741824) (crypt_method None) (l1_size 2)
+ (l1_table_offset 196608) (refcount_table_offset 65536)
+ (refcount_table_clusters 1) (nb_snapshots 0) (snapshots_offset 0))
+168:ocaml-qcow2 djs$ ./main.native info 1T.qcow2 
+((version Three) (backing_file_offset 0) (backing_file_size 0)
+ (cluster_bits 16) (size 1099511627776) (crypt_method None) (l1_size 2048)
+ (l1_table_offset 196608) (refcount_table_offset 65536)
+ (refcount_table_clusters 1) (nb_snapshots 0) (snapshots_offset 0))
+168:ocaml-qcow2 djs$ ./main.native info 1P.qcow2 
+((version Three) (backing_file_offset 0) (backing_file_size 0)
+ (cluster_bits 16) (size 1125899906842624) (crypt_method None)
+ (l1_size 2097152) (l1_table_offset 196608) (refcount_table_offset 65536)
+ (refcount_table_clusters 1) (nb_snapshots 0) (snapshots_offset 0))
+*)
+
