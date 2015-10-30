@@ -69,8 +69,8 @@ type t = {
   cluster_bits: int32;
   size: int64;
   crypt_method: CryptMethod.t;
-  ll_size: int32;
-  ll_table_offset: offset;
+  l1_size: int32;
+  l1_table_offset: offset;
   refcount_table_offset: offset;
   refcount_table_clusters: int32;
   nb_snapshots: int32;
@@ -102,9 +102,9 @@ let write t rest =
   >>= fun rest ->
   CryptMethod.write t.crypt_method rest
   >>= fun rest ->
-  Int32.write t.ll_size rest
+  Int32.write t.l1_size rest
   >>= fun rest ->
-  Int64.write t.ll_table_offset rest
+  Int64.write t.l1_table_offset rest
   >>= fun rest ->
   Int64.write t.refcount_table_offset rest
   >>= fun rest ->
@@ -154,9 +154,9 @@ let read rest =
   CryptMethod.read rest
   >>= fun (crypt_method, rest) ->
   Int32.read rest
-  >>= fun (ll_size, rest) ->
+  >>= fun (l1_size, rest) ->
   Int64.read rest
-  >>= fun (ll_table_offset, rest) ->
+  >>= fun (l1_table_offset, rest) ->
   Int64.read rest
   >>= fun (refcount_table_offset, rest) ->
   Int32.read rest
@@ -166,5 +166,5 @@ let read rest =
   Int64.read rest
   >>= fun (snapshots_offset, rest) ->
   return ({ version; backing_file_offset; backing_file_size; cluster_bits;
-    size; crypt_method; ll_size; ll_table_offset; refcount_table_offset;
+    size; crypt_method; l1_size; l1_table_offset; refcount_table_offset;
     refcount_table_clusters; nb_snapshots; snapshots_offset }, rest)
