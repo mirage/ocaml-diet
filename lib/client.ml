@@ -221,26 +221,3 @@ module Make(B: V1_LWT.BLOCK) = struct
     h));
     h
 end
-(*
-168:ocaml-qcow2 djs$ ./main.native info 1M.qcow2 
-((version Three) (backing_file_offset 0) (backing_file_size 0)
- (cluster_bits 16) (size 1048576) (crypt_method None) (l1_size 1)
- (l1_table_offset 196608) (refcount_table_offset 65536)
- (refcount_table_clusters 1) (nb_snapshots 0) (snapshots_offset 0))
-168:ocaml-qcow2 djs$ ./main.native info 1G.qcow2 
-((version Three) (backing_file_offset 0) (backing_file_size 0)
- (cluster_bits 16) (size 1073741824) (crypt_method None) (l1_size 2)
- (l1_table_offset 196608) (refcount_table_offset 65536)
- (refcount_table_clusters 1) (nb_snapshots 0) (snapshots_offset 0))
-168:ocaml-qcow2 djs$ ./main.native info 1T.qcow2 
-((version Three) (backing_file_offset 0) (backing_file_size 0)
- (cluster_bits 16) (size 1099511627776) (crypt_method None) (l1_size 2048)
- (l1_table_offset 196608) (refcount_table_offset 65536)
- (refcount_table_clusters 1) (nb_snapshots 0) (snapshots_offset 0))
-168:ocaml-qcow2 djs$ ./main.native info 1P.qcow2 
-((version Three) (backing_file_offset 0) (backing_file_size 0)
- (cluster_bits 16) (size 1125899906842624) (crypt_method None)
- (l1_size 2097152) (l1_table_offset 196608) (refcount_table_offset 65536)
- (refcount_table_clusters 1) (nb_snapshots 0) (snapshots_offset 0))
-*)
-
