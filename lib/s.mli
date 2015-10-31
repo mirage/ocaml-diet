@@ -46,6 +46,16 @@ module type SERIALISABLE = sig
       then return an error. Return the unused remainder of the buffer.*)
 end
 
+module type PRINTABLE = sig
+  (** Values which can be pretty-printed *)
+
+  type t
+  (** Instances of this type can be pretty-printed *)
+
+  val to_string: t -> string
+  (** Produce a pretty human-readable string from a value *)
+end
+
 module type RESIZABLE_BLOCK = sig
   include V1_LWT.BLOCK
 

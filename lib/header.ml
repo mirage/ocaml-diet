@@ -40,6 +40,8 @@ module Version = struct
     | 2l -> return (`Two, rest)
     | 3l -> return (`Three, rest)
     | _ -> error_msg "Unknown version: %ld" version
+
+  let compare (a: t) (b: t) = compare a b
 end
 
 module CryptMethod = struct
@@ -58,6 +60,8 @@ module CryptMethod = struct
     | 0l -> return (`None, rest)
     | 1l -> return (`Aes, rest)
     | _ -> error_msg "Unknown crypt_method: %ld" m
+
+  let compare (a: t) (b: t) = compare a b
 end
 
 type offset = int64 with sexp
@@ -76,6 +80,10 @@ type t = {
   nb_snapshots: int32;
   snapshots_offset: offset;
 } with sexp
+
+let compare (a: t) (b: t) = compare a b
+
+let to_string t = Sexplib.Sexp.to_string_hum (sexp_of_t t)
 
 let sizeof _ = 4 + 4 + 8 + 4 + 4 + 8 + 4 + 4 + 8 + 8 + 4 + 4 + 8
 

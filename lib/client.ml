@@ -201,14 +201,12 @@ module Make(B: V1_LWT.BLOCK) = struct
        = (1L <| (2 * cluster_bits - 3)) bytes. *)
     let bytes_per_l2 = 1L <| (2 * cluster_bits - 3) in
     let l2_tables_required = Int64.(div (add size (pred bytes_per_l2)) bytes_per_l2) in
-    (* Each L2 table needs an 8 byte pointer in the L1 table *)
-    let l1_size = Int64.mul 8L l2_tables_required in
     let nb_snapshots = 0l in
     let snapshots_offset = 0L in
     let h = {
       Header.version; backing_file_offset; backing_file_size;
       cluster_bits = Int32.of_int cluster_bits; size; crypt_method;
-      l1_size = Int64.to_int32 l1_size;
+      l1_size = Int64.to_int32 l2_tables_required;
       l1_table_offset; refcount_table_offset;
       refcount_table_clusters = Int64.to_int32 refcount_table_clusters;
       nb_snapshots; snapshots_offset

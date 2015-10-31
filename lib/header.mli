@@ -51,3 +51,7 @@ type t = {
 (** The qcow2 header *)
 
 include S.SERIALISABLE with type t := t
+
+include S.PRINTABLE with type t := t
+
+include Set.OrderedType with type t := t
