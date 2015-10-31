@@ -17,12 +17,36 @@ open Qcow
 open Lwt
 open OUnit
 
+let expect_ok = function
+  | `Error _ -> failwith "IO failure"
+  | `Ok x -> x
+
 (* qemu-img will set version = `Three and leave an extra cluster
    presumably for extension headers *)
 
+let read_write_header name size =
+  let module B = Qcow.Client.Make(Ramdisk) in
+  let t =
+    B.connect "1K"
+    >>= fun x ->
+    let b = expect_ok x in
+
+    B.create b 1024L
+    >>= fun x ->
+    let () = expect_ok x in
+
+    let page = Io_page.(to_cstruct (get 1)) in
+    B.read b 0L [ page ]
+    >>= fun x ->
+    let () = expect_ok x in
+    let open Error in
+    Header.read page
+    >>= fun (hdr, _) ->
+    Lwt.return hdr in
+  Lwt_main.run t
+
 let create_1K () =
-  let module B = Qcow.Client.Make(Block) in
-  let hdr = B.create () 1024L in
+  let hdr = read_write_header "1K" 1024L in
   let expected = {
     Header.version = `Two; backing_file_offset = 0L;
     backing_file_size = 0l; cluster_bits = 16l; size = 1024L;
@@ -35,8 +59,7 @@ let create_1K () =
   assert_equal ~printer ~cmp expected hdr
 
 let create_1M () =
-  let module B = Qcow.Client.Make(Block) in
-  let hdr = B.create () 1048576L in
+  let hdr = read_write_header "1M" 1048576L in
   let expected = {
     Header.version = `Two; backing_file_offset = 0L;
     backing_file_size = 0l; cluster_bits = 16l; size = 1048576L;
@@ -49,12 +72,11 @@ let create_1M () =
   assert_equal ~printer ~cmp expected hdr
 
 let create_1P () =
-  let module B = Qcow.Client.Make(Block) in
   let mib = Int64.mul 1024L 1024L in
   let gib = Int64.mul mib 1024L in
   let tib = Int64.mul gib 1024L in
   let pib = Int64.mul tib 1024L in
-  let hdr = B.create () pib in
+  let hdr = read_write_header "1P" pib in
   let expected = {
     Header.version = `Two; backing_file_offset = 0L;
     backing_file_size = 0l; cluster_bits = 16l; size = pib;

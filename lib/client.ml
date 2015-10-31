@@ -154,6 +154,18 @@ module Make(B: V1_LWT.BLOCK) = struct
 
   let disconnect t = B.disconnect t.base
 
+  let make base h =
+    let open Lwt in
+    B.get_info base
+    >>= fun base_info ->
+    let size_sectors = Int64.(div h.Header.size (of_int base_info.B.sector_size)) in
+    let info' = {
+      read_write = false;
+      sector_size = 512;
+      size_sectors = size_sectors
+    } in
+    Lwt.return (`Ok { h; base; info = info'; base_info })
+
   let connect base =
     let open Lwt in
     B.get_info base
@@ -165,14 +177,7 @@ module Make(B: V1_LWT.BLOCK) = struct
     | `Ok () ->
       match Header.read sector with
       | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
-      | Ok (h, _) ->
-        let size_sectors = Int64.(div h.Header.size (of_int base_info.B.sector_size)) in
-        let info' = {
-          read_write = false;
-          sector_size = 512;
-          size_sectors = size_sectors
-        } in
-        Lwt.return (`Ok { h; base; info = info'; base_info })
+      | Ok (h, _) -> make base h
 
   (* Compute the maximum size of the refcount table, if we need it *)
   let max_refount_table_size cluster_bits size =
@@ -217,7 +222,12 @@ module Make(B: V1_LWT.BLOCK) = struct
       refcount_table_clusters = Int64.to_int32 refcount_table_clusters;
       nb_snapshots; snapshots_offset
     } in
-    Printf.fprintf stderr "%s\n%!" (Sexplib.Sexp.to_string (Header.sexp_of_t
-    h));
-    h
+    let page = Io_page.(to_cstruct (get 1)) in
+    match Header.write h page with
+    | Result.Ok _ ->
+      B.write base 0L [ page ]
+      >>*= fun () ->
+      make base h
+    | Result.Error (`Msg m) ->
+      Lwt.return (`Error (`Unknown m))
 end

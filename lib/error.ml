@@ -29,3 +29,9 @@ let error_msg fmt = Printf.ksprintf (fun s -> Error (`Msg s)) fmt
 let ( >>= ) m f = match m with
   | Error x -> Error x
   | Ok x -> f x
+
+let (>>*=) m f =
+  let open Lwt in
+  m >>= function
+  | `Ok x -> f x
+  | `Error x -> Lwt.return (`Error x)
