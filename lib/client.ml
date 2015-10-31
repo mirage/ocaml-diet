@@ -174,15 +174,9 @@ module Make(B: V1_LWT.BLOCK) = struct
         } in
         Lwt.return (`Ok { h; base; info = info'; base_info })
 
-  let create base size =
-    let version = `Two in
-    let backing_file_offset = 0L in
-    let backing_file_size = 0l in
-    let cluster_bits = 16 in
-    let crypt_method = `None in
-    (* qemu-img places the refcount table next in the file. *)
+  (* Compute the maximum size of the refcount table, if we need it *)
+  let max_refount_table_size cluster_bits size =
     let cluster_size = 1L <| cluster_bits in
-    let refcount_table_offset = cluster_size in
     let size_in_clusters = Int64.(div (add size (pred cluster_size)) cluster_size) in
     (* Each reference count is 2 bytes long *)
     let refs_per_cluster = Int64.div cluster_size 2L in
@@ -190,7 +184,19 @@ module Make(B: V1_LWT.BLOCK) = struct
     (* Each cluster containing references consumes 8 bytes in the
        refcount_table. How much space is that? *)
     let refcount_table_bytes = Int64.mul refs_clusters_required 8L in
-    let refcount_table_clusters = Int64.(div (add refcount_table_bytes (pred cluster_size)) cluster_size) in
+    Int64.(div (add refcount_table_bytes (pred cluster_size)) cluster_size)
+
+  let create base size =
+    let version = `Two in
+    let backing_file_offset = 0L in
+    let backing_file_size = 0l in
+    let cluster_bits = 16 in
+    let cluster_size = 1L <| cluster_bits in
+    let crypt_method = `None in
+    (* qemu-img places the refcount table next in the file and only
+       qemu-img creates a tiny refcount table and grows it on demand *)
+    let refcount_table_offset = cluster_size in
+    let refcount_table_clusters = 1L in
 
     (* qemu-img places the L1 table after the refcount table *)
     let l1_table_offset = Int64.(mul (add 1L refcount_table_clusters) (1L <| cluster_bits)) in
