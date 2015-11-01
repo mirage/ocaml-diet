@@ -179,17 +179,64 @@ module Make(B: V1_LWT.BLOCK) = struct
       | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
       | Ok (h, _) -> make base h
 
-  (* Compute the maximum size of the refcount table, if we need it *)
-  let max_refount_table_size cluster_bits size =
+  (* The number of 16-bit reference counts per cluster *)
+  let refcounts_per_cluster t =
+    let cluster_bits = Int32.to_int t.Header.cluster_bits in
+    let size = t.Header.size in
     let cluster_size = 1L <| cluster_bits in
-    let size_in_clusters = Int64.(div (add size (pred cluster_size)) cluster_size) in
     (* Each reference count is 2 bytes long *)
-    let refs_per_cluster = Int64.div cluster_size 2L in
+    Int64.div cluster_size 2L
+
+  (* Compute the maximum size of the refcount table, if we need it *)
+  let max_refount_table_size t =
+    let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
+    let size = t.h.Header.size in
+    let cluster_size = 1L <| cluster_bits in
+    let refs_per_cluster = refcounts_per_cluster t.h in
+    let size_in_clusters = Int64.(div (add size (pred cluster_size)) cluster_size) in
     let refs_clusters_required = Int64.(div (add size_in_clusters (pred refs_per_cluster)) refs_per_cluster) in
     (* Each cluster containing references consumes 8 bytes in the
        refcount_table. How much space is that? *)
     let refcount_table_bytes = Int64.mul refs_clusters_required 8L in
     Int64.(div (add refcount_table_bytes (pred cluster_size)) cluster_size)
+
+  let allocate_cluster t = failwith "unimplemented"
+
+  let incr_refcount t cluster =
+    let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
+    let size = t.h.Header.size in
+    let cluster_size = 1L <| cluster_bits in
+    let index_in_cluster = Int64.(to_int (div cluster (refcounts_per_cluster t.h))) in
+    let within_cluster = Int64.(to_int (rem cluster (refcounts_per_cluster t.h))) in
+    if index_in_cluster > 0
+    then Lwt.return (`Error (`Unknown "I don't know how to enlarge a refcount table yet"))
+    else begin
+      let cluster = Cstruct.sub (Io_page.(to_cstruct (get 1))) 0 (Int64.to_int cluster_size) in
+      let refcount_table_sector = Int64.(div t.h.Header.refcount_table_offset (of_int t.base_info.B.sector_size)) in
+      B.read t.base refcount_table_sector [ cluster ]
+      >>*= fun () ->
+      let offset = Cstruct.BE.get_uint64 cluster index_in_cluster in
+      if offset = 0L then begin
+        allocate_cluster t
+        >>*= fun offset ->
+        let cluster' = Cstruct.sub (Io_page.(to_cstruct (get 1))) 0 (Int64.to_int cluster_size) in
+        Cstruct.memset cluster' 0;
+        Cstruct.BE.set_uint16 cluster' within_cluster 1;
+        B.write t.base offset [ cluster' ]
+        >>*= fun () ->
+        Cstruct.BE.set_uint64 cluster index_in_cluster offset;
+        B.write t.base refcount_table_sector [ cluster ]
+        >>*= fun () ->
+        (* recursively increment refcunt of offset? *)
+        Lwt.return (`Ok ())
+      end else begin
+        B.read t.base offset [ cluster ]
+        >>*= fun () ->
+        let count = Cstruct.BE.get_uint16 cluster within_cluster in
+        Cstruct.BE.set_uint16 cluster within_cluster (count + 1);
+        B.write t.base offset [ cluster ]
+      end
+    end
 
   let create base size =
     let version = `Two in
@@ -226,6 +273,20 @@ module Make(B: V1_LWT.BLOCK) = struct
     match Header.write h page with
     | Result.Ok _ ->
       B.write base 0L [ page ]
+      >>*= fun () ->
+      make base h
+      >>*= fun t ->
+      (* Write an initial empty refcount table *)
+      let cluster = Cstruct.sub page 0 (Int64.to_int cluster_size) in
+      Cstruct.memset cluster 0;
+      B.write base Int64.(div refcount_table_offset (of_int t.base_info.B.sector_size)) [ cluster ]
+      >>*= fun () ->
+      incr_refcount t (Int64.div refcount_table_offset cluster_size)
+      >>*= fun () ->
+      (* Write an initial empty L1 table *)
+      B.write base Int64.(div l1_table_offset (of_int t.base_info.B.sector_size)) [ cluster ]
+      >>*= fun () ->
+      incr_refcount t (Int64.div l1_table_offset cluster_size)
       >>*= fun () ->
       make base h
     | Result.Error (`Msg m) ->
