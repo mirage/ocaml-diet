@@ -27,22 +27,23 @@ let expect_ok = function
 let read_write_header name size =
   let module B = Qcow.Client.Make(Ramdisk) in
   let t =
-    B.connect "1K"
+    Ramdisk.connect name
+    >>= fun x ->
+    let ramdisk = expect_ok x in
+
+    B.create ramdisk size
     >>= fun x ->
     let b = expect_ok x in
 
-    B.create b 1024L
-    >>= fun x ->
-    let () = expect_ok x in
-
     let page = Io_page.(to_cstruct (get 1)) in
-    B.read b 0L [ page ]
+    Ramdisk.read ramdisk 0L [ page ]
     >>= fun x ->
     let () = expect_ok x in
     let open Error in
-    Header.read page
-    >>= fun (hdr, _) ->
-    Lwt.return hdr in
+    match Header.read page with
+    | Result.Error (`Msg m) -> failwith m
+    | Result.Ok (hdr, _) ->
+      Lwt.return hdr in
   Lwt_main.run t
 
 let create_1K () =
