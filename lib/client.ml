@@ -18,7 +18,7 @@ open Sexplib.Std
 open Result
 open Error
 
-module Make(B: V1_LWT.BLOCK) = struct
+module Make(B: S.RESIZABLE_BLOCK) = struct
 
   type 'a io = 'a Lwt.t
   type error = B.error
@@ -34,7 +34,8 @@ module Make(B: V1_LWT.BLOCK) = struct
     h: Header.t;
     base: B.t;
     base_info: B.info;
-    info: info
+    info: info;
+    mutable next_cluster: int64;
   }
 
   let get_info t = Lwt.return t.info
@@ -158,13 +159,17 @@ module Make(B: V1_LWT.BLOCK) = struct
     let open Lwt in
     B.get_info base
     >>= fun base_info ->
-    let size_sectors = Int64.(div h.Header.size (of_int base_info.B.sector_size)) in
+    (* The virtual disk has 512 byte sectors *)
     let info' = {
       read_write = false;
       sector_size = 512;
-      size_sectors = size_sectors
+      size_sectors = Int64.(div h.Header.size 512L);
     } in
-    Lwt.return (`Ok { h; base; info = info'; base_info })
+    (* We assume the backing device is resized dynamically so the
+       size is the address of the next cluster *)
+    let size_bytes = Int64.(mul base_info.B.size_sectors (of_int base_info.B.sector_size)) in
+    let next_cluster = Int64.(div size_bytes (1L <| (Int32.to_int h.Header.cluster_bits))) in
+    Lwt.return (`Ok { h; base; info = info'; base_info; next_cluster })
 
   let connect base =
     let open Lwt in
@@ -179,6 +184,12 @@ module Make(B: V1_LWT.BLOCK) = struct
       | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
       | Ok (h, _) -> make base h
 
+  let malloc_cluster t =
+    let cluster_bits = Int32.to_int t.Header.cluster_bits in
+    let npages = max 1 (cluster_bits lsl (cluster_bits - 12)) in
+    let pages = Io_page.(to_cstruct (get npages)) in
+    Cstruct.sub pages 0 (1 lsl cluster_bits)
+
   (* The number of 16-bit reference counts per cluster *)
   let refcounts_per_cluster t =
     let cluster_bits = Int32.to_int t.Header.cluster_bits in
@@ -187,20 +198,33 @@ module Make(B: V1_LWT.BLOCK) = struct
     (* Each reference count is 2 bytes long *)
     Int64.div cluster_size 2L
 
+  let round_up x size = Int64.(mul (div (add x (pred size)) size) size)
+
   (* Compute the maximum size of the refcount table, if we need it *)
   let max_refount_table_size t =
     let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
     let size = t.h.Header.size in
     let cluster_size = 1L <| cluster_bits in
     let refs_per_cluster = refcounts_per_cluster t.h in
-    let size_in_clusters = Int64.(div (add size (pred cluster_size)) cluster_size) in
-    let refs_clusters_required = Int64.(div (add size_in_clusters (pred refs_per_cluster)) refs_per_cluster) in
+    let size_in_clusters = Int64.div (round_up size cluster_size) cluster_size in
+    let refs_clusters_required = Int64.div (round_up size_in_clusters refs_per_cluster) refs_per_cluster in
     (* Each cluster containing references consumes 8 bytes in the
        refcount_table. How much space is that? *)
     let refcount_table_bytes = Int64.mul refs_clusters_required 8L in
-    Int64.(div (add refcount_table_bytes (pred cluster_size)) cluster_size)
+    Int64.div (round_up refcount_table_bytes cluster_size) cluster_size
 
-  let allocate_cluster t = failwith "unimplemented"
+  (** Allocate a cluster, resize the underlying device and return the
+      byte offset of the new cluster, suitable for writing to one of
+      the various metadata tables. *)
+  let allocate_cluster t =
+    let cluster = t.next_cluster in
+    t.next_cluster <- Int64.succ t.next_cluster;
+    let new_size_bytes = Int64.mul t.next_cluster (1L <| (Int32.to_int t.h.Header.cluster_bits)) in
+    let new_size_sectors = Int64.(div new_size_bytes (of_int t.base_info.B.sector_size)) in
+    B.resize t.base new_size_sectors
+    >>*= fun () ->
+    let offset = Int64.mul cluster (1L <| (Int32.to_int t.h.Header.cluster_bits)) in
+    Lwt.return (`Ok offset)
 
   let incr_refcount t cluster =
     let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
@@ -211,7 +235,7 @@ module Make(B: V1_LWT.BLOCK) = struct
     if index_in_cluster > 0
     then Lwt.return (`Error (`Unknown "I don't know how to enlarge a refcount table yet"))
     else begin
-      let cluster = Cstruct.sub (Io_page.(to_cstruct (get 1))) 0 (Int64.to_int cluster_size) in
+      let cluster = malloc_cluster t.h in
       let refcount_table_sector = Int64.(div t.h.Header.refcount_table_offset (of_int t.base_info.B.sector_size)) in
       B.read t.base refcount_table_sector [ cluster ]
       >>*= fun () ->
@@ -219,10 +243,11 @@ module Make(B: V1_LWT.BLOCK) = struct
       if offset = 0L then begin
         allocate_cluster t
         >>*= fun offset ->
-        let cluster' = Cstruct.sub (Io_page.(to_cstruct (get 1))) 0 (Int64.to_int cluster_size) in
+        let cluster' = malloc_cluster t.h in
         Cstruct.memset cluster' 0;
         Cstruct.BE.set_uint16 cluster' within_cluster 1;
-        B.write t.base offset [ cluster' ]
+        let sector = Int64.(div offset (of_int t.base_info.B.sector_size)) in
+        B.write t.base sector [ cluster' ]
         >>*= fun () ->
         Cstruct.BE.set_uint64 cluster index_in_cluster offset;
         B.write t.base refcount_table_sector [ cluster ]
@@ -234,7 +259,8 @@ module Make(B: V1_LWT.BLOCK) = struct
         >>*= fun () ->
         let count = Cstruct.BE.get_uint16 cluster within_cluster in
         Cstruct.BE.set_uint16 cluster within_cluster (count + 1);
-        B.write t.base offset [ cluster ]
+        let sector = Int64.(div offset (of_int t.base_info.B.sector_size)) in
+        B.write t.base sector [ cluster ]
       end
     end
 
@@ -258,7 +284,7 @@ module Make(B: V1_LWT.BLOCK) = struct
        (1L <| (cluster_bits - 3)) * (1L <| cluster_bits) bytes
        = (1L <| (2 * cluster_bits - 3)) bytes. *)
     let bytes_per_l2 = 1L <| (2 * cluster_bits - 3) in
-    let l2_tables_required = Int64.(div (add size (pred bytes_per_l2)) bytes_per_l2) in
+    let l2_tables_required = Int64.div (round_up size bytes_per_l2) bytes_per_l2 in
     let nb_snapshots = 0l in
     let snapshots_offset = 0L in
     let h = {
@@ -269,6 +295,17 @@ module Make(B: V1_LWT.BLOCK) = struct
       refcount_table_clusters = Int64.to_int32 refcount_table_clusters;
       nb_snapshots; snapshots_offset
     } in
+    (* Resize the underlying device to contain the header + refcount table
+       + l1 table. Future allocations will enlarge the file. *)
+    let l1_size_bytes = Int64.mul 8L l2_tables_required in
+    let next_free_byte = round_up (Int64.add l1_table_offset l1_size_bytes) cluster_size in
+    let open Lwt in
+    B.get_info base
+    >>= fun base_info ->
+    let size_sectors = Int64.(div next_free_byte (of_int base_info.B.sector_size)) in
+    B.resize base size_sectors
+    >>*= fun () ->
+
     let page = Io_page.(to_cstruct (get 1)) in
     match Header.write h page with
     | Result.Ok _ ->
@@ -277,7 +314,7 @@ module Make(B: V1_LWT.BLOCK) = struct
       make base h
       >>*= fun t ->
       (* Write an initial empty refcount table *)
-      let cluster = Cstruct.sub page 0 (Int64.to_int cluster_size) in
+      let cluster = malloc_cluster t.h in
       Cstruct.memset cluster 0;
       B.write base Int64.(div refcount_table_offset (of_int t.base_info.B.sector_size)) [ cluster ]
       >>*= fun () ->
@@ -288,7 +325,7 @@ module Make(B: V1_LWT.BLOCK) = struct
       >>*= fun () ->
       incr_refcount t (Int64.div l1_table_offset cluster_size)
       >>*= fun () ->
-      make base h
+      Lwt.return (`Ok t)
     | Result.Error (`Msg m) ->
       Lwt.return (`Error (`Unknown m))
 end
