@@ -239,27 +239,27 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       let refcount_table_sector = Int64.(div t.h.Header.refcount_table_offset (of_int t.base_info.B.sector_size)) in
       B.read t.base refcount_table_sector [ cluster ]
       >>*= fun () ->
-      let offset = Cstruct.BE.get_uint64 cluster index_in_cluster in
+      let offset = Cstruct.BE.get_uint64 cluster (8 * index_in_cluster) in
       if offset = 0L then begin
         allocate_cluster t
         >>*= fun offset ->
         let cluster' = malloc_cluster t.h in
         Cstruct.memset cluster' 0;
-        Cstruct.BE.set_uint16 cluster' within_cluster 1;
+        Cstruct.BE.set_uint16 cluster' (2 * within_cluster) 1;
         let sector = Int64.(div offset (of_int t.base_info.B.sector_size)) in
         B.write t.base sector [ cluster' ]
         >>*= fun () ->
-        Cstruct.BE.set_uint64 cluster index_in_cluster offset;
+        Cstruct.BE.set_uint64 cluster (8 * index_in_cluster) offset;
         B.write t.base refcount_table_sector [ cluster ]
         >>*= fun () ->
         (* recursively increment refcunt of offset? *)
         Lwt.return (`Ok ())
       end else begin
-        B.read t.base offset [ cluster ]
-        >>*= fun () ->
-        let count = Cstruct.BE.get_uint16 cluster within_cluster in
-        Cstruct.BE.set_uint16 cluster within_cluster (count + 1);
         let sector = Int64.(div offset (of_int t.base_info.B.sector_size)) in
+        B.read t.base sector [ cluster ]
+        >>*= fun () ->
+        let count = Cstruct.BE.get_uint16 cluster (2 * within_cluster) in
+        Cstruct.BE.set_uint16 cluster (2 * within_cluster) (count + 1);
         B.write t.base sector [ cluster ]
       end
     end
