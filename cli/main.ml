@@ -46,6 +46,10 @@ let filename =
   let doc = Printf.sprintf "Path to the qcow2 file." in
   Arg.(value & pos 0 file "test.qcow2" & info [] ~doc)
 
+let size =
+  let doc = Printf.sprintf "Virtual size of the qcow image" in
+  Arg.(value & pos 0 int64 1024L & info [] ~doc)
+
 let output =
   let doc = Printf.sprintf "Path to the output file." in
   Arg.(value & pos 1 string "test.raw" & info [] ~doc)
@@ -77,13 +81,22 @@ let copy_cmd =
   Term.(ret(pure Impl.copy $ filename $ output)),
   Term.info "copy" ~sdocs:_common_options ~doc ~man
 
+let create_cmd =
+  let doc = "create a qcow-formatted data file" in
+  let man = [
+    `S "DESCRIPTION";
+    `P "Create a qcow-formatted data file";
+  ] @ help in
+  Term.(ret(pure Impl.create $ size $ output)),
+  Term.info "create" ~sdocs:_common_options ~doc ~man
+
 let default_cmd = 
   let doc = "manipulate virtual disks stored in qcow2 files" in 
   let man = help in
   Term.(ret (pure (fun _ -> `Help (`Pager, None)) $ common_options_t)),
   Term.info "qcow-tool" ~version:"1.0.0" ~sdocs:_common_options ~doc ~man
        
-let cmds = [info_cmd; copy_cmd; check_cmd]
+let cmds = [info_cmd; copy_cmd; create_cmd; check_cmd]
 
 let _ =
   match Term.eval_choice default_cmd cmds with 

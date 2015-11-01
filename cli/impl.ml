@@ -87,3 +87,17 @@ let copy filename output =
           | `Error _ -> failwith "copy failed"
           | `Ok () -> return (`Ok ()) in
   Lwt_main.run t
+
+let create size filename =
+  let module B = Qcow.Client.Make(Block) in
+  let open Lwt in
+  let t =
+    Block.connect filename
+    >>= function
+    | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
+    | `Ok x ->
+      B.create x size
+      >>= function
+      | `Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" filename)
+      | `Ok x -> return (`Ok ()) in
+  Lwt_main.run t
