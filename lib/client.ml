@@ -318,6 +318,8 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       Cstruct.memset cluster 0;
       B.write base Int64.(div refcount_table_offset (of_int t.base_info.B.sector_size)) [ cluster ]
       >>*= fun () ->
+      incr_refcount t 0L (* header *)
+      >>*= fun () ->
       incr_refcount t (Int64.div refcount_table_offset cluster_size)
       >>*= fun () ->
       (* Write an initial empty L1 table *)
