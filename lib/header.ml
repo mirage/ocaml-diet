@@ -28,7 +28,7 @@ module Version = struct
 
 
   let sizeof t = 4
-  
+
   let write t rest =
     Int32.write (match t with | `One -> 1l | `Two -> 2l | `Three -> 3l) rest
 
@@ -65,6 +65,14 @@ module CryptMethod = struct
 end
 
 type offset = int64 with sexp
+
+type extension = {
+ incompatible_features: int64;
+ compatible_features: int64;
+ autoclear_features: int64;
+ refcount_order: int32;
+ header_length: int32;
+} with sexp
 
 type t = {
   version: Version.t;

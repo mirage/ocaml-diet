@@ -34,6 +34,14 @@ end
 type offset = int64
 (** Offset within the image *)
 
+type extension = {
+ incompatible_features: int64;
+ compatible_features: int64;
+ autoclear_features: int64;
+ refcount_order: int32;
+ header_length: int32;
+} with sexp
+
 type t = {
   version: Version.t;
   backing_file_offset: offset;    (** offset of the backing file path *)
