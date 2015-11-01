@@ -18,6 +18,8 @@ open Sexplib.Std
 open Result
 open Error
 
+let round_up x size = Int64.(mul (div (add x (pred size)) size) size)
+
 module Make(B: S.RESIZABLE_BLOCK) = struct
 
   type 'a io = 'a Lwt.t
@@ -62,13 +64,25 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     let within = Int64.(to_int (rem offset (of_int t.base_info.B.sector_size))) in
     Lwt.return (`Ok (Cstruct.shift buf within))
 
+  (** Read-modify-write data at [offset] in the underying block device, up
+      to the sector boundary. This is useful for fields which don't cross
+      boundaries *)
+  let update_field t offset f =
+    let sector = Int64.(div offset (of_int t.base_info.B.sector_size)) in
+    let buf = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 t.base_info.B.sector_size in
+    B.read t.base sector [ buf ]
+    >>*= fun () ->
+    let within = Int64.(to_int (rem offset (of_int t.base_info.B.sector_size))) in
+    f (Cstruct.shift buf within);
+    B.write t.base sector [ buf ]
+
   (* An address in a qcow image is broken into 3 levels: *)
   type address = {
     l1_index: int64; (* index in the L1 table *)
     l2_index: int64; (* index in the L2 table *)
     cluster: int64;  (* index within the cluster *)
   } with sexp
-  
+
   let ( <| ) = Int64.shift_left
   let ( |> ) = Int64.shift_right_logical
 
@@ -89,8 +103,12 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
      the block isn't shared and therefore can be written to directly *)
   let get_copied x = x |> 63 = 1L
 
+  let set_copied x = Int64.logor x (1L <| 63)
+
   (* L2 entries can be marked as compressed *)
   let get_compressed x = (x <| 1) |> 63 = 1L
+
+  let set_compressed x = Int64.logor x (1L <| 62)
 
   let parse_offset buf =
     let raw = Cstruct.BE.get_uint64 buf 0 in
@@ -99,31 +117,161 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     let offset = (raw <| 2) |> 2 in
     { offset; copied; compressed }
 
-  let lookup t a =
-    let table_offset = t.h.Header.l1_table_offset in
-    (* Read l1[l1_index] as a 64-bit offset *)
-    let l1_index_offset = Int64.(add t.h.Header.l1_table_offset (mul 8L a.l1_index))in
-    read_field t l1_index_offset
-    >>*= fun buf ->
-    let l2_table_offset = Cstruct.BE.get_uint64 buf 0 in
-    let compressed = get_compressed l2_table_offset in
-    if compressed then failwith "compressed";
-    (* mask off the copied and compressed bits *)
-    let l2_table_offset = (l2_table_offset <| 2) |> 2 in
-    if l2_table_offset = 0L
-    then Lwt.return (`Ok None)
-    else
+  module Cluster = struct
+
+    let malloc t =
+      let cluster_bits = Int32.to_int t.Header.cluster_bits in
+      let npages = max 1 (cluster_bits lsl (cluster_bits - 12)) in
+      let pages = Io_page.(to_cstruct (get npages)) in
+      Cstruct.sub pages 0 (1 lsl cluster_bits)
+
+    (** Allocate a cluster, resize the underlying device and return the
+        byte offset of the new cluster, suitable for writing to one of
+        the various metadata tables. *)
+    let extend t =
+      let cluster = t.next_cluster in
+      t.next_cluster <- Int64.succ t.next_cluster;
+      let new_size_bytes = Int64.mul t.next_cluster (1L <| (Int32.to_int t.h.Header.cluster_bits)) in
+      let new_size_sectors = Int64.(div new_size_bytes (of_int t.base_info.B.sector_size)) in
+      B.resize t.base new_size_sectors
+      >>*= fun () ->
+      let offset = Int64.mul cluster (1L <| (Int32.to_int t.h.Header.cluster_bits)) in
+      Lwt.return (`Ok offset)
+
+    (* The number of 16-bit reference counts per cluster *)
+    let refcounts_per_cluster t =
+      let cluster_bits = Int32.to_int t.Header.cluster_bits in
+      let size = t.Header.size in
+      let cluster_size = 1L <| cluster_bits in
+      (* Each reference count is 2 bytes long *)
+      Int64.div cluster_size 2L
+
+    (* Compute the maximum size of the refcount table, if we need it *)
+    let max_refount_table_size t =
+      let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
+      let size = t.h.Header.size in
+      let cluster_size = 1L <| cluster_bits in
+      let refs_per_cluster = refcounts_per_cluster t.h in
+      let size_in_clusters = Int64.div (round_up size cluster_size) cluster_size in
+      let refs_clusters_required = Int64.div (round_up size_in_clusters refs_per_cluster) refs_per_cluster in
+      (* Each cluster containing references consumes 8 bytes in the
+         refcount_table. How much space is that? *)
+      let refcount_table_bytes = Int64.mul refs_clusters_required 8L in
+      Int64.div (round_up refcount_table_bytes cluster_size) cluster_size
+
+    (** Increment the refcount of a given cluster. Note this might need
+        to allocate itself, to enlarge the refcount table. *)
+    let incr_refcount t cluster =
+      let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
+      let size = t.h.Header.size in
+      let cluster_size = 1L <| cluster_bits in
+      let index_in_cluster = Int64.(to_int (div cluster (refcounts_per_cluster t.h))) in
+      let within_cluster = Int64.(to_int (rem cluster (refcounts_per_cluster t.h))) in
+      if index_in_cluster > 0
+      then Lwt.return (`Error (`Unknown "I don't know how to enlarge a refcount table yet"))
+      else begin
+        let cluster = malloc t.h in
+        let refcount_table_sector = Int64.(div t.h.Header.refcount_table_offset (of_int t.base_info.B.sector_size)) in
+        B.read t.base refcount_table_sector [ cluster ]
+        >>*= fun () ->
+        let offset = Cstruct.BE.get_uint64 cluster (8 * index_in_cluster) in
+        if offset = 0L then begin
+          extend t
+          >>*= fun offset ->
+          let cluster' = malloc t.h in
+          Cstruct.memset cluster' 0;
+          Cstruct.BE.set_uint16 cluster' (2 * within_cluster) 1;
+          let sector = Int64.(div offset (of_int t.base_info.B.sector_size)) in
+          B.write t.base sector [ cluster' ]
+          >>*= fun () ->
+          Cstruct.BE.set_uint64 cluster (8 * index_in_cluster) offset;
+          B.write t.base refcount_table_sector [ cluster ]
+          >>*= fun () ->
+          (* recursively increment refcunt of offset? *)
+          Lwt.return (`Ok ())
+        end else begin
+          let sector = Int64.(div offset (of_int t.base_info.B.sector_size)) in
+          B.read t.base sector [ cluster ]
+          >>*= fun () ->
+          let count = Cstruct.BE.get_uint16 cluster (2 * within_cluster) in
+          Cstruct.BE.set_uint16 cluster (2 * within_cluster) (count + 1);
+          B.write t.base sector [ cluster ]
+        end
+      end
+
+    (* Walk the L1 and L2 tables to translate an address *)
+    let walk ?(allocate=false) t a =
+      let table_offset = t.h.Header.l1_table_offset in
+      (* Read l1[l1_index] as a 64-bit offset *)
+      let l1_index_offset = Int64.(add t.h.Header.l1_table_offset (mul 8L a.l1_index))in
+      read_field t l1_index_offset
+      >>*= fun buf ->
+      let l2_table_offset = Cstruct.BE.get_uint64 buf 0 in
+
+      let (>>|=) m f =
+        let open Lwt in
+        m >>= function
+        | `Error x -> Lwt.return (`Error x)
+        | `Ok None -> Lwt.return (`Ok None)
+        | `Ok (Some x) -> f x in
+
+      (* Look up an L2 table *)
+      ( if l2_table_offset = 0L then begin
+          if not allocate then begin
+            Lwt.return (`Ok None)
+          end else begin
+            extend t
+            >>*= fun offset ->
+            let cluster = Int64.div offset (1L <| (Int32.to_int t.h.Header.cluster_bits)) in
+            incr_refcount t cluster
+            >>*= fun () ->
+            update_field t l1_index_offset
+              (fun buf -> Cstruct.BE.set_uint64 buf 0 (set_copied offset))
+            >>*= fun () ->
+            Lwt.return (`Ok (Some offset))
+          end
+        end else begin
+          let compressed = get_compressed l2_table_offset in
+          if compressed then failwith "compressed";
+          (* mask off the copied and compressed bits *)
+          let l2_table_offset = (l2_table_offset <| 2) |> 2 in
+          Lwt.return (`Ok (Some l2_table_offset))
+        end
+      ) >>|= fun l2_table_offset ->
+
+      (* Look up a cluster *)
       let l2_index_offset = Int64.(add l2_table_offset (mul 8L a.l2_index)) in
       read_field t l2_index_offset
       >>*= fun buf ->
       let cluster_offset = Cstruct.BE.get_uint64 buf 0 in
-      let compressed = get_compressed cluster_offset in
-      if compressed then failwith "compressed";
-      (* mask off the copied and compressed bits *)
-      let cluster_offset = (cluster_offset <| 2) |> 2 in
+      ( if cluster_offset = 0L then begin
+          if not allocate then begin
+            Lwt.return (`Ok None)
+          end else begin
+            extend t
+            >>*= fun offset ->
+            let cluster = Int64.div offset (1L <| (Int32.to_int t.h.Header.cluster_bits)) in
+            incr_refcount t cluster
+            >>*= fun () ->
+            update_field t l2_index_offset
+              (fun buf -> Cstruct.BE.set_uint64 buf 0 (set_copied offset))
+            >>*= fun () ->
+            Lwt.return (`Ok (Some offset))
+          end
+        end else begin
+          let compressed = get_compressed cluster_offset in
+          if compressed then failwith "compressed";
+          (* mask off the copied and compressed bits *)
+          let cluster_offset = (cluster_offset <| 2) |> 2 in
+          Lwt.return (`Ok (Some cluster_offset))
+        end
+      ) >>|= fun cluster_offset ->
+
       if cluster_offset = 0L
       then Lwt.return (`Ok None)
       else Lwt.return (`Ok (Some (Int64.add cluster_offset a.cluster)))
+
+  end
 
   (* Decompose into single sector reads *)
   let rec chop into ofs = function
@@ -142,7 +290,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     iter (fun (sector, buf) ->
       let offset = Int64.mul sector 512L in
       let address = address_of_offset (Int32.to_int t.h.Header.cluster_bits) offset in
-      lookup t address
+      Cluster.walk t address
       >>*= function
       | None ->
         Cstruct.memset buf 0;
@@ -151,7 +299,20 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
         let base_sector = Int64.(div offset' (of_int t.base_info.B.sector_size)) in
         B.read t.base base_sector [ buf ]
     ) (chop t.base_info.B.sector_size sector bufs)
-  let write t ofs bufs = Lwt.return (`Error `Unimplemented)
+
+  let write t sector bufs =
+    (* Inefficiently perform 3x physical I/Os for every 1 virtual I/O *)
+    iter (fun (sector, buf) ->
+      let offset = Int64.mul sector 512L in
+      let address = address_of_offset (Int32.to_int t.h.Header.cluster_bits) offset in
+      Cluster.walk ~allocate:true t address
+      >>*= function
+      | None ->
+        Lwt.return (`Error (`Unknown "this should never happen"))
+      | Some offset' ->
+        let base_sector = Int64.(div offset' (of_int t.base_info.B.sector_size)) in
+        B.write t.base base_sector [ buf ]
+    ) (chop t.base_info.B.sector_size sector bufs)
 
   let disconnect t = B.disconnect t.base
 
@@ -183,86 +344,6 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       match Header.read sector with
       | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
       | Ok (h, _) -> make base h
-
-  let malloc_cluster t =
-    let cluster_bits = Int32.to_int t.Header.cluster_bits in
-    let npages = max 1 (cluster_bits lsl (cluster_bits - 12)) in
-    let pages = Io_page.(to_cstruct (get npages)) in
-    Cstruct.sub pages 0 (1 lsl cluster_bits)
-
-  (* The number of 16-bit reference counts per cluster *)
-  let refcounts_per_cluster t =
-    let cluster_bits = Int32.to_int t.Header.cluster_bits in
-    let size = t.Header.size in
-    let cluster_size = 1L <| cluster_bits in
-    (* Each reference count is 2 bytes long *)
-    Int64.div cluster_size 2L
-
-  let round_up x size = Int64.(mul (div (add x (pred size)) size) size)
-
-  (* Compute the maximum size of the refcount table, if we need it *)
-  let max_refount_table_size t =
-    let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
-    let size = t.h.Header.size in
-    let cluster_size = 1L <| cluster_bits in
-    let refs_per_cluster = refcounts_per_cluster t.h in
-    let size_in_clusters = Int64.div (round_up size cluster_size) cluster_size in
-    let refs_clusters_required = Int64.div (round_up size_in_clusters refs_per_cluster) refs_per_cluster in
-    (* Each cluster containing references consumes 8 bytes in the
-       refcount_table. How much space is that? *)
-    let refcount_table_bytes = Int64.mul refs_clusters_required 8L in
-    Int64.div (round_up refcount_table_bytes cluster_size) cluster_size
-
-  (** Allocate a cluster, resize the underlying device and return the
-      byte offset of the new cluster, suitable for writing to one of
-      the various metadata tables. *)
-  let allocate_cluster t =
-    let cluster = t.next_cluster in
-    t.next_cluster <- Int64.succ t.next_cluster;
-    let new_size_bytes = Int64.mul t.next_cluster (1L <| (Int32.to_int t.h.Header.cluster_bits)) in
-    let new_size_sectors = Int64.(div new_size_bytes (of_int t.base_info.B.sector_size)) in
-    B.resize t.base new_size_sectors
-    >>*= fun () ->
-    let offset = Int64.mul cluster (1L <| (Int32.to_int t.h.Header.cluster_bits)) in
-    Lwt.return (`Ok offset)
-
-  let incr_refcount t cluster =
-    let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
-    let size = t.h.Header.size in
-    let cluster_size = 1L <| cluster_bits in
-    let index_in_cluster = Int64.(to_int (div cluster (refcounts_per_cluster t.h))) in
-    let within_cluster = Int64.(to_int (rem cluster (refcounts_per_cluster t.h))) in
-    if index_in_cluster > 0
-    then Lwt.return (`Error (`Unknown "I don't know how to enlarge a refcount table yet"))
-    else begin
-      let cluster = malloc_cluster t.h in
-      let refcount_table_sector = Int64.(div t.h.Header.refcount_table_offset (of_int t.base_info.B.sector_size)) in
-      B.read t.base refcount_table_sector [ cluster ]
-      >>*= fun () ->
-      let offset = Cstruct.BE.get_uint64 cluster (8 * index_in_cluster) in
-      if offset = 0L then begin
-        allocate_cluster t
-        >>*= fun offset ->
-        let cluster' = malloc_cluster t.h in
-        Cstruct.memset cluster' 0;
-        Cstruct.BE.set_uint16 cluster' (2 * within_cluster) 1;
-        let sector = Int64.(div offset (of_int t.base_info.B.sector_size)) in
-        B.write t.base sector [ cluster' ]
-        >>*= fun () ->
-        Cstruct.BE.set_uint64 cluster (8 * index_in_cluster) offset;
-        B.write t.base refcount_table_sector [ cluster ]
-        >>*= fun () ->
-        (* recursively increment refcunt of offset? *)
-        Lwt.return (`Ok ())
-      end else begin
-        let sector = Int64.(div offset (of_int t.base_info.B.sector_size)) in
-        B.read t.base sector [ cluster ]
-        >>*= fun () ->
-        let count = Cstruct.BE.get_uint16 cluster (2 * within_cluster) in
-        Cstruct.BE.set_uint16 cluster (2 * within_cluster) (count + 1);
-        B.write t.base sector [ cluster ]
-      end
-    end
 
   let create base size =
     let version = `Two in
@@ -314,18 +395,18 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       make base h
       >>*= fun t ->
       (* Write an initial empty refcount table *)
-      let cluster = malloc_cluster t.h in
+      let cluster = Cluster.malloc t.h in
       Cstruct.memset cluster 0;
       B.write base Int64.(div refcount_table_offset (of_int t.base_info.B.sector_size)) [ cluster ]
       >>*= fun () ->
-      incr_refcount t 0L (* header *)
+      Cluster.incr_refcount t 0L (* header *)
       >>*= fun () ->
-      incr_refcount t (Int64.div refcount_table_offset cluster_size)
+      Cluster.incr_refcount t (Int64.div refcount_table_offset cluster_size)
       >>*= fun () ->
       (* Write an initial empty L1 table *)
       B.write base Int64.(div l1_table_offset (of_int t.base_info.B.sector_size)) [ cluster ]
       >>*= fun () ->
-      incr_refcount t (Int64.div l1_table_offset cluster_size)
+      Cluster.incr_refcount t (Int64.div l1_table_offset cluster_size)
       >>*= fun () ->
       Lwt.return (`Ok t)
     | Result.Error (`Msg m) ->
