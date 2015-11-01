@@ -92,6 +92,10 @@ let create size filename =
   let module B = Qcow.Client.Make(Block) in
   let open Lwt in
   let t =
+    Lwt_unix.openfile filename [ Lwt_unix.O_CREAT ] 0o0644
+    >>= fun fd ->
+    Lwt_unix.close fd
+    >>= fun () ->
     Block.connect filename
     >>= function
     | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
