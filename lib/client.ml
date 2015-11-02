@@ -65,7 +65,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       to the sector boundary. This is useful for fields which don't cross
       boundaries *)
   let update_field t offset f =
-    let sector, within = to_sector ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset in
+    let sector, within = to_sector ~sector_size:t.sector_size offset in
     let buf = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 t.base_info.B.sector_size in
     B.read t.base sector [ buf ]
     >>*= fun () ->
@@ -74,7 +74,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
 
   (* Unmarshal a disk offset written at a given offset within the disk. *)
   let unmarshal_offset t offset =
-    let sector, within = to_sector ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset in
+    let sector, within = to_sector ~sector_size:t.sector_size offset in
     let buf = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 t.base_info.B.sector_size in
     B.read t.base sector [ buf ]
     >>*= fun () ->
@@ -84,7 +84,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     | Ok x -> Lwt.return (`Ok x)
 
   let resize t new_size =
-    let sector, within = Offset.to_sector ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits new_size in
+    let sector, within = Offset.to_sector ~sector_size:t.sector_size new_size in
     if within <> 0
     then Lwt.return (`Error (`Unknown (Printf.sprintf "Internal error: attempting to resize to a non-sector multiple %s" (Offset.to_string new_size))))
     else B.resize t.base sector
@@ -147,13 +147,13 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
           | Ok (offset, _) -> Lwt.return (`Ok offset)
           | Error (`Msg m) -> Lwt.return (`Error (`Unknown m)) )
         >>*= fun offset ->
-        if Offset.to_bytes ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset = 0L then begin
+        if Offset.to_bytes offset = 0L then begin
           extend t
           >>*= fun offset ->
           let cluster' = malloc t.h in
           Cstruct.memset cluster' 0;
           Cstruct.BE.set_uint16 cluster' (2 * within_cluster) 1;
-          let sector, _ = Offset.to_sector ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset in
+          let sector, _ = Offset.to_sector ~sector_size:t.sector_size offset in
           B.write t.base sector [ cluster' ]
           >>*= fun () ->
           ( match Offset.write offset (Cstruct.shift cluster (8 * index_in_cluster)) with
@@ -165,7 +165,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
           (* recursively increment refcunt of offset? *)
           Lwt.return (`Ok ())
         end else begin
-          let sector, _ = to_sector ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset in
+          let sector, _ = to_sector ~sector_size:t.sector_size offset in
           B.read t.base sector [ cluster ]
           >>*= fun () ->
           let count = Cstruct.BE.get_uint16 cluster (2 * within_cluster) in
@@ -191,13 +191,13 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
         | `Ok (Some x) -> f x in
 
       (* Look up an L2 table *)
-      ( if Offset.to_bytes ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits l2_table_offset = 0L then begin
+      ( if Offset.to_bytes l2_table_offset = 0L then begin
           if not allocate then begin
             Lwt.return (`Ok None)
           end else begin
             extend t
             >>*= fun offset ->
-            let cluster, _ = Offset.to_cluster ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset in
+            let cluster, _ = Offset.to_cluster ~cluster_bits:t.cluster_bits offset in
             incr_refcount t cluster
             >>*= fun () ->
             update_field t l1_index_offset
@@ -217,13 +217,13 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       let l2_index_offset = Offset.shift l2_table_offset (Int64.mul 8L a.Address.l2_index) in
       unmarshal_offset t l2_index_offset
       >>*= fun (cluster_offset, _) ->
-      ( if Offset.to_bytes ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits cluster_offset = 0L then begin
+      ( if Offset.to_bytes cluster_offset = 0L then begin
           if not allocate then begin
             Lwt.return (`Ok None)
           end else begin
             extend t
             >>*= fun offset ->
-            let cluster, _ = Offset.to_cluster ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset in
+            let cluster, _ = Offset.to_cluster ~cluster_bits:t.cluster_bits offset in
             incr_refcount t cluster
             >>*= fun () ->
             update_field t l2_index_offset
@@ -239,7 +239,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
         end
       ) >>|= fun cluster_offset ->
 
-      if Offset.to_bytes ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits cluster_offset = 0L
+      if Offset.to_bytes cluster_offset = 0L
       then Lwt.return (`Ok None)
       else Lwt.return (`Ok (Some (Offset.shift cluster_offset a.Address.cluster)))
 
@@ -268,7 +268,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
         Cstruct.memset buf 0;
         Lwt.return (`Ok ())
       | Some offset' ->
-        let base_sector, _ = Offset.to_sector ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset' in
+        let base_sector, _ = Offset.to_sector ~sector_size:t.sector_size offset' in
         B.read t.base base_sector [ buf ]
     ) (chop t.base_info.B.sector_size sector bufs)
 
@@ -282,7 +282,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       | None ->
         Lwt.return (`Error (`Unknown "this should never happen"))
       | Some offset' ->
-        let base_sector, _ = Offset.to_sector ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset' in
+        let base_sector, _ = Offset.to_sector ~sector_size:t.sector_size offset' in
         B.write t.base base_sector [ buf ]
     ) (chop t.base_info.B.sector_size sector bufs)
 

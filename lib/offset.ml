@@ -43,13 +43,13 @@ let make ?(copied = true) ?(compressed = false) x =
 
 (* Take an offset and round it down to the nearest physical sector, returning
    the sector number and an offset within the sector *)
-let rec to_sector ~sector_size ~cluster_bits { bytes = x } =
+let rec to_sector ~sector_size { bytes = x } =
   Int64.(div x (of_int sector_size)),
   Int64.(to_int (rem x (of_int sector_size)))
 
-let to_bytes ~sector_size ~cluster_bits { bytes = x } = x
+let to_bytes { bytes = x } = x
 
-let rec to_cluster ~sector_size ~cluster_bits { bytes = x } =
+let rec to_cluster ~cluster_bits { bytes = x } =
   Int64.(div x (1L <| cluster_bits)),
   Int64.(to_int (rem x (1L <| cluster_bits)))
 
