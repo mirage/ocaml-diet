@@ -156,7 +156,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       let table_offset = t.h.Header.l1_table_offset in
       (* Read l1[l1_index] as a 64-bit offset *)
       let l1_table_start = Offset.make t.h.Header.l1_table_offset in
-      let l1_index_offset = Offset.shift l1_table_start (Int64.mul 8L a.Address.l1_index) in
+      let l1_index_offset = Offset.shift l1_table_start (Int64.mul 8L a.Virtual.l1_index) in
       unmarshal_offset t l1_index_offset
       >>*= fun (l2_table_offset, _) ->
 
@@ -188,7 +188,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       ) >>|= fun l2_table_offset ->
 
       (* Look up a cluster *)
-      let l2_index_offset = Offset.shift l2_table_offset (Int64.mul 8L a.Address.l2_index) in
+      let l2_index_offset = Offset.shift l2_table_offset (Int64.mul 8L a.Virtual.l2_index) in
       unmarshal_offset t l2_index_offset
       >>*= fun (cluster_offset, _) ->
       ( if Offset.to_bytes cluster_offset = 0L then begin
@@ -212,7 +212,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
 
       if Offset.to_bytes cluster_offset = 0L
       then Lwt.return (`Ok None)
-      else Lwt.return (`Ok (Some (Offset.shift cluster_offset a.Address.cluster)))
+      else Lwt.return (`Ok (Some (Offset.shift cluster_offset a.Virtual.cluster)))
 
   end
 
@@ -232,8 +232,8 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     (* Inefficiently perform 3x physical I/Os for every 1 virtual I/O *)
     iter (fun (sector, buf) ->
       let byte = Int64.mul sector 512L in
-      let address = Address.make ~cluster_bits:t.cluster_bits byte in
-      Cluster.walk t address
+      let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
+      Cluster.walk t vaddr
       >>*= function
       | None ->
         Cstruct.memset buf 0;
@@ -247,8 +247,8 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     (* Inefficiently perform 3x physical I/Os for every 1 virtual I/O *)
     iter (fun (sector, buf) ->
       let byte = Int64.mul sector 512L in
-      let address = Address.make ~cluster_bits:t.cluster_bits byte in
-      Cluster.walk ~allocate:true t address
+      let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
+      Cluster.walk ~allocate:true t vaddr
       >>*= function
       | None ->
         Lwt.return (`Error (`Unknown "this should never happen"))

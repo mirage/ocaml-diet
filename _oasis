@@ -12,7 +12,7 @@ Library qcow
   CompiledObject:     best
   Path:               lib
   Findlibname:        qcow
-  Modules:            S, Header, Error, Types, Client, Address, Offset
+  Modules:            S, Header, Error, Types, Client, Virtual, Offset
   BuildDepends:       result, cstruct, sexplib, sexplib.syntax, mirage-types.lwt, lwt, io-page
 
 Document qcow
