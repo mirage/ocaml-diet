@@ -19,6 +19,10 @@ module Make(B: S.RESIZABLE_BLOCK) : sig
   include V1_LWT.BLOCK
 
   val create: B.t -> int64 -> [ `Ok of t | `Error of error ] io
+  (** [create block size] initialises a qcow-formatted image on [block]
+      with virtual size [size]. *)
 
   val connect: B.t -> [ `Ok of t | `Error of error ] io
+  (** [connect block] connects to an existing qcow-formatted image on
+      [block]. *)
 end
