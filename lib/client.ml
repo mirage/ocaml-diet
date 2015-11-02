@@ -395,8 +395,9 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     let open Lwt in
     B.get_info base
     >>= fun base_info ->
-    let size_sectors = Int64.(div next_free_byte (of_int base_info.B.sector_size)) in
-    B.resize base size_sectors
+    make base h
+    >>*= fun t ->
+    resize t (Bytes next_free_byte)
     >>*= fun () ->
 
     let page = Io_page.(to_cstruct (get 1)) in
@@ -404,8 +405,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     | Result.Ok _ ->
       B.write base 0L [ page ]
       >>*= fun () ->
-      make base h
-      >>*= fun t ->
+
       (* Write an initial empty refcount table *)
       let cluster = Cluster.malloc t.h in
       Cstruct.memset cluster 0;
