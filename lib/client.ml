@@ -42,6 +42,9 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     base_info: B.info;
     info: info;
     mutable next_cluster: int64;
+    (* for convenience *)
+    cluster_bits: int;
+    sector_size: int;
   }
 
   let get_info t = Lwt.return t.info
@@ -58,35 +61,11 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
         f x >>*= fun () ->
         iter f xs
 
-  (* Take an offset and round it down to the nearest physical sector, returning
-     the sector number and an offset within the sector *)
-  let rec to_sector t = function
-    | Bytes x ->
-      Int64.(div x (of_int t.base_info.B.sector_size)),
-      Int64.(to_int (rem x (of_int t.base_info.B.sector_size)))
-    | PhysicalSectors x -> x, 0
-    | Clusters x ->
-      let bytes = x <| (Int32.to_int t.h.Header.cluster_bits) in
-      to_sector t (Bytes bytes)
-
-  let to_bytes t = function
-    | Bytes x -> x
-    | PhysicalSectors x -> Int64.(mul (of_int t.base_info.B.sector_size) x)
-    | Clusters x -> x <| (Int32.to_int t.h.Header.cluster_bits)
-
-  let rec to_cluster t = function
-    | Bytes x ->
-      Int64.(div x (1L <| (Int32.to_int t.h.Header.cluster_bits))),
-      Int64.(to_int (rem x (1L <| (Int32.to_int t.h.Header.cluster_bits))))
-    | PhysicalSectors x ->
-      to_cluster t (Bytes (Int64.(mul x (of_int t.base_info.B.sector_size))))
-    | Clusters x -> x, 0
-
   (** Read-modify-write data at [offset] in the underying block device, up
       to the sector boundary. This is useful for fields which don't cross
       boundaries *)
   let update_field t offset f =
-    let sector, within = to_sector t offset in
+    let sector, within = to_sector ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset in
     let buf = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 t.base_info.B.sector_size in
     B.read t.base sector [ buf ]
     >>*= fun () ->
@@ -95,42 +74,20 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
 
   (* Unmarshal a disk offset written at a given offset within the disk. *)
   let unmarshal_offset t offset =
-    let sector, within = to_sector t offset in
+    let sector, within = to_sector ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset in
     let buf = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 t.base_info.B.sector_size in
     B.read t.base sector [ buf ]
     >>*= fun () ->
     let buf = Cstruct.shift buf within in
-    Lwt.return (`Ok (Bytes (Cstruct.BE.get_uint64 buf 0)))
+    match Offset.read buf with
+    | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
+    | Ok x -> Lwt.return (`Ok x)
 
   let resize t new_size =
-    let sector, within = to_sector t new_size in
+    let sector, within = Offset.to_sector ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits new_size in
     if within <> 0
     then Lwt.return (`Error (`Unknown (Printf.sprintf "Internal error: attempting to resize to a non-sector multiple %s" (Offset.to_string new_size))))
     else B.resize t.base sector
-
-  type offset = {
-    offset: int64;
-    copied: bool; (* refcount = 1 implies no snapshots implies direct write ok *)
-    compressed: bool;
-  }
-
-  (* L1 and L2 entries have a "copied" bit which, if set, means that
-     the block isn't shared and therefore can be written to directly *)
-  let get_copied x = x |> 63 = 1L
-
-  let set_copied x = Int64.logor x (1L <| 63)
-
-  (* L2 entries can be marked as compressed *)
-  let get_compressed x = (x <| 1) |> 63 = 1L
-
-  let set_compressed x = Int64.logor x (1L <| 62)
-
-  let parse_offset buf =
-    let raw = Cstruct.BE.get_uint64 buf 0 in
-    let copied = raw |> 63 = 1L in
-    let compressed = (raw <| 1) |> 63 = 1L in
-    let offset = (raw <| 2) |> 2 in
-    { offset; copied; compressed }
 
   module Cluster = struct
 
@@ -146,9 +103,9 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     let extend t =
       let cluster = t.next_cluster in
       t.next_cluster <- Int64.succ t.next_cluster;
-      resize t (Clusters t.next_cluster)
+      resize t (Offset.make (t.next_cluster <| t.cluster_bits))
       >>*= fun () ->
-      Lwt.return (`Ok (Clusters cluster))
+      Lwt.return (`Ok (Offset.make (cluster <| t.cluster_bits)))
 
     (* The number of 16-bit reference counts per cluster *)
     let refcounts_per_cluster t =
@@ -186,23 +143,29 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
         let refcount_table_sector = Int64.(div t.h.Header.refcount_table_offset (of_int t.base_info.B.sector_size)) in
         B.read t.base refcount_table_sector [ cluster ]
         >>*= fun () ->
-        let offset = Bytes (Cstruct.BE.get_uint64 cluster (8 * index_in_cluster)) in
-        if offset = Bytes 0L then begin
+        ( match Offset.read (Cstruct.shift cluster (8 * index_in_cluster)) with
+          | Ok (offset, _) -> Lwt.return (`Ok offset)
+          | Error (`Msg m) -> Lwt.return (`Error (`Unknown m)) )
+        >>*= fun offset ->
+        if Offset.to_bytes ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset = 0L then begin
           extend t
           >>*= fun offset ->
           let cluster' = malloc t.h in
           Cstruct.memset cluster' 0;
           Cstruct.BE.set_uint16 cluster' (2 * within_cluster) 1;
-          let sector, _ = to_sector t offset in
+          let sector, _ = Offset.to_sector ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset in
           B.write t.base sector [ cluster' ]
           >>*= fun () ->
-          Cstruct.BE.set_uint64 cluster (8 * index_in_cluster) (to_bytes t offset);
+          ( match Offset.write offset (Cstruct.shift cluster (8 * index_in_cluster)) with
+            | Ok _ -> Lwt.return (`Ok ())
+            | Error (`Msg m) -> Lwt.return (`Error (`Unknown m)) )
+          >>*= fun () ->
           B.write t.base refcount_table_sector [ cluster ]
           >>*= fun () ->
           (* recursively increment refcunt of offset? *)
           Lwt.return (`Ok ())
         end else begin
-          let sector, _ = to_sector t offset in
+          let sector, _ = to_sector ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset in
           B.read t.base sector [ cluster ]
           >>*= fun () ->
           let count = Cstruct.BE.get_uint16 cluster (2 * within_cluster) in
@@ -215,9 +178,10 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     let walk ?(allocate=false) t a =
       let table_offset = t.h.Header.l1_table_offset in
       (* Read l1[l1_index] as a 64-bit offset *)
-      let l1_index_offset = Bytes (Int64.(add t.h.Header.l1_table_offset (mul 8L a.Address.l1_index)))in
+      let l1_table_start = Offset.make t.h.Header.l1_table_offset in
+      let l1_index_offset = Offset.shift l1_table_start (Int64.mul 8L a.Address.l1_index) in
       unmarshal_offset t l1_index_offset
-      >>*= fun l2_table_offset ->
+      >>*= fun (l2_table_offset, _) ->
 
       let (>>|=) m f =
         let open Lwt in
@@ -227,59 +191,57 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
         | `Ok (Some x) -> f x in
 
       (* Look up an L2 table *)
-      ( if l2_table_offset = Bytes 0L then begin
+      ( if Offset.to_bytes ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits l2_table_offset = 0L then begin
           if not allocate then begin
             Lwt.return (`Ok None)
           end else begin
             extend t
             >>*= fun offset ->
-            let cluster, _ = to_cluster t offset in
+            let cluster, _ = Offset.to_cluster ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset in
             incr_refcount t cluster
             >>*= fun () ->
             update_field t l1_index_offset
-              (fun buf -> Cstruct.BE.set_uint64 buf 0 (set_copied (to_bytes t offset)))
+              (fun buf ->
+                ignore(Offset.write { offset with Offset.copied = true } buf)
+              )
             >>*= fun () ->
             Lwt.return (`Ok (Some offset))
           end
         end else begin
-          let compressed = get_compressed (to_bytes t l2_table_offset) in
-          if compressed then failwith "compressed";
-          (* mask off the copied and compressed bits *)
-          let l2_table_offset = Bytes ((to_bytes t l2_table_offset <| 2) |> 2) in
+          if l2_table_offset.Offset.compressed then failwith "compressed";
           Lwt.return (`Ok (Some l2_table_offset))
         end
       ) >>|= fun l2_table_offset ->
 
       (* Look up a cluster *)
-      let l2_index_offset = Bytes (Int64.(add (to_bytes t l2_table_offset) (mul 8L a.Address.l2_index))) in
+      let l2_index_offset = Offset.shift l2_table_offset (Int64.mul 8L a.Address.l2_index) in
       unmarshal_offset t l2_index_offset
-      >>*= fun cluster_offset ->
-      ( if cluster_offset = Bytes 0L then begin
+      >>*= fun (cluster_offset, _) ->
+      ( if Offset.to_bytes ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits cluster_offset = 0L then begin
           if not allocate then begin
             Lwt.return (`Ok None)
           end else begin
             extend t
             >>*= fun offset ->
-            let cluster, _ = to_cluster t offset in
+            let cluster, _ = Offset.to_cluster ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset in
             incr_refcount t cluster
             >>*= fun () ->
             update_field t l2_index_offset
-              (fun buf -> Cstruct.BE.set_uint64 buf 0 (set_copied (to_bytes t offset)))
+              (fun buf ->
+                ignore(Offset.write { offset with Offset.copied = true } buf)
+              )
             >>*= fun () ->
             Lwt.return (`Ok (Some offset))
           end
         end else begin
-          let compressed = get_compressed (to_bytes t cluster_offset) in
-          if compressed then failwith "compressed";
-          (* mask off the copied and compressed bits *)
-          let cluster_offset = Bytes (((to_bytes t cluster_offset) <| 2) |> 2) in
+          if cluster_offset.Offset.compressed then failwith "compressed";
           Lwt.return (`Ok (Some cluster_offset))
         end
       ) >>|= fun cluster_offset ->
 
-      if cluster_offset = Bytes 0L
+      if Offset.to_bytes ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits cluster_offset = 0L
       then Lwt.return (`Ok None)
-      else Lwt.return (`Ok (Some (Int64.add (to_bytes t cluster_offset) a.Address.cluster)))
+      else Lwt.return (`Ok (Some (Offset.shift cluster_offset a.Address.cluster)))
 
   end
 
@@ -306,7 +268,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
         Cstruct.memset buf 0;
         Lwt.return (`Ok ())
       | Some offset' ->
-        let base_sector = Int64.(div offset' (of_int t.base_info.B.sector_size)) in
+        let base_sector, _ = Offset.to_sector ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset' in
         B.read t.base base_sector [ buf ]
     ) (chop t.base_info.B.sector_size sector bufs)
 
@@ -320,7 +282,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       | None ->
         Lwt.return (`Error (`Unknown "this should never happen"))
       | Some offset' ->
-        let base_sector = Int64.(div offset' (of_int t.base_info.B.sector_size)) in
+        let base_sector, _ = Offset.to_sector ~sector_size:t.sector_size ~cluster_bits:t.cluster_bits offset' in
         B.write t.base base_sector [ buf ]
     ) (chop t.base_info.B.sector_size sector bufs)
 
@@ -338,9 +300,11 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     } in
     (* We assume the backing device is resized dynamically so the
        size is the address of the next cluster *)
-    let size_bytes = Int64.(mul base_info.B.size_sectors (of_int base_info.B.sector_size)) in
-    let next_cluster = Int64.(div size_bytes (1L <| (Int32.to_int h.Header.cluster_bits))) in
-    Lwt.return (`Ok { h; base; info = info'; base_info; next_cluster })
+    let sector_size = base_info.B.sector_size in
+    let cluster_bits = Int32.to_int h.Header.cluster_bits in
+    let size_bytes = Int64.(mul base_info.B.size_sectors (of_int sector_size)) in
+    let next_cluster = Int64.(div size_bytes (1L <| cluster_bits)) in
+    Lwt.return (`Ok { h; base; info = info'; base_info; next_cluster; sector_size; cluster_bits })
 
   let connect base =
     let open Lwt in
@@ -395,7 +359,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     >>= fun base_info ->
     make base h
     >>*= fun t ->
-    resize t (Bytes next_free_byte)
+    resize t (Offset.make next_free_byte)
     >>*= fun () ->
 
     let page = Io_page.(to_cstruct (get 1)) in
