@@ -26,7 +26,7 @@ type t = {
 let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right_logical
 
-let of_offset cluster_bits x =
+let make ~cluster_bits x =
 	let l2_bits = cluster_bits - 3 in
 	let l1_index = x |> (l2_bits + cluster_bits) in
 	let l2_index = (x <| (64 - l2_bits - cluster_bits)) |> (64 - l2_bits) in

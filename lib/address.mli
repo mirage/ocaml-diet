@@ -25,6 +25,6 @@
 		 - an index in the L2 table, pointing to
 		 - a cluster within which we need an offset *)
 
-val of_offset: int -> int64 -> t
-(** [of_offset cluster_bits offset] computes the address within the file
-    of the virtual [offset] *)
+val make: cluster_bits:int -> int64 -> t
+(** [make cluster_bits byte] computes the address within the file
+    of the virtual [byte] offset *)

@@ -231,8 +231,8 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
   let read t sector bufs =
     (* Inefficiently perform 3x physical I/Os for every 1 virtual I/O *)
     iter (fun (sector, buf) ->
-      let offset = Int64.mul sector 512L in
-      let address = Address.of_offset (Int32.to_int t.h.Header.cluster_bits) offset in
+      let byte = Int64.mul sector 512L in
+      let address = Address.make ~cluster_bits:t.cluster_bits byte in
       Cluster.walk t address
       >>*= function
       | None ->
@@ -246,8 +246,8 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
   let write t sector bufs =
     (* Inefficiently perform 3x physical I/Os for every 1 virtual I/O *)
     iter (fun (sector, buf) ->
-      let offset = Int64.mul sector 512L in
-      let address = Address.of_offset (Int32.to_int t.h.Header.cluster_bits) offset in
+      let byte = Int64.mul sector 512L in
+      let address = Address.make ~cluster_bits:t.cluster_bits byte in
       Cluster.walk ~allocate:true t address
       >>*= function
       | None ->
