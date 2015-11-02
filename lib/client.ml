@@ -20,6 +20,9 @@ open Error
 
 let round_up x size = Int64.(mul (div (add x (pred size)) size) size)
 
+let ( <| ) = Int64.shift_left
+let ( |> ) = Int64.shift_right_logical
+
 module Make(B: S.RESIZABLE_BLOCK) = struct
 
   type 'a io = 'a Lwt.t
@@ -76,22 +79,6 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     f (Cstruct.shift buf within);
     B.write t.base sector [ buf ]
 
-  (* An address in a qcow image is broken into 3 levels: *)
-  type address = {
-    l1_index: int64; (* index in the L1 table *)
-    l2_index: int64; (* index in the L2 table *)
-    cluster: int64;  (* index within the cluster *)
-  } with sexp
-
-  let ( <| ) = Int64.shift_left
-  let ( |> ) = Int64.shift_right_logical
-
-  let address_of_offset cluster_bits x =
-    let l2_bits = cluster_bits - 3 in
-    let l1_index = x |> (l2_bits + cluster_bits) in
-    let l2_index = (x <| (64 - l2_bits - cluster_bits)) |> (64 - l2_bits) in
-    let cluster  = (x <| (64 - cluster_bits)) |> (64 - cluster_bits) in
-    { l1_index; l2_index; cluster }
 
   type offset = {
     offset: int64;
@@ -203,7 +190,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     let walk ?(allocate=false) t a =
       let table_offset = t.h.Header.l1_table_offset in
       (* Read l1[l1_index] as a 64-bit offset *)
-      let l1_index_offset = Int64.(add t.h.Header.l1_table_offset (mul 8L a.l1_index))in
+      let l1_index_offset = Int64.(add t.h.Header.l1_table_offset (mul 8L a.Address.l1_index))in
       read_field t l1_index_offset
       >>*= fun buf ->
       let l2_table_offset = Cstruct.BE.get_uint64 buf 0 in
@@ -240,7 +227,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       ) >>|= fun l2_table_offset ->
 
       (* Look up a cluster *)
-      let l2_index_offset = Int64.(add l2_table_offset (mul 8L a.l2_index)) in
+      let l2_index_offset = Int64.(add l2_table_offset (mul 8L a.Address.l2_index)) in
       read_field t l2_index_offset
       >>*= fun buf ->
       let cluster_offset = Cstruct.BE.get_uint64 buf 0 in
@@ -269,7 +256,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
 
       if cluster_offset = 0L
       then Lwt.return (`Ok None)
-      else Lwt.return (`Ok (Some (Int64.add cluster_offset a.cluster)))
+      else Lwt.return (`Ok (Some (Int64.add cluster_offset a.Address.cluster)))
 
   end
 
@@ -289,7 +276,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     (* Inefficiently perform 3x physical I/Os for every 1 virtual I/O *)
     iter (fun (sector, buf) ->
       let offset = Int64.mul sector 512L in
-      let address = address_of_offset (Int32.to_int t.h.Header.cluster_bits) offset in
+      let address = Address.of_offset (Int32.to_int t.h.Header.cluster_bits) offset in
       Cluster.walk t address
       >>*= function
       | None ->
@@ -304,7 +291,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     (* Inefficiently perform 3x physical I/Os for every 1 virtual I/O *)
     iter (fun (sector, buf) ->
       let offset = Int64.mul sector 512L in
-      let address = address_of_offset (Int32.to_int t.h.Header.cluster_bits) offset in
+      let address = Address.of_offset (Int32.to_int t.h.Header.cluster_bits) offset in
       Cluster.walk ~allocate:true t address
       >>*= function
       | None ->
