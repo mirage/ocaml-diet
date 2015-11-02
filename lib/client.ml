@@ -69,6 +69,11 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       let bytes = x <| (Int32.to_int t.h.Header.cluster_bits) in
       to_sector t (Bytes bytes)
 
+  let to_bytes t = function
+    | Bytes x -> x
+    | PhysicalSectors x -> Int64.(mul (of_int t.base_info.B.sector_size) x)
+    | Clusters x -> x <| (Int32.to_int t.h.Header.cluster_bits)
+
   (* Return data at [offset] in the underlying block device, up to the sector
      boundary. This is useful for fields which don't cross boundaries *)
   let read_field t offset =
@@ -89,6 +94,11 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     f (Cstruct.shift buf within);
     B.write t.base sector [ buf ]
 
+  let resize t new_size =
+    let sector, within = to_sector t new_size in
+    if within <> 0
+    then Lwt.return (`Error (`Unknown (Printf.sprintf "Internal error: attempting to resize to a non-sector multiple %s" (Offset.to_string new_size))))
+    else B.resize t.base sector
 
   type offset = {
     offset: int64;
@@ -128,12 +138,9 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     let extend t =
       let cluster = t.next_cluster in
       t.next_cluster <- Int64.succ t.next_cluster;
-      let new_size_bytes = Int64.mul t.next_cluster (1L <| (Int32.to_int t.h.Header.cluster_bits)) in
-      let new_size_sectors = Int64.(div new_size_bytes (of_int t.base_info.B.sector_size)) in
-      B.resize t.base new_size_sectors
+      resize t (Clusters t.next_cluster)
       >>*= fun () ->
-      let offset = Int64.mul cluster (1L <| (Int32.to_int t.h.Header.cluster_bits)) in
-      Lwt.return (`Ok offset)
+      Lwt.return (`Ok (to_bytes t (Clusters cluster)))
 
     (* The number of 16-bit reference counts per cluster *)
     let refcounts_per_cluster t =
