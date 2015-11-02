@@ -27,4 +27,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
   val connect: B.t -> [ `Ok of t | `Error of error ] io
   (** [connect block] connects to an existing qcow-formatted image on
       [block]. *)
+
+  val resize: t -> int64 -> [ `Ok of unit | `Error of error ] io
+  (** [resize block new_size_sectors] changes the size of the qcow-formatted
+      image to be [new_size_sectors] 512-byte sectors. *)
 end

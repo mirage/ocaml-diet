@@ -207,3 +207,12 @@ let max_refcount_table_size t =
      refcount_table. How much space is that? *)
   let refcount_table_bytes = OldInt64.mul refs_clusters_required 8L in
   OldInt64.div (Int64.round_up refcount_table_bytes cluster_size) cluster_size
+
+let l2_tables_required ~cluster_bits size =
+  (* The L2 table is of size (1L <| cluster_bits) bytes
+     and contains (1L <| (cluster_bits - 3)) 8-byte pointers.
+     A single L2 table therefore manages
+     (1L <| (cluster_bits - 3)) * (1L <| cluster_bits) bytes
+     = (1L <| (2 * cluster_bits - 3)) bytes. *)
+  let bytes_per_l2 = 1L <| (2 * cluster_bits - 3) in
+  Int64.div (Int64.round_up size bytes_per_l2) bytes_per_l2

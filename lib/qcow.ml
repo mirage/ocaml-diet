@@ -39,7 +39,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   type id = B.id
   type page_aligned_buffer = B.page_aligned_buffer
   type t = {
-    h: Header.t;
+    mutable h: Header.t;
     base: B.t;
     base_info: B.info;
     info: info;
@@ -84,7 +84,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
     | Ok x -> Lwt.return (`Ok x)
 
-  let resize t new_size =
+  let resize_base t new_size =
     let sector, within = Physical.to_sector ~sector_size:t.sector_size new_size in
     if within <> 0
     then Lwt.return (`Error (`Unknown (Printf.sprintf "Internal error: attempting to resize to a non-sector multiple %s" (Physical.to_string new_size))))
@@ -104,7 +104,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let extend t =
       let cluster = t.next_cluster in
       t.next_cluster <- Int64.succ t.next_cluster;
-      resize t (Physical.make (t.next_cluster <| t.cluster_bits))
+      resize_base t (Physical.make (t.next_cluster <| t.cluster_bits))
       >>*= fun () ->
       Lwt.return (`Ok (Physical.make (cluster <| t.cluster_bits)))
 
@@ -293,6 +293,29 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
       | Ok (h, _) -> make base h
 
+  let resize t new_size_sectors =
+    let size = Int64.mul new_size_sectors 512L in
+    let l2_tables_required = Header.l2_tables_required ~cluster_bits:t.cluster_bits size in
+    (* Keep it simple for now by refusing resizes which would require us to
+       reallocate the L1 table. *)
+    let l2_entries_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
+    let old_max_entries = Int64.round_up (Int64.of_int32 t.h.Header.l1_size) l2_entries_per_cluster in
+    let new_max_entries = Int64.round_up l2_tables_required l2_entries_per_cluster in
+    if new_max_entries > old_max_entries
+    then Lwt.return (`Error (`Unknown "I don't know how to resize in the case where the L1 table needs new clusters:"))
+    else begin
+      let h' = { t.h with Header.l1_size = Int64.to_int32 l2_tables_required } in
+      let page = Io_page.(to_cstruct (get 1)) in
+      match Header.write h' page with
+      | Result.Ok _ ->
+        B.write t.base 0L [ page ]
+        >>*= fun () ->
+        t.h <- h';
+        Lwt.return (`Ok ())
+      | Result.Error (`Msg m) ->
+        Lwt.return (`Error (`Unknown m))
+    end
+
   let create base size =
     let version = `Two in
     let backing_file_offset = 0L in
@@ -307,13 +330,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
     (* qemu-img places the L1 table after the refcount table *)
     let l1_table_offset = Int64.(mul (add 1L refcount_table_clusters) (1L <| cluster_bits)) in
-    (* The L2 table is of size (1L <| cluster_bits) bytes
-       and contains (1L <| (cluster_bits - 3)) 8-byte pointers.
-       A single L2 table therefore manages
-       (1L <| (cluster_bits - 3)) * (1L <| cluster_bits) bytes
-       = (1L <| (2 * cluster_bits - 3)) bytes. *)
-    let bytes_per_l2 = 1L <| (2 * cluster_bits - 3) in
-    let l2_tables_required = Int64.div (Int64.round_up size bytes_per_l2) bytes_per_l2 in
+    let l2_tables_required = Header.l2_tables_required ~cluster_bits size in
     let nb_snapshots = 0l in
     let snapshots_offset = 0L in
     let h = {
@@ -333,7 +350,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     >>= fun base_info ->
     make base h
     >>*= fun t ->
-    resize t (Physical.make next_free_byte)
+    resize_base t (Physical.make next_free_byte)
     >>*= fun () ->
 
     let page = Io_page.(to_cstruct (get 1)) in
