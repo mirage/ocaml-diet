@@ -16,8 +16,6 @@
  *)
 open Sexplib.Std
 open Result
-open Types
-open Error
 
 let project_url = "http://github.com/djs55/ocaml-qcow"
 
@@ -26,8 +24,8 @@ open Cmdliner
 (* Help sections common to all commands *)
 
 let _common_options = "COMMON OPTIONS"
-let help = [ 
- `S _common_options; 
+let help = [
+ `S _common_options;
  `P "These options are common to all commands.";
  `S "MORE HELP";
  `P "Use `$(mname) $(i,COMMAND) --help' for help on a single command."; `Noblank;
@@ -35,9 +33,9 @@ let help = [
 ]
 
 (* Options common to all commands *)
-let common_options_t = 
-  let docs = _common_options in 
-  let debug = 
+let common_options_t =
+  let docs = _common_options in
+  let debug =
     let doc = "Give only debug output." in
     Arg.(value & flag & info ["debug"] ~docs ~doc) in
   Term.(pure Common.make $ debug)
@@ -90,16 +88,15 @@ let create_cmd =
   Term.(ret(pure Impl.create $ size $ output)),
   Term.info "create" ~sdocs:_common_options ~doc ~man
 
-let default_cmd = 
-  let doc = "manipulate virtual disks stored in qcow2 files" in 
+let default_cmd =
+  let doc = "manipulate virtual disks stored in qcow2 files" in
   let man = help in
   Term.(ret (pure (fun _ -> `Help (`Pager, None)) $ common_options_t)),
   Term.info "qcow-tool" ~version:"1.0.0" ~sdocs:_common_options ~doc ~man
-       
+
 let cmds = [info_cmd; copy_cmd; create_cmd; check_cmd]
 
 let _ =
-  match Term.eval_choice default_cmd cmds with 
+  match Term.eval_choice default_cmd cmds with
   | `Error _ -> exit 1
   | _ -> exit 0
-

@@ -16,13 +16,17 @@
  *)
 open Sexplib.Std
 open Result
-open Error
-open Types
+open Qcow_error
+open Qcow_types
+module Error = Qcow_error
+module Header = Qcow_header
+module Virtual = Qcow_virtual
+module Physical = Qcow_physical
 
 let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right_logical
 
-module Make(B: S.RESIZABLE_BLOCK) = struct
+module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
   type 'a io = 'a Lwt.t
   type error = B.error

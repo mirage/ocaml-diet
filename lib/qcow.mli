@@ -14,8 +14,10 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
+module Error = Qcow_error
+module Header = Qcow_header
 
-module Make(B: S.RESIZABLE_BLOCK) : sig
+module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
   include V1_LWT.BLOCK
 
   val create: B.t -> int64 -> [ `Ok of t | `Error of error ] io
