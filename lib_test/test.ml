@@ -89,24 +89,37 @@ let create_1P () =
   let printer = Header.to_string in
   assert_equal ~printer ~cmp expected hdr
 
-let read_write () =
+(* Interesting boundaries:
+   - start of cluster
+   - end of cluster
+   - start of L2 table
+   - end of L2 table
+   - start of L1 table
+   - end of L1 table?
+   *)
+
+let interesting_offsets = [
+  1048576L, 0L;
+]
+
+let read_write total_size sector () =
   let module B = Qcow.Client.Make(Ramdisk) in
   let t =
     Ramdisk.connect "test"
     >>= fun x ->
     let ramdisk = expect_ok x in
 
-    B.create ramdisk 1048576L
+    B.create ramdisk total_size
     >>= fun x ->
     let b = expect_ok x in
 
     let buf = Io_page.(to_cstruct (get 1)) in
     Cstruct.memset buf 1;
-    B.write b 0L [ buf ]
+    B.write b sector [ buf ]
     >>= fun x ->
     let () = expect_ok x in
     let buf' = Io_page.(to_cstruct (get 1)) in
-    B.read b 0L [ buf' ]
+    B.read b sector [ buf' ]
     >>= fun x ->
     let () = expect_ok x in
     let cmp a b = Cstruct.compare a b = 0 in
@@ -116,10 +129,16 @@ let read_write () =
   Lwt_main.run t
 
 let _ =
+  let interesting_offsets = List.map
+    (fun (total_size, sector) ->
+      Printf.sprintf "read write total_size=%Ld sector=%Ld" total_size sector
+      >::
+      read_write total_size sector
+    ) interesting_offsets in
+
   let suite = "qcow2" >::: [
     "create 1K" >:: create_1K;
     "create 1M" >:: create_1M;
     "create 1P" >:: create_1P;
-    "read write" >:: read_write;
-  ] in
+  ] @ interesting_offsets in
   OUnit2.run_test_tt_main (ounit2_of_ounit1 suite)
