@@ -18,8 +18,7 @@ open Sexplib.Std
 open Result
 open Error
 open Offset
-
-let round_up x size = Int64.(mul (div (add x (pred size)) size) size)
+open Types
 
 let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right_logical
@@ -106,35 +105,14 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       >>*= fun () ->
       Lwt.return (`Ok (Offset.make (cluster <| t.cluster_bits)))
 
-    (* The number of 16-bit reference counts per cluster *)
-    let refcounts_per_cluster t =
-      let cluster_bits = Int32.to_int t.Header.cluster_bits in
-      let size = t.Header.size in
-      let cluster_size = 1L <| cluster_bits in
-      (* Each reference count is 2 bytes long *)
-      Int64.div cluster_size 2L
-
-    (* Compute the maximum size of the refcount table, if we need it *)
-    let max_refount_table_size t =
-      let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
-      let size = t.h.Header.size in
-      let cluster_size = 1L <| cluster_bits in
-      let refs_per_cluster = refcounts_per_cluster t.h in
-      let size_in_clusters = Int64.div (round_up size cluster_size) cluster_size in
-      let refs_clusters_required = Int64.div (round_up size_in_clusters refs_per_cluster) refs_per_cluster in
-      (* Each cluster containing references consumes 8 bytes in the
-         refcount_table. How much space is that? *)
-      let refcount_table_bytes = Int64.mul refs_clusters_required 8L in
-      Int64.div (round_up refcount_table_bytes cluster_size) cluster_size
-
     (** Increment the refcount of a given cluster. Note this might need
         to allocate itself, to enlarge the refcount table. *)
     let incr_refcount t cluster =
       let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
       let size = t.h.Header.size in
       let cluster_size = 1L <| cluster_bits in
-      let index_in_cluster = Int64.(to_int (div cluster (refcounts_per_cluster t.h))) in
-      let within_cluster = Int64.(to_int (rem cluster (refcounts_per_cluster t.h))) in
+      let index_in_cluster = Int64.(to_int (div cluster (Header.refcounts_per_cluster t.h))) in
+      let within_cluster = Int64.(to_int (rem cluster (Header.refcounts_per_cluster t.h))) in
       if index_in_cluster > 0
       then Lwt.return (`Error (`Unknown "I don't know how to enlarge a refcount table yet"))
       else begin
@@ -332,7 +310,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
        (1L <| (cluster_bits - 3)) * (1L <| cluster_bits) bytes
        = (1L <| (2 * cluster_bits - 3)) bytes. *)
     let bytes_per_l2 = 1L <| (2 * cluster_bits - 3) in
-    let l2_tables_required = Int64.div (round_up size bytes_per_l2) bytes_per_l2 in
+    let l2_tables_required = Int64.div (Int64.round_up size bytes_per_l2) bytes_per_l2 in
     let nb_snapshots = 0l in
     let snapshots_offset = 0L in
     let h = {
@@ -346,7 +324,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     (* Resize the underlying device to contain the header + refcount table
        + l1 table. Future allocations will enlarge the file. *)
     let l1_size_bytes = Int64.mul 8L l2_tables_required in
-    let next_free_byte = round_up (Int64.add l1_table_offset l1_size_bytes) cluster_size in
+    let next_free_byte = Int64.round_up (Int64.add l1_table_offset l1_size_bytes) cluster_size in
     let open Lwt in
     B.get_info base
     >>= fun base_info ->

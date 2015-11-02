@@ -79,7 +79,13 @@ module Int32 = struct
 end
 
 module Int64 = struct
-  type t = int64 with sexp
+  include Int64
+
+  type _t = int64 with sexp
+  let sexp_of_t = sexp_of__t
+  let t_of_sexp = _t_of_sexp
+
+  let round_up x size = mul (div (add x (pred size)) size) size
 
   let sizeof _ = 8
 

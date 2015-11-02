@@ -58,6 +58,12 @@ type t = {
 } with sexp
 (** The qcow2 header *)
 
+val refcounts_per_cluster: t -> int64
+(** The number of 16-bit reference counts per cluster *)
+
+val max_refcount_table_size: t -> int64
+(** Compute the maximum size of the refcount table *)
+
 include S.SERIALISABLE with type t := t
 
 include S.PRINTABLE with type t := t

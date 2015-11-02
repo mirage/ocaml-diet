@@ -16,8 +16,12 @@
  *)
 open Sexplib.Std
 open Result
-open Types
 open Error
+module OldInt64 = Int64
+open Types
+
+let ( <| ) = OldInt64.shift_left
+let ( |> ) = OldInt64.shift_right_logical
 
 module Version = struct
   type t = [
@@ -184,3 +188,24 @@ let read rest =
   return ({ version; backing_file_offset; backing_file_size; cluster_bits;
     size; crypt_method; l1_size; l1_table_offset; refcount_table_offset;
     refcount_table_clusters; nb_snapshots; snapshots_offset }, rest)
+
+let round_up x size = OldInt64.(mul (div (add x (pred size)) size) size)
+
+let refcounts_per_cluster t =
+  let cluster_bits = Int32.to_int t.cluster_bits in
+  let size = t.size in
+  let cluster_size = 1L <| cluster_bits in
+  (* Each reference count is 2 bytes long *)
+  OldInt64.div cluster_size 2L
+
+let max_refcount_table_size t =
+  let cluster_bits = Int32.to_int t.cluster_bits in
+  let size = t.size in
+  let cluster_size = 1L <| cluster_bits in
+  let refs_per_cluster = refcounts_per_cluster t in
+  let size_in_clusters = OldInt64.div (round_up size cluster_size) cluster_size in
+  let refs_clusters_required = OldInt64.div (round_up size_in_clusters refs_per_cluster) refs_per_cluster in
+  (* Each cluster containing references consumes 8 bytes in the
+     refcount_table. How much space is that? *)
+  let refcount_table_bytes = OldInt64.mul refs_clusters_required 8L in
+  OldInt64.div (round_up refcount_table_bytes cluster_size) cluster_size
