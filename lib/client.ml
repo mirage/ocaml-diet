@@ -17,7 +17,6 @@
 open Sexplib.Std
 open Result
 open Error
-open Offset
 open Types
 
 let ( <| ) = Int64.shift_left
@@ -60,31 +59,31 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
         f x >>*= fun () ->
         iter f xs
 
-  (* Mmarshal a disk offset written at a given offset within the disk. *)
-  let marshal_offset t offset v =
-    let sector, within = to_sector ~sector_size:t.sector_size offset in
+  (* Mmarshal a disk physical address written at a given offset within the disk. *)
+  let marshal_physical_address t offset v =
+    let sector, within = Physical.to_sector ~sector_size:t.sector_size offset in
     let buf = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 t.base_info.B.sector_size in
     B.read t.base sector [ buf ]
     >>*= fun () ->
-    match Offset.write v (Cstruct.shift buf within) with
+    match Physical.write v (Cstruct.shift buf within) with
     | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
     | Ok _ -> B.write t.base sector [ buf ]
 
-  (* Unmarshal a disk offset written at a given offset within the disk. *)
-  let unmarshal_offset t offset =
-    let sector, within = to_sector ~sector_size:t.sector_size offset in
+  (* Unmarshal a disk physical address written at a given offset within the disk. *)
+  let unmarshal_physical_address t offset =
+    let sector, within = Physical.to_sector ~sector_size:t.sector_size offset in
     let buf = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 t.base_info.B.sector_size in
     B.read t.base sector [ buf ]
     >>*= fun () ->
     let buf = Cstruct.shift buf within in
-    match Offset.read buf with
+    match Physical.read buf with
     | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
     | Ok x -> Lwt.return (`Ok x)
 
   let resize t new_size =
-    let sector, within = Offset.to_sector ~sector_size:t.sector_size new_size in
+    let sector, within = Physical.to_sector ~sector_size:t.sector_size new_size in
     if within <> 0
-    then Lwt.return (`Error (`Unknown (Printf.sprintf "Internal error: attempting to resize to a non-sector multiple %s" (Offset.to_string new_size))))
+    then Lwt.return (`Error (`Unknown (Printf.sprintf "Internal error: attempting to resize to a non-sector multiple %s" (Physical.to_string new_size))))
     else B.resize t.base sector
 
   module Cluster = struct
@@ -96,14 +95,14 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       Cstruct.sub pages 0 (1 lsl cluster_bits)
 
     (** Allocate a cluster, resize the underlying device and return the
-        byte offset of the new cluster, suitable for writing to one of
+        physical address of the new cluster, suitable for writing to one of
         the various metadata tables. *)
     let extend t =
       let cluster = t.next_cluster in
       t.next_cluster <- Int64.succ t.next_cluster;
-      resize t (Offset.make (t.next_cluster <| t.cluster_bits))
+      resize t (Physical.make (t.next_cluster <| t.cluster_bits))
       >>*= fun () ->
-      Lwt.return (`Ok (Offset.make (cluster <| t.cluster_bits)))
+      Lwt.return (`Ok (Physical.make (cluster <| t.cluster_bits)))
 
     (** Increment the refcount of a given cluster. Note this might need
         to allocate itself, to enlarge the refcount table. *)
@@ -120,20 +119,20 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
         let refcount_table_sector = Int64.(div t.h.Header.refcount_table_offset (of_int t.base_info.B.sector_size)) in
         B.read t.base refcount_table_sector [ cluster ]
         >>*= fun () ->
-        ( match Offset.read (Cstruct.shift cluster (8 * index_in_cluster)) with
+        ( match Physical.read (Cstruct.shift cluster (8 * index_in_cluster)) with
           | Ok (offset, _) -> Lwt.return (`Ok offset)
           | Error (`Msg m) -> Lwt.return (`Error (`Unknown m)) )
         >>*= fun offset ->
-        if Offset.to_bytes offset = 0L then begin
+        if Physical.to_bytes offset = 0L then begin
           extend t
           >>*= fun offset ->
           let cluster' = malloc t.h in
           Cstruct.memset cluster' 0;
           Cstruct.BE.set_uint16 cluster' (2 * within_cluster) 1;
-          let sector, _ = Offset.to_sector ~sector_size:t.sector_size offset in
+          let sector, _ = Physical.to_sector ~sector_size:t.sector_size offset in
           B.write t.base sector [ cluster' ]
           >>*= fun () ->
-          ( match Offset.write offset (Cstruct.shift cluster (8 * index_in_cluster)) with
+          ( match Physical.write offset (Cstruct.shift cluster (8 * index_in_cluster)) with
             | Ok _ -> Lwt.return (`Ok ())
             | Error (`Msg m) -> Lwt.return (`Error (`Unknown m)) )
           >>*= fun () ->
@@ -142,7 +141,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
           (* recursively increment refcunt of offset? *)
           Lwt.return (`Ok ())
         end else begin
-          let sector, _ = to_sector ~sector_size:t.sector_size offset in
+          let sector, _ = Physical.to_sector ~sector_size:t.sector_size offset in
           B.read t.base sector [ cluster ]
           >>*= fun () ->
           let count = Cstruct.BE.get_uint16 cluster (2 * within_cluster) in
@@ -155,9 +154,9 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     let walk ?(allocate=false) t a =
       let table_offset = t.h.Header.l1_table_offset in
       (* Read l1[l1_index] as a 64-bit offset *)
-      let l1_table_start = Offset.make t.h.Header.l1_table_offset in
-      let l1_index_offset = Offset.shift l1_table_start (Int64.mul 8L a.Virtual.l1_index) in
-      unmarshal_offset t l1_index_offset
+      let l1_table_start = Physical.make t.h.Header.l1_table_offset in
+      let l1_index_offset = Physical.shift l1_table_start (Int64.mul 8L a.Virtual.l1_index) in
+      unmarshal_physical_address t l1_index_offset
       >>*= fun (l2_table_offset, _) ->
 
       let (>>|=) m f =
@@ -168,51 +167,51 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
         | `Ok (Some x) -> f x in
 
       (* Look up an L2 table *)
-      ( if Offset.to_bytes l2_table_offset = 0L then begin
+      ( if Physical.to_bytes l2_table_offset = 0L then begin
           if not allocate then begin
             Lwt.return (`Ok None)
           end else begin
             extend t
             >>*= fun offset ->
-            let cluster, _ = Offset.to_cluster ~cluster_bits:t.cluster_bits offset in
+            let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
             incr_refcount t cluster
             >>*= fun () ->
-            marshal_offset t l1_index_offset offset
+            marshal_physical_address t l1_index_offset offset
             >>*= fun () ->
             Lwt.return (`Ok (Some offset))
           end
         end else begin
-          if Offset.is_compressed l2_table_offset then failwith "compressed";
+          if Physical.is_compressed l2_table_offset then failwith "compressed";
           Lwt.return (`Ok (Some l2_table_offset))
         end
       ) >>|= fun l2_table_offset ->
 
       (* Look up a cluster *)
-      let l2_index_offset = Offset.shift l2_table_offset (Int64.mul 8L a.Virtual.l2_index) in
-      unmarshal_offset t l2_index_offset
+      let l2_index_offset = Physical.shift l2_table_offset (Int64.mul 8L a.Virtual.l2_index) in
+      unmarshal_physical_address t l2_index_offset
       >>*= fun (cluster_offset, _) ->
-      ( if Offset.to_bytes cluster_offset = 0L then begin
+      ( if Physical.to_bytes cluster_offset = 0L then begin
           if not allocate then begin
             Lwt.return (`Ok None)
           end else begin
             extend t
             >>*= fun offset ->
-            let cluster, _ = Offset.to_cluster ~cluster_bits:t.cluster_bits offset in
+            let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
             incr_refcount t cluster
             >>*= fun () ->
-            marshal_offset t l2_index_offset offset
+            marshal_physical_address t l2_index_offset offset
             >>*= fun () ->
             Lwt.return (`Ok (Some offset))
           end
         end else begin
-          if Offset.is_compressed cluster_offset then failwith "compressed";
+          if Physical.is_compressed cluster_offset then failwith "compressed";
           Lwt.return (`Ok (Some cluster_offset))
         end
       ) >>|= fun cluster_offset ->
 
-      if Offset.to_bytes cluster_offset = 0L
+      if Physical.to_bytes cluster_offset = 0L
       then Lwt.return (`Ok None)
-      else Lwt.return (`Ok (Some (Offset.shift cluster_offset a.Virtual.cluster)))
+      else Lwt.return (`Ok (Some (Physical.shift cluster_offset a.Virtual.cluster)))
 
   end
 
@@ -239,7 +238,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
         Cstruct.memset buf 0;
         Lwt.return (`Ok ())
       | Some offset' ->
-        let base_sector, _ = Offset.to_sector ~sector_size:t.sector_size offset' in
+        let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
         B.read t.base base_sector [ buf ]
     ) (chop t.base_info.B.sector_size sector bufs)
 
@@ -253,7 +252,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       | None ->
         Lwt.return (`Error (`Unknown "this should never happen"))
       | Some offset' ->
-        let base_sector, _ = Offset.to_sector ~sector_size:t.sector_size offset' in
+        let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
         B.write t.base base_sector [ buf ]
     ) (chop t.base_info.B.sector_size sector bufs)
 
@@ -330,7 +329,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     >>= fun base_info ->
     make base h
     >>*= fun t ->
-    resize t (Offset.make next_free_byte)
+    resize t (Physical.make next_free_byte)
     >>*= fun () ->
 
     let page = Io_page.(to_cstruct (get 1)) in
