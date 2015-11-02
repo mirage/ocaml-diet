@@ -15,20 +15,23 @@
  *
  *)
 
-type t = {
-	bytes: int64;
-	copied: bool; (* refcount = 1 implies no snapshots implies direct write ok *)
-	compressed: bool;
-}
-with sexp
+type t with sexp
+(** An offset within the physical disk *)
+
+val is_compressed: t -> bool
+(** True if the offset has been marked as being compressed *)
+
+val is_mutable: t -> bool
+(** True if the offset is safe to mutate directly (i.e. is not referenced
+    by a snapshot *)
 
 val shift: t -> int64 -> t
 (** [shift t bytes] adds [bytes] to t, maintaining other properties *)
 
-val make: ?copied:bool -> ?compressed:bool -> int64 -> t
-(** Create an offset at the given byte address. This defaults to [copied = true]
+val make: ?is_mutable:bool -> ?is_compressed:bool -> int64 -> t
+(** Create an offset at the given byte address. This defaults to [is_mutable = true]
     which meand there are no snapshots implying that directly writing to this
-		offset is ok; and [compressed = false]. *)
+		offset is ok; and [is_compressed = false]. *)
 
 val to_sector: sector_size:int -> t -> int64 * int
 (** Return the sector on disk, plus a remainder within the sector *)

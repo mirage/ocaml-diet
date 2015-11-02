@@ -26,8 +26,8 @@ let ( |> ) = Int64.shift_right_logical
 
 type t = {
 	bytes: int64;
-	copied: bool; (* refcount = 1 implies no snapshots implies direct write ok *)
-	compressed: bool;
+	is_mutable: bool;
+	is_compressed: bool;
 }
 with sexp
 
@@ -37,9 +37,12 @@ let sizeof _ = 8
 
 let shift t bytes = { t with bytes = Int64.add t.bytes bytes }
 
-let make ?(copied = true) ?(compressed = false) x =
+let make ?(is_mutable = true) ?(is_compressed = false) x =
 	let bytes = (x <| 2) |> 2 in
-	{ bytes; copied; compressed}
+	{ bytes; is_mutable; is_compressed}
+
+let is_mutable t = t.is_mutable
+let is_compressed t = t.is_compressed
 
 (* Take an offset and round it down to the nearest physical sector, returning
    the sector number and an offset within the sector *)
@@ -55,14 +58,14 @@ let rec to_cluster ~cluster_bits { bytes = x } =
 
 let read rest =
   let x = Cstruct.BE.get_uint64 rest 0 in
-  let copied = x |> 63 = 1L in
-  let compressed = (x <| 1) |> 63 = 1L in
+  let is_mutable = x |> 63 = 1L in
+  let is_compressed = (x <| 1) |> 63 = 1L in
   let bytes = (x <| 2) |> 2 in
-	Ok({bytes; copied; compressed}, Cstruct.shift rest 8)
+	Ok({bytes; is_mutable; is_compressed}, Cstruct.shift rest 8)
 
 let write t rest =
-  let copied = if t.copied then 1L <| 63 else 0L in
-	let compressed = if t.compressed then 1L <| 62 else 0L in
-	let raw = Int64.(logor (logor t.bytes copied) compressed) in
+  let is_mutable = if t.is_mutable then 1L <| 63 else 0L in
+	let is_compressed = if t.is_compressed then 1L <| 62 else 0L in
+	let raw = Int64.(logor (logor t.bytes is_mutable) is_compressed) in
 	Cstruct.BE.set_uint64 rest 0 raw;
 	Ok(Cstruct.shift rest 8)

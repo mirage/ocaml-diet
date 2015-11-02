@@ -61,16 +61,15 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
         f x >>*= fun () ->
         iter f xs
 
-  (** Read-modify-write data at [offset] in the underying block device, up
-      to the sector boundary. This is useful for fields which don't cross
-      boundaries *)
-  let update_field t offset f =
+  (* Mmarshal a disk offset written at a given offset within the disk. *)
+  let marshal_offset t offset v =
     let sector, within = to_sector ~sector_size:t.sector_size offset in
     let buf = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 t.base_info.B.sector_size in
     B.read t.base sector [ buf ]
     >>*= fun () ->
-    f (Cstruct.shift buf within);
-    B.write t.base sector [ buf ]
+    match Offset.write v (Cstruct.shift buf within) with
+    | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
+    | Ok _ -> B.write t.base sector [ buf ]
 
   (* Unmarshal a disk offset written at a given offset within the disk. *)
   let unmarshal_offset t offset =
@@ -200,15 +199,12 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
             let cluster, _ = Offset.to_cluster ~cluster_bits:t.cluster_bits offset in
             incr_refcount t cluster
             >>*= fun () ->
-            update_field t l1_index_offset
-              (fun buf ->
-                ignore(Offset.write offset buf)
-              )
+            marshal_offset t l1_index_offset offset
             >>*= fun () ->
             Lwt.return (`Ok (Some offset))
           end
         end else begin
-          if l2_table_offset.Offset.compressed then failwith "compressed";
+          if Offset.is_compressed l2_table_offset then failwith "compressed";
           Lwt.return (`Ok (Some l2_table_offset))
         end
       ) >>|= fun l2_table_offset ->
@@ -226,15 +222,12 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
             let cluster, _ = Offset.to_cluster ~cluster_bits:t.cluster_bits offset in
             incr_refcount t cluster
             >>*= fun () ->
-            update_field t l2_index_offset
-              (fun buf ->
-                ignore(Offset.write offset buf)
-              )
+            marshal_offset t l2_index_offset offset
             >>*= fun () ->
             Lwt.return (`Ok (Some offset))
           end
         end else begin
-          if cluster_offset.Offset.compressed then failwith "compressed";
+          if Offset.is_compressed cluster_offset then failwith "compressed";
           Lwt.return (`Ok (Some cluster_offset))
         end
       ) >>|= fun cluster_offset ->
