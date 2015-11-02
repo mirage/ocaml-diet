@@ -15,14 +15,8 @@
  *
  *)
 
-type offset =
-  | Bytes of int64            (** octets from beginning of file *)
-  | PhysicalSectors of int64  (** physical sectors on the underlying disk *)
-  | Clusters of int64         (** virtual clusters in the qcow image *)
-with sexp
-
 type t = {
-	offset: offset;
+	bytes: int64;
 	copied: bool; (* refcount = 1 implies no snapshots implies direct write ok *)
 	compressed: bool;
 }
@@ -31,12 +25,19 @@ with sexp
 val shift: t -> int64 -> t
 (** [shift t bytes] adds [bytes] to t, maintaining other properties *)
 
-val make: int64 -> t
-(** Create an offset at the given byte address *)
+val make: ?copied:bool -> ?compressed:bool -> int64 -> t
+(** Create an offset at the given byte address. This defaults to [copied = true]
+    which meand there are no snapshots implying that directly writing to this
+		offset is ok; and [compressed = false]. *)
 
 val to_sector: sector_size:int -> cluster_bits:int -> t -> int64 * int
+(** Return the sector on disk, plus a remainder within the sector *)
+
 val to_bytes: sector_size:int -> cluster_bits:int -> t -> int64
+(** Return the byte offset on disk *)
+
 val to_cluster: sector_size:int -> cluster_bits:int -> t -> int64 * int
+(** Return the cluster offset on disk, plus a remainder within the cluster *)
 
 include S.PRINTABLE with type t := t
 include S.SERIALISABLE with type t := t

@@ -202,7 +202,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
             >>*= fun () ->
             update_field t l1_index_offset
               (fun buf ->
-                ignore(Offset.write { offset with Offset.copied = true } buf)
+                ignore(Offset.write offset buf)
               )
             >>*= fun () ->
             Lwt.return (`Ok (Some offset))
@@ -228,7 +228,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
             >>*= fun () ->
             update_field t l2_index_offset
               (fun buf ->
-                ignore(Offset.write { offset with Offset.copied = true } buf)
+                ignore(Offset.write offset buf)
               )
             >>*= fun () ->
             Lwt.return (`Ok (Some offset))
