@@ -17,6 +17,7 @@
 open Sexplib.Std
 open Result
 open Error
+open Offset
 
 let round_up x size = Int64.(mul (div (add x (pred size)) size) size)
 
@@ -57,25 +58,34 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
         f x >>*= fun () ->
         iter f xs
 
+  (* Take an offset and round it down to the nearest physical sector, returning
+     the sector number and an offset within the sector *)
+  let rec to_sector t = function
+    | Bytes x ->
+      Int64.(div x (of_int t.base_info.B.sector_size)),
+      Int64.(to_int (rem x (of_int t.base_info.B.sector_size)))
+    | PhysicalSectors x -> x, 0
+    | Clusters x ->
+      let bytes = x <| (Int32.to_int t.h.Header.cluster_bits) in
+      to_sector t (Bytes bytes)
+
   (* Return data at [offset] in the underlying block device, up to the sector
      boundary. This is useful for fields which don't cross boundaries *)
   let read_field t offset =
-    let sector = Int64.(div offset (of_int t.base_info.B.sector_size)) in
+    let sector, within = to_sector t offset in
     let buf = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 t.base_info.B.sector_size in
     B.read t.base sector [ buf ]
     >>*= fun () ->
-    let within = Int64.(to_int (rem offset (of_int t.base_info.B.sector_size))) in
     Lwt.return (`Ok (Cstruct.shift buf within))
 
   (** Read-modify-write data at [offset] in the underying block device, up
       to the sector boundary. This is useful for fields which don't cross
       boundaries *)
   let update_field t offset f =
-    let sector = Int64.(div offset (of_int t.base_info.B.sector_size)) in
+    let sector, within = to_sector t offset in
     let buf = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 t.base_info.B.sector_size in
     B.read t.base sector [ buf ]
     >>*= fun () ->
-    let within = Int64.(to_int (rem offset (of_int t.base_info.B.sector_size))) in
     f (Cstruct.shift buf within);
     B.write t.base sector [ buf ]
 
@@ -190,7 +200,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     let walk ?(allocate=false) t a =
       let table_offset = t.h.Header.l1_table_offset in
       (* Read l1[l1_index] as a 64-bit offset *)
-      let l1_index_offset = Int64.(add t.h.Header.l1_table_offset (mul 8L a.Address.l1_index))in
+      let l1_index_offset = Bytes (Int64.(add t.h.Header.l1_table_offset (mul 8L a.Address.l1_index)))in
       read_field t l1_index_offset
       >>*= fun buf ->
       let l2_table_offset = Cstruct.BE.get_uint64 buf 0 in
@@ -227,7 +237,7 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       ) >>|= fun l2_table_offset ->
 
       (* Look up a cluster *)
-      let l2_index_offset = Int64.(add l2_table_offset (mul 8L a.Address.l2_index)) in
+      let l2_index_offset = Bytes (Int64.(add l2_table_offset (mul 8L a.Address.l2_index))) in
       read_field t l2_index_offset
       >>*= fun buf ->
       let cluster_offset = Cstruct.BE.get_uint64 buf 0 in
