@@ -82,15 +82,6 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       to_cluster t (Bytes (Int64.(mul x (of_int t.base_info.B.sector_size))))
     | Clusters x -> x, 0
 
-  (* Return data at [offset] in the underlying block device, up to the sector
-     boundary. This is useful for fields which don't cross boundaries *)
-  let read_field t offset =
-    let sector, within = to_sector t offset in
-    let buf = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 t.base_info.B.sector_size in
-    B.read t.base sector [ buf ]
-    >>*= fun () ->
-    Lwt.return (`Ok (Cstruct.shift buf within))
-
   (** Read-modify-write data at [offset] in the underying block device, up
       to the sector boundary. This is useful for fields which don't cross
       boundaries *)
@@ -101,6 +92,15 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
     >>*= fun () ->
     f (Cstruct.shift buf within);
     B.write t.base sector [ buf ]
+
+  (* Unmarshal a disk offset written at a given offset within the disk. *)
+  let unmarshal_offset t offset =
+    let sector, within = to_sector t offset in
+    let buf = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 t.base_info.B.sector_size in
+    B.read t.base sector [ buf ]
+    >>*= fun () ->
+    let buf = Cstruct.shift buf within in
+    Lwt.return (`Ok (Bytes (Cstruct.BE.get_uint64 buf 0)))
 
   let resize t new_size =
     let sector, within = to_sector t new_size in
@@ -216,9 +216,8 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
       let table_offset = t.h.Header.l1_table_offset in
       (* Read l1[l1_index] as a 64-bit offset *)
       let l1_index_offset = Bytes (Int64.(add t.h.Header.l1_table_offset (mul 8L a.Address.l1_index)))in
-      read_field t l1_index_offset
-      >>*= fun buf ->
-      let l2_table_offset = Bytes (Cstruct.BE.get_uint64 buf 0) in
+      unmarshal_offset t l1_index_offset
+      >>*= fun l2_table_offset ->
 
       let (>>|=) m f =
         let open Lwt in
@@ -253,9 +252,8 @@ module Make(B: S.RESIZABLE_BLOCK) = struct
 
       (* Look up a cluster *)
       let l2_index_offset = Bytes (Int64.(add (to_bytes t l2_table_offset) (mul 8L a.Address.l2_index))) in
-      read_field t l2_index_offset
-      >>*= fun buf ->
-      let cluster_offset = Bytes (Cstruct.BE.get_uint64 buf 0) in
+      unmarshal_offset t l2_index_offset
+      >>*= fun cluster_offset ->
       ( if cluster_offset = Bytes 0L then begin
           if not allocate then begin
             Lwt.return (`Ok None)
