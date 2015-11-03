@@ -6,5 +6,5 @@ script: bash -ex .travis-opam.sh && bash -ex travis-coveralls.sh
 sudo: required
 env:
   global:
-    - PACKAGE="qcow" OCAML_VERSION=4.02
+    - PACKAGE="qcow" OCAML_VERSION=4.02 PINS="mirage-block-ramdisk:git://github.com/mirage/mirage-block-ramdisk mirage-block:git://github.com/mirage/mirage-block mirage-block-unix:git://github.com/mirage/mirage-block-unix"
     - COV_CONF="export TESTS=--enable-tests"
