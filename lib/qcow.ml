@@ -154,14 +154,41 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         end
       end
 
-    (* Walk the L1 and L2 tables to translate an address *)
-    let walk ?(allocate=false) t a =
+    let read_l1_table t l1_index =
       let table_offset = t.h.Header.l1_table_offset in
       (* Read l1[l1_index] as a 64-bit offset *)
       let l1_table_start = Physical.make t.h.Header.l1_table_offset in
-      let l1_index_offset = Physical.shift l1_table_start (Int64.mul 8L a.Virtual.l1_index) in
+      let l1_index_offset = Physical.shift l1_table_start (Int64.mul 8L l1_index) in
       unmarshal_physical_address t l1_index_offset
       >>*= fun (l2_table_offset, _) ->
+      Lwt.return (`Ok l2_table_offset)
+
+    let write_l1_table t l1_index l2_table_offset =
+      let table_offset = t.h.Header.l1_table_offset in
+      (* Read l1[l1_index] as a 64-bit offset *)
+      let l1_table_start = Physical.make t.h.Header.l1_table_offset in
+      let l1_index_offset = Physical.shift l1_table_start (Int64.mul 8L l1_index) in
+      marshal_physical_address t l1_index_offset l2_table_offset
+      >>*= fun () ->
+      Lwt.return (`Ok ())
+
+    let read_l2_table t l2_table_offset l2_index =
+      let l2_index_offset = Physical.shift l2_table_offset (Int64.mul 8L l2_index) in
+      unmarshal_physical_address t l2_index_offset
+      >>*= fun (cluster_offset, _) ->
+      Lwt.return (`Ok cluster_offset)
+
+    let write_l2_table t l2_table_offset l2_index cluster =
+      let l2_index_offset = Physical.shift l2_table_offset (Int64.mul 8L l2_index) in
+      marshal_physical_address t l2_index_offset cluster
+      >>*= fun _ ->
+      Lwt.return (`Ok ())
+
+
+    (* Walk the L1 and L2 tables to translate an address *)
+    let walk ?(allocate=false) t a =
+      read_l1_table t a.Virtual.l1_index
+      >>*= fun l2_table_offset ->
 
       let (>>|=) m f =
         let open Lwt in
@@ -180,7 +207,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
             let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
             incr_refcount t cluster
             >>*= fun () ->
-            marshal_physical_address t l1_index_offset offset
+            write_l1_table t a.Virtual.l1_index offset
             >>*= fun () ->
             Lwt.return (`Ok (Some offset))
           end
@@ -191,9 +218,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       ) >>|= fun l2_table_offset ->
 
       (* Look up a cluster *)
-      let l2_index_offset = Physical.shift l2_table_offset (Int64.mul 8L a.Virtual.l2_index) in
-      unmarshal_physical_address t l2_index_offset
-      >>*= fun (cluster_offset, _) ->
+      read_l2_table t l2_table_offset a.Virtual.l2_index
+      >>*= fun cluster_offset ->
       ( if Physical.to_bytes cluster_offset = 0L then begin
           if not allocate then begin
             Lwt.return (`Ok None)
@@ -203,7 +229,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
             let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
             incr_refcount t cluster
             >>*= fun () ->
-            marshal_physical_address t l2_index_offset offset
+            write_l2_table t l2_table_offset a.Virtual.l2_index offset
             >>*= fun () ->
             Lwt.return (`Ok (Some offset))
           end
@@ -259,6 +285,54 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
         B.write t.base base_sector [ buf ]
     ) (chop t.base_info.B.sector_size sector bufs)
+
+  let seek_mapped t from =
+    let addr = Qcow_virtual.make ~cluster_bits:t.cluster_bits from in
+    let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
+    let rec scan_l1 a =
+      if a.Virtual.l1_index >= Int64.of_int32 t.h.Header.l1_size
+      then Lwt.return (`Ok t.info.size_sectors)
+      else
+        Cluster.read_l1_table t a.Virtual.l1_index
+        >>*= fun x ->
+        if Physical.to_bytes x = 0L
+        then scan_l1 { a with Virtual.l1_index = Int64.succ a.Virtual.l1_index; l2_index = 0L }
+        else
+          let rec scan_l2 a =
+            if a.Virtual.l2_index >= int64s_per_cluster
+            then scan_l1 { a with Virtual.l1_index = Int64.succ a.Virtual.l1_index; l2_index = 0L }
+            else
+              Cluster.read_l2_table t x a.Virtual.l2_index
+              >>*= fun x ->
+              if Physical.to_bytes x = 0L
+              then scan_l2 { a with Virtual.l2_index = Int64.succ a.Virtual.l2_index }
+              else Lwt.return (`Ok (Qcow_virtual.to_offset ~cluster_bits:t.cluster_bits a)) in
+          scan_l2 a in
+    scan_l1 (Virtual.make ~cluster_bits:t.cluster_bits from)
+
+  let seek_unmapped t from =
+    let addr = Qcow_virtual.make ~cluster_bits:t.cluster_bits from in
+    let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
+    let rec scan_l1 a =
+      if a.Virtual.l1_index >= Int64.of_int32 t.h.Header.l1_size
+      then Lwt.return (`Ok t.info.size_sectors)
+      else
+        Cluster.read_l1_table t a.Virtual.l1_index
+        >>*= fun x ->
+        if Physical.to_bytes x = 0L
+        then Lwt.return (`Ok (Qcow_virtual.to_offset ~cluster_bits:t.cluster_bits a))
+        else
+            let rec scan_l2 a =
+            if a.Virtual.l2_index >= int64s_per_cluster
+            then scan_l1 { a with Virtual.l1_index = Int64.succ a.Virtual.l1_index; l2_index = 0L }
+            else
+              Cluster.read_l2_table t x a.Virtual.l2_index
+              >>*= fun y ->
+              if Physical.to_bytes y = 0L
+              then Lwt.return (`Ok (Qcow_virtual.to_offset ~cluster_bits:t.cluster_bits a))
+              else scan_l2 { a with Virtual.l2_index = Int64.succ a.Virtual.l2_index} in
+          scan_l2 a in
+    scan_l1 (Virtual.make ~cluster_bits:t.cluster_bits from)
 
   let disconnect t = B.disconnect t.base
 
