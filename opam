@@ -22,9 +22,11 @@ remove: [["ocamlfind" "remove" "qcow"]]
 depends: [
   "base-bytes"
   "cstruct"
+  "result"
   "mirage-types-lwt"
   "lwt"
   "mirage-block"
+  "mirage-block-unix"
   "cmdliner"
   "sexplib"
   "ocamlfind" {build}
