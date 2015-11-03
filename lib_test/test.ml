@@ -25,7 +25,7 @@ let expect_ok = function
    presumably for extension headers *)
 
 let read_write_header name size =
-  let module B = Qcow.Client.Make(Ramdisk) in
+  let module B = Qcow.Make(Ramdisk) in
   let t =
     Ramdisk.connect name
     >>= fun x ->
@@ -40,7 +40,7 @@ let read_write_header name size =
     >>= fun x ->
     let () = expect_ok x in
     let open Error in
-    match Header.read page with
+    match Qcow.Header.read page with
     | Result.Error (`Msg m) -> failwith m
     | Result.Ok (hdr, _) ->
       Lwt.return hdr in
@@ -49,27 +49,27 @@ let read_write_header name size =
 let create_1K () =
   let hdr = read_write_header "1K" 1024L in
   let expected = {
-    Header.version = `Two; backing_file_offset = 0L;
+    Qcow.Header.version = `Two; backing_file_offset = 0L;
     backing_file_size = 0l; cluster_bits = 16l; size = 1024L;
     crypt_method = `None; l1_size = 1l; l1_table_offset = 131072L;
     refcount_table_offset = 65536L; refcount_table_clusters = 1l;
     nb_snapshots = 0l; snapshots_offset = 0L
   } in
-  let cmp a b = Header.compare a b = 0 in
-  let printer = Header.to_string in
+  let cmp a b = Qcow.Header.compare a b = 0 in
+  let printer = Qcow.Header.to_string in
   assert_equal ~printer ~cmp expected hdr
 
 let create_1M () =
   let hdr = read_write_header "1M" 1048576L in
   let expected = {
-    Header.version = `Two; backing_file_offset = 0L;
+    Qcow.Header.version = `Two; backing_file_offset = 0L;
     backing_file_size = 0l; cluster_bits = 16l; size = 1048576L;
     crypt_method = `None; l1_size = 1l; l1_table_offset = 131072L;
     refcount_table_offset = 65536L; refcount_table_clusters = 1l;
     nb_snapshots = 0l; snapshots_offset = 0L
   } in
-  let cmp a b = Header.compare a b = 0 in
-  let printer = Header.to_string in
+  let cmp a b = Qcow.Header.compare a b = 0 in
+  let printer = Qcow.Header.to_string in
   assert_equal ~printer ~cmp expected hdr
 
 let create_1P () =
@@ -79,14 +79,14 @@ let create_1P () =
   let pib = Int64.mul tib 1024L in
   let hdr = read_write_header "1P" pib in
   let expected = {
-    Header.version = `Two; backing_file_offset = 0L;
+    Qcow.Header.version = `Two; backing_file_offset = 0L;
     backing_file_size = 0l; cluster_bits = 16l; size = pib;
     crypt_method = `None; l1_size = 2097152l; l1_table_offset = 131072L;
     refcount_table_offset = 65536L; refcount_table_clusters = 1l;
     nb_snapshots = 0l; snapshots_offset = 0L
   } in
-  let cmp a b = Header.compare a b = 0 in
-  let printer = Header.to_string in
+  let cmp a b = Qcow.Header.compare a b = 0 in
+  let printer = Qcow.Header.to_string in
   assert_equal ~printer ~cmp expected hdr
 
 (* Interesting boundaries:
@@ -103,7 +103,7 @@ let interesting_offsets = [
 ]
 
 let read_write total_size sector () =
-  let module B = Qcow.Client.Make(Ramdisk) in
+  let module B = Qcow.Make(Ramdisk) in
   let t =
     Ramdisk.connect "test"
     >>= fun x ->

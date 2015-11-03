@@ -14,8 +14,10 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
+module Error = Qcow_error
+module Header = Qcow_header
 
-module Make(B: S.RESIZABLE_BLOCK) : sig
+module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
   include V1_LWT.BLOCK
 
   val create: B.t -> int64 -> [ `Ok of t | `Error of error ] io
@@ -25,4 +27,18 @@ module Make(B: S.RESIZABLE_BLOCK) : sig
   val connect: B.t -> [ `Ok of t | `Error of error ] io
   (** [connect block] connects to an existing qcow-formatted image on
       [block]. *)
+
+  val resize: t -> int64 -> [ `Ok of unit | `Error of error ] io
+  (** [resize block new_size_sectors] changes the size of the qcow-formatted
+      image to be [new_size_sectors] 512-byte sectors. *)
+
+  val seek_unmapped: t -> int64 -> [ `Ok of int64 | `Error of error ] io
+  (** [seek_unmapped t start] returns the offset of the next "hole": a region
+      of the device which is guaranteed to be full of zeroes (typically
+      guaranteed because it is unmapped) *)
+
+  val seek_mapped: t -> int64 -> [ `Ok of int64 | `Error of error ] io
+  (** [seek_mapped t start] returns the offset of the next region of the
+      device which may have data in it (typically this is the next mapped
+      region) *)
 end

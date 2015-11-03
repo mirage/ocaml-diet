@@ -46,5 +46,5 @@ val to_bytes: t -> int64
 val to_cluster: cluster_bits:int -> t -> int64 * int
 (** Return the cluster offset on disk, plus a remainder within the cluster *)
 
-include S.PRINTABLE with type t := t
-include S.SERIALISABLE with type t := t
+include Qcow_s.PRINTABLE with type t := t
+include Qcow_s.SERIALISABLE with type t := t

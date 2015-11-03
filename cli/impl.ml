@@ -37,7 +37,7 @@ let info filename =
   Lwt_main.run t
 
 let check filename =
-  let module B = Qcow.Client.Make(Block) in
+  let module B = Qcow.Make(Block) in
   let open Lwt in
   let t =
     Block.connect filename
@@ -58,7 +58,7 @@ let check filename =
   Lwt_main.run t
 
 let copy filename output =
-  let module B = Qcow.Client.Make(Block) in
+  let module B = Qcow.Make(Block) in
   let open Lwt in
   let t =
     Block.connect filename
@@ -89,7 +89,7 @@ let copy filename output =
   Lwt_main.run t
 
 let create size filename =
-  let module B = Qcow.Client.Make(Block) in
+  let module B = Qcow.Make(Block) in
   let open Lwt in
   let t =
     Lwt_unix.openfile filename [ Lwt_unix.O_CREAT ] 0o0644

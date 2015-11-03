@@ -22,13 +22,13 @@ module Version : sig
     | `Three
   ] with sexp
 
-  include S.SERIALISABLE with type t := t
+  include Qcow_s.SERIALISABLE with type t := t
 end
 
 module CryptMethod : sig
   type t = [ `Aes | `None ] with sexp
 
-  include S.SERIALISABLE with type t := t
+  include Qcow_s.SERIALISABLE with type t := t
 end
 
 type offset = int64
@@ -64,8 +64,11 @@ val refcounts_per_cluster: t -> int64
 val max_refcount_table_size: t -> int64
 (** Compute the maximum size of the refcount table *)
 
-include S.SERIALISABLE with type t := t
+val l2_tables_required: cluster_bits:int -> int64 -> int64
+(** Compute the number of L2 tables required for this size of image *)
 
-include S.PRINTABLE with type t := t
+include Qcow_s.SERIALISABLE with type t := t
+
+include Qcow_s.PRINTABLE with type t := t
 
 include Set.OrderedType with type t := t

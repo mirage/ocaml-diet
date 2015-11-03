@@ -8,11 +8,11 @@ Plugins:     META (0.3)
 BuildTools:  ocamlbuild
 
 Library qcow
-  Pack:               true
+  Pack:               false
   CompiledObject:     best
   Path:               lib
   Findlibname:        qcow
-  Modules:            S, Header, Error, Types, Client, Virtual, Physical
+  Modules:            Qcow_s, Qcow_header, Qcow_error, Qcow_types, Qcow_virtual, Qcow_physical, Qcow
   BuildDepends:       result, cstruct, sexplib, sexplib.syntax, mirage-types.lwt, lwt, io-page
 
 Document qcow
@@ -38,7 +38,7 @@ Executable test
   MainIs:             test.ml
   Custom:             true
   Install:            false
-  BuildDepends:       lwt, lwt.unix, qcow, mirage-block, mirage-block-unix, cstruct, oUnit, io-page.unix, io-page
+  BuildDepends:       lwt, lwt.unix, qcow, mirage-block, mirage-block-ramdisk, mirage-block-unix, cstruct, oUnit, io-page.unix, io-page
 
 Test test
   Run$:               flag(tests)

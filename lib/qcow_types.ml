@@ -15,7 +15,7 @@
  *
  *)
 open Sexplib.Std
-open Error
+open Qcow_error
 
 let big_enough_for name buf needed =
   let length = Cstruct.len buf in

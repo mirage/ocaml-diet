@@ -32,3 +32,9 @@ let make ~cluster_bits x =
 	let l2_index = (x <| (64 - l2_bits - cluster_bits)) |> (64 - l2_bits) in
 	let cluster  = (x <| (64 - cluster_bits)) |> (64 - cluster_bits) in
 	{ l1_index; l2_index; cluster }
+
+let to_offset ~cluster_bits t =
+  let l2_bits = cluster_bits - 3 in
+  let l1_index = t.l1_index <| (l2_bits + cluster_bits) in
+	let l2_index = t.l2_index <| cluster_bits in
+	Int64.(logor (logor l1_index l2_index) t.cluster)
