@@ -119,9 +119,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let cluster_size = 1L <| cluster_bits in
       let index_in_cluster = Int64.(to_int (div cluster (Header.refcounts_per_cluster t.h))) in
       let within_cluster = Int64.(to_int (rem cluster (Header.refcounts_per_cluster t.h))) in
-      if index_in_cluster > 0
-      then Lwt.return (`Error (`Unknown "I don't know how to enlarge a refcount table yet"))
-      else begin
+      if index_in_cluster > 0 then begin
+        Printf.fprintf stderr "I don't know how to enlarge a refcount table yet\n%!";
+        Lwt.return (`Error (`Unknown "I don't know how to enlarge a refcount table yet"))
+      end else begin
         let cluster = malloc t.h in
         let refcount_table_sector = Int64.(div t.h.Header.refcount_table_offset (of_int t.base_info.B.sector_size)) in
         B.read t.base refcount_table_sector [ cluster ]
