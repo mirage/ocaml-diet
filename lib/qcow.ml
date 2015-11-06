@@ -63,10 +63,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         f x >>*= fun () ->
         iter f xs
 
+  let malloc_sector t =
+    Cstruct.sub Io_page.(to_cstruct (get 1)) 0 t.base_info.B.sector_size
+
   (* Mmarshal a disk physical address written at a given offset within the disk. *)
   let marshal_physical_address t offset v =
     let sector, within = Physical.to_sector ~sector_size:t.sector_size offset in
-    let buf = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 t.base_info.B.sector_size in
+    let buf = malloc_sector t in
     B.read t.base sector [ buf ]
     >>*= fun () ->
     match Physical.write v (Cstruct.shift buf within) with
@@ -76,19 +79,19 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   (* Unmarshal a disk physical address written at a given offset within the disk. *)
   let unmarshal_physical_address t offset =
     let sector, within = Physical.to_sector ~sector_size:t.sector_size offset in
-    let buf = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 t.base_info.B.sector_size in
+    let buf = malloc_sector t in
     B.read t.base sector [ buf ]
     >>*= fun () ->
     let buf = Cstruct.shift buf within in
     match Physical.read buf with
     | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
-    | Ok x -> Lwt.return (`Ok x)
+    | Ok (x, _) -> Lwt.return (`Ok x)
 
-  let resize_base t new_size =
-    let sector, within = Physical.to_sector ~sector_size:t.sector_size new_size in
+  let resize_base base sector_size new_size =
+    let sector, within = Physical.to_sector ~sector_size new_size in
     if within <> 0
     then Lwt.return (`Error (`Unknown (Printf.sprintf "Internal error: attempting to resize to a non-sector multiple %s" (Physical.to_string new_size))))
-    else B.resize t.base sector
+    else B.resize base sector
 
   module Cluster = struct
 
@@ -104,7 +107,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let extend t =
       let cluster = t.next_cluster in
       t.next_cluster <- Int64.succ t.next_cluster;
-      resize_base t (Physical.make (t.next_cluster <| t.cluster_bits))
+      resize_base t.base t.sector_size (Physical.make (t.next_cluster <| t.cluster_bits))
       >>*= fun () ->
       Lwt.return (`Ok (Physical.make (cluster <| t.cluster_bits)))
 
@@ -160,7 +163,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let l1_table_start = Physical.make t.h.Header.l1_table_offset in
       let l1_index_offset = Physical.shift l1_table_start (Int64.mul 8L l1_index) in
       unmarshal_physical_address t l1_index_offset
-      >>*= fun (l2_table_offset, _) ->
+      >>*= fun l2_table_offset ->
       Lwt.return (`Ok l2_table_offset)
 
     let write_l1_table t l1_index l2_table_offset =
@@ -175,7 +178,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let read_l2_table t l2_table_offset l2_index =
       let l2_index_offset = Physical.shift l2_table_offset (Int64.mul 8L l2_index) in
       unmarshal_physical_address t l2_index_offset
-      >>*= fun (cluster_offset, _) ->
+      >>*= fun cluster_offset ->
       Lwt.return (`Ok cluster_offset)
 
     let write_l2_table t l2_table_offset l2_index cluster =
@@ -350,6 +353,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
        size is the address of the next cluster *)
     let sector_size = base_info.B.sector_size in
     let cluster_bits = Int32.to_int h.Header.cluster_bits in
+    (* The first cluster is allocated after the L1 table *)
     let size_bytes = Int64.(mul base_info.B.size_sectors (of_int sector_size)) in
     let next_cluster = Int64.(div size_bytes (1L <| cluster_bits)) in
     Lwt.return (`Ok { h; base; info = info'; base_info; next_cluster; sector_size; cluster_bits })
@@ -419,13 +423,17 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
        + l1 table. Future allocations will enlarge the file. *)
     let l1_size_bytes = Int64.mul 8L l2_tables_required in
     let next_free_byte = Int64.round_up (Int64.add l1_table_offset l1_size_bytes) cluster_size in
+    let next_free_cluster = Int64.div next_free_byte cluster_size in
     let open Lwt in
     B.get_info base
     >>= fun base_info ->
+    (* make will use the file size to figure out where to allocate new clusters
+       therefore we must resize the backing device now *)
+    resize_base base base_info.B.sector_size (Physical.make next_free_byte)
+    >>*= fun () ->
     make base h
     >>*= fun t ->
-    resize_base t (Physical.make next_free_byte)
-    >>*= fun () ->
+
 
     let page = Io_page.(to_cstruct (get 1)) in
     match Header.write h page with
