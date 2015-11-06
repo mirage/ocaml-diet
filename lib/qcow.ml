@@ -291,11 +291,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     ) (chop t.base_info.B.sector_size sector bufs)
 
   let seek_mapped t from =
-    let addr = Qcow_virtual.make ~cluster_bits:t.cluster_bits from in
+    let bytes = Int64.(mul from (of_int t.sector_size)) in
+    let addr = Qcow_virtual.make ~cluster_bits:t.cluster_bits bytes in
     let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
     let rec scan_l1 a =
       if a.Virtual.l1_index >= Int64.of_int32 t.h.Header.l1_size
-      then Lwt.return (`Ok t.info.size_sectors)
+      then Lwt.return (`Ok Int64.(mul t.info.size_sectors (of_int t.sector_size)))
       else
         Cluster.read_l1_table t a.Virtual.l1_index
         >>*= fun x ->
@@ -312,10 +313,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
               then scan_l2 { a with Virtual.l2_index = Int64.succ a.Virtual.l2_index }
               else Lwt.return (`Ok (Qcow_virtual.to_offset ~cluster_bits:t.cluster_bits a)) in
           scan_l2 a in
-    scan_l1 (Virtual.make ~cluster_bits:t.cluster_bits from)
+    scan_l1 (Virtual.make ~cluster_bits:t.cluster_bits bytes)
+    >>*= fun offset ->
+    let x = Int64.(div offset (of_int t.sector_size)) in
+    Lwt.return (`Ok x)
 
   let seek_unmapped t from =
-    let addr = Qcow_virtual.make ~cluster_bits:t.cluster_bits from in
+    let bytes = Int64.(mul from (of_int t.sector_size)) in
+    let addr = Qcow_virtual.make ~cluster_bits:t.cluster_bits bytes in
     let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
     let rec scan_l1 a =
       if a.Virtual.l1_index >= Int64.of_int32 t.h.Header.l1_size
@@ -336,7 +341,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
               then Lwt.return (`Ok (Qcow_virtual.to_offset ~cluster_bits:t.cluster_bits a))
               else scan_l2 { a with Virtual.l2_index = Int64.succ a.Virtual.l2_index} in
           scan_l2 a in
-    scan_l1 (Virtual.make ~cluster_bits:t.cluster_bits from)
+    scan_l1 (Virtual.make ~cluster_bits:t.cluster_bits bytes)
+    >>*= fun offset ->
+    let x = Int64.(div offset (of_int t.sector_size)) in
+    Lwt.return (`Ok x)
 
   let disconnect t = B.disconnect t.base
 
