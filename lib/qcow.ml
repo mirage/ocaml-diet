@@ -38,18 +38,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
   type id = B.id
   type page_aligned_buffer = B.page_aligned_buffer
-  type t = {
-    mutable h: Header.t;
-    base: B.t;
-    base_info: B.info;
-    info: info;
-    mutable next_cluster: int64;
-    (* for convenience *)
-    cluster_bits: int;
-    sector_size: int;
-  }
-
-  let get_info t = Lwt.return t.info
 
   let (>>*=) m f =
     let open Lwt in
@@ -63,29 +51,133 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         f x >>*= fun () ->
         iter f xs
 
-  let malloc_sector t =
-    Cstruct.sub Io_page.(to_cstruct (get 1)) 0 t.base_info.B.sector_size
+  module Int64Map = Map.Make(Int64)
+  module Int64Set = Set.Make(Int64)
+
+  module ClusterCache = struct
+    type t = {
+      read_cluster: int64 -> [ `Ok of Cstruct.t | `Error of error ] Lwt.t;
+      write_cluster: int64 -> Cstruct.t -> [ `Ok of unit | `Error of error ] Lwt.t;
+      mutable clusters: Cstruct.t Int64Map.t;
+      mutable locked: Int64Set.t;
+      m: Lwt_mutex.t;
+      c: unit Lwt_condition.t;
+    }
+    let make ~read_cluster ~write_cluster () =
+      let m = Lwt_mutex.create () in
+      let c = Lwt_condition.create () in
+      let clusters = Int64Map.empty in
+      let locked = Int64Set.empty in
+      { read_cluster; write_cluster; m; c; clusters; locked }
+
+    let with_lock t cluster f =
+      let open Lwt in
+      let lock cluster =
+        Lwt_mutex.with_lock t.m
+          (fun () ->
+            let rec loop () =
+              if Int64Set.mem cluster t.locked then begin
+                Lwt_condition.wait t.c ~mutex:t.m
+                >>= fun () ->
+                loop ()
+              end else begin
+                t.locked <- Int64Set.add cluster t.locked;
+                Lwt.return ()
+              end in
+            loop ()
+          ) in
+        let unlock cluster =
+          Lwt_mutex.with_lock t.m
+            (fun () ->
+              t.locked <- Int64Set.remove cluster t.locked;
+              Lwt.return ()
+            )
+          >>= fun () ->
+          Lwt_condition.signal t.c ();
+          Lwt.return () in
+      Lwt.catch
+        (fun () ->
+          lock cluster >>= fun () ->
+          f () >>= fun r ->
+          unlock cluster >>= fun () ->
+          Lwt.return r)
+        (fun e ->
+          unlock cluster >>= fun () ->
+          Lwt.fail e)
+    let read t cluster f =
+      let open Lwt in
+      with_lock t cluster
+        (fun () ->
+          ( if Int64Map.mem cluster t.clusters
+            then Lwt.return (`Ok (Int64Map.find cluster t.clusters))
+            else begin
+              t.read_cluster cluster
+              >>*= fun buf ->
+              t.clusters <- Int64Map.add cluster buf t.clusters;
+              Lwt.return (`Ok buf)
+            end
+          ) >>*= fun buf ->
+          f buf
+        )
+    let update t cluster f =
+      let open Lwt in
+      with_lock t cluster
+        (fun () ->
+          ( if Int64Map.mem cluster t.clusters
+            then Lwt.return (`Ok (Int64Map.find cluster t.clusters))
+            else begin
+              t.read_cluster cluster
+              >>*= fun buf ->
+              t.clusters <- Int64Map.add cluster buf t.clusters;
+              Lwt.return (`Ok buf)
+            end
+          ) >>*= fun buf ->
+          f buf
+          >>*= fun () ->
+          t.write_cluster cluster buf
+        )
+  end
+
+
+  type t = {
+    mutable h: Header.t;
+    base: B.t;
+    base_info: B.info;
+    info: info;
+    mutable next_cluster: int64;
+    cache: ClusterCache.t;
+    (* for convenience *)
+    cluster_bits: int;
+    sector_size: int;
+  }
+
+  let get_info t = Lwt.return t.info
+
+  let malloc t =
+    let cluster_bits = Int32.to_int t.Header.cluster_bits in
+    let npages = max 1 (cluster_bits lsl (cluster_bits - 12)) in
+    let pages = Io_page.(to_cstruct (get npages)) in
+    Cstruct.sub pages 0 (1 lsl cluster_bits)
 
   (* Mmarshal a disk physical address written at a given offset within the disk. *)
   let marshal_physical_address t offset v =
-    let sector, within = Physical.to_sector ~sector_size:t.sector_size offset in
-    let buf = malloc_sector t in
-    B.read t.base sector [ buf ]
-    >>*= fun () ->
-    match Physical.write v (Cstruct.shift buf within) with
-    | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
-    | Ok _ -> B.write t.base sector [ buf ]
+    let cluster, within = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
+    ClusterCache.update t.cache cluster
+      (fun buf ->
+        match Physical.write v (Cstruct.shift buf within) with
+        | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
+        | Ok _ -> Lwt.return (`Ok ())
+      )
 
   (* Unmarshal a disk physical address written at a given offset within the disk. *)
   let unmarshal_physical_address t offset =
-    let sector, within = Physical.to_sector ~sector_size:t.sector_size offset in
-    let buf = malloc_sector t in
-    B.read t.base sector [ buf ]
-    >>*= fun () ->
-    let buf = Cstruct.shift buf within in
-    match Physical.read buf with
-    | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
-    | Ok (x, _) -> Lwt.return (`Ok x)
+    let cluster, within = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
+    ClusterCache.read t.cache cluster
+      (fun buf ->
+        match Physical.read (Cstruct.shift buf within) with
+        | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
+        | Ok (x, _) -> Lwt.return (`Ok x)
+      )
 
   let resize_base base sector_size new_size =
     let sector, within = Physical.to_sector ~sector_size new_size in
@@ -95,11 +187,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
   module Cluster = struct
 
-    let malloc t =
-      let cluster_bits = Int32.to_int t.Header.cluster_bits in
-      let npages = max 1 (cluster_bits lsl (cluster_bits - 12)) in
-      let pages = Io_page.(to_cstruct (get npages)) in
-      Cstruct.sub pages 0 (1 lsl cluster_bits)
 
     (** Allocate a cluster, resize the underlying device and return the
         physical address of the new cluster, suitable for writing to one of
@@ -365,7 +452,19 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     (* The first cluster is allocated after the L1 table *)
     let size_bytes = Int64.(mul base_info.B.size_sectors (of_int sector_size)) in
     let next_cluster = Int64.(div size_bytes (1L <| cluster_bits)) in
-    Lwt.return (`Ok { h; base; info = info'; base_info; next_cluster; sector_size; cluster_bits })
+    let read_cluster i =
+      let buf = malloc h in
+      let offset = i <| cluster_bits in
+      let sector = Int64.(div offset (of_int sector_size)) in
+      B.read base sector [ buf ]
+      >>*= fun () ->
+      Lwt.return (`Ok buf) in
+    let write_cluster i buf =
+      let offset = i <| cluster_bits in
+      let sector = Int64.(div offset (of_int sector_size)) in
+      B.write base sector [ buf ] in
+    let cache = ClusterCache.make ~read_cluster ~write_cluster () in
+    Lwt.return (`Ok { h; base; info = info'; base_info; next_cluster; cache; sector_size; cluster_bits })
 
   let connect base =
     let open Lwt in
@@ -451,7 +550,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       >>*= fun () ->
 
       (* Write an initial empty refcount table *)
-      let cluster = Cluster.malloc t.h in
+      let cluster = malloc t.h in
       Cstruct.memset cluster 0;
       B.write base Int64.(div refcount_table_offset (of_int t.base_info.B.sector_size)) [ cluster ]
       >>*= fun () ->
