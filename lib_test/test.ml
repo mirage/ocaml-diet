@@ -146,6 +146,52 @@ let malloc (length: int) =
   let buf = Io_page.(to_cstruct (get npages)) in
   Cstruct.sub buf 0 length
 
+module Extent = struct
+  open Int64
+
+  type t = {
+    start: int64;
+    length: int64;
+  }
+
+  type overlap =
+    | AABB
+    | BBAA
+    | BABA
+    | BAAB
+    | ABBA
+    | ABAB
+
+  let classify ({ start = a_start; length = a_length } as a) ({ start = b_start; length = b_length } as b) =
+    let a_end = add a_start a_length in
+    let b_end = add b_start b_length in
+    if b_end < a_start
+    then BBAA
+    else if a_end < b_start
+    then AABB
+    else begin
+      (* there is some overlap *)
+      if b_start < a_start then begin
+        if b_end < a_end then BABA else BAAB
+      end else begin
+        if b_end < a_end then ABBA else ABAB
+      end
+    end
+
+
+  let sub ({ start = a_start; length = a_length } as a) ({ start = b_start; length = b_length } as b) =
+    let a_end = add a_start a_length in
+    let b_end = add b_start b_length in
+    match classify a b with
+    | BBAA | AABB -> [ a ]
+    | BABA -> [ { start = b_end; length = sub a_end b_end } ]
+    | BAAB -> [ ]
+    | ABBA -> [ { start = a_start; length = sub b_start a_start; };
+                { start = b_end; length = sub a_end b_end } ]
+    | ABAB -> [ { start = a_start; length = sub b_start a_start } ]
+
+end
+
 let read_write sector_size size_sectors (start, length) () =
   let module B = Qcow.Make(Ramdisk) in
   let t =
@@ -153,7 +199,7 @@ let read_write sector_size size_sectors (start, length) () =
     Ramdisk.connect "test"
     >>= fun x ->
     let ramdisk = expect_ok x in
-    B.create ramdisk size_sectors
+    B.create ramdisk Int64.(mul size_sectors (of_int sector_size))
     >>= fun x ->
     let b = expect_ok x in
 
@@ -171,10 +217,21 @@ let read_write sector_size size_sectors (start, length) () =
     let cmp a b = Cstruct.compare a b = 0 in
     assert_equal ~printer:(fun x -> String.escaped (Cstruct.to_string x)) ~cmp buf buf';
 
+    (* This is the range that we expect to see written *)
+    let expected = { Extent.start = sector; length = Int64.(div (of_int length) 512L) } in
+    let ofs' = Int64.(mul sector (of_int sector_size)) in
     Mirage_block.fold_mapped_s
-      ~f:(fun () ofs buf ->
-          if ofs < Int64.(mul sector (of_int sector_size)) || (Int64.(add ofs (of_int (Cstruct.len buf)))> Int64.(add (mul sector (of_int sector_size)) (of_int length)))
-          then failwith (Printf.sprintf "fold_mapped_s: ofs (%Ld bytes) outside range of sector %Ld (len %d bytes)" ofs sector length);
+      ~f:(fun () ofs data ->
+        let actual = { Extent.start = ofs; length = Int64.of_int (Cstruct.len data / 512) } in
+        (* Any data we read now which wasn't expected must be full of zeroes *)
+        let extra = Extent.sub actual expected in
+        List.iter
+          (fun { Extent.start; length } ->
+            let buf = Cstruct.sub data (512 * Int64.(to_int (sub start ofs))) (Int64.to_int length * 512) in
+            for i = 0 to Cstruct.len buf - 1 do
+              assert_equal ~printer:string_of_int ~cmp:(fun a b -> a = b) 0 (Cstruct.get_uint8 buf i)
+            done;
+          ) extra;
           return (`Ok ())
         ) () (module B) b
     >>= fun _ ->
