@@ -32,3 +32,5 @@ val make: cluster_bits:int -> int64 -> t
 val to_offset: cluster_bits:int -> t -> int64
 (** [to_offset cluster_bits address] computes the virtual byte offset
     of the virtual address *)
+
+include Qcow_s.PRINTABLE with type t := t

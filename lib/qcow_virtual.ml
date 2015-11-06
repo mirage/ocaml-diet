@@ -38,3 +38,5 @@ let to_offset ~cluster_bits t =
   let l1_index = t.l1_index <| (l2_bits + cluster_bits) in
 	let l2_index = t.l2_index <| cluster_bits in
 	Int64.(logor (logor l1_index l2_index) t.cluster)
+
+let to_string t = Sexplib.Sexp.to_string (sexp_of_t t)
