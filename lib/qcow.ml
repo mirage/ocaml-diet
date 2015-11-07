@@ -228,7 +228,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
       (** Increment the refcount of a given cluster. Note this might need
           to allocate itself, to enlarge the refcount table. *)
-      let incr t cluster =
+      let rec incr t cluster =
         let within_table = Int64.(div cluster (Header.refcounts_per_cluster t.h)) in
         let within_cluster = Int64.(to_int (rem cluster (Header.refcounts_per_cluster t.h))) in
 
@@ -275,6 +275,17 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
               refcount_table_clusters = Int64.to_int32 needed;
             } in
             update_header t h'
+            >>*= fun () ->
+            (* increase the refcount of the clusters we just allocated *)
+            let rec loop i =
+              if i >= needed
+              then Lwt.return (`Ok ())
+              else begin
+                incr t (Int64.add start i)
+                >>*= fun () ->
+                loop (Int64.succ i)
+              end in
+            loop 0L
           end else begin
             Lwt.return (`Ok ())
           end )
@@ -282,20 +293,30 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
       let offset = Physical.make Int64.(add t.h.Header.refcount_table_offset (mul 8L within_table)) in
       unmarshal_physical_address t offset
-      >>*= fun offset ->
-      ( if Physical.to_bytes offset = 0L then begin
+      >>*= fun addr ->
+      ( if Physical.to_bytes addr = 0L then begin
           allocate_clusters t 1L
           >>*= fun cluster ->
           let addr = Physical.make (cluster <| t.cluster_bits) in
+          (* zero the cluster *)
+          let buf = malloc t.h in
+          Cstruct.memset buf 0;
+          let sector, _ = Physical.to_sector ~sector_size:t.sector_size addr in
+          B.write t.base sector [ buf ]
+          >>*= fun () ->
           marshal_physical_address t offset addr
           >>*= fun () ->
+          incr t cluster
+          >>*= fun () ->
           Lwt.return (`Ok addr)
-        end else Lwt.return (`Ok offset) )
+        end else Lwt.return (`Ok addr) )
       >>*= fun offset ->
-      let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
-      ClusterCache.update t.cache cluster
+      let refcount_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
+      ClusterCache.update t.cache refcount_cluster
         (fun buf ->
           let current = Cstruct.BE.get_uint16 buf (2 * within_cluster) in
+          (* We don't support refcounts of more than 1 *)
+          assert (current == 0);
           Cstruct.BE.set_uint16 buf (2 * within_cluster) (current + 1);
           Lwt.return (`Ok ())
         )
@@ -604,6 +625,90 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     >>*= fun () ->
     Lwt.return (`Ok t)
 
+  let rebuild_refcount_table t =
+    (* Zero all clusters allocated in the refcount table *)
+    let buf = malloc t.h in
+    let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
+    let rec loop i =
+      if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
+      then Lwt.return (`Ok ())
+      else begin
+        ClusterCache.read t.cache Int64.(add cluster i)
+          (fun buf ->
+            let rec loop i =
+              if i >= (Cstruct.len buf)
+              then Lwt.return (`Ok ())
+              else begin
+                let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
+                ( if Physical.to_bytes addr <> 0L then begin
+                    let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
+                    ClusterCache.update t.cache cluster
+                      (fun buf ->
+                        Cstruct.memset buf 0;
+                        Lwt.return (`Ok ())
+                      )
+                  end else Lwt.return (`Ok ()) )
+                >>*= fun () ->
+                loop (8 + i)
+              end in
+            loop 0
+          )
+        >>*= fun () ->
+        loop (Int64.succ i)
+      end in
+    loop 0L
+    >>*= fun () ->
+    (* Increment the refcount of the header, existing refcount table clusters
+       and L1 table *)
+    Cluster.Refcount.incr t 0L
+    >>*= fun () ->
+    let rec loop i =
+      if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
+      then Lwt.return (`Ok ())
+      else begin
+        Cluster.Refcount.incr t (Int64.add cluster i)
+        >>*= fun () ->
+        loop (Int64.succ i)
+      end in
+    loop 0L
+    >>*= fun () ->
+    let l1_table_clusters =
+      let refs_per_cluster = 1L <| (t.cluster_bits - 3) in
+      Int64.(div (round_up (of_int32 t.h.Header.l1_size) refs_per_cluster) refs_per_cluster) in
+    let l1_table_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.l1_table_offset) in
+    let loop i =
+      if i >= l1_table_clusters
+      then Lwt.return (`Ok ())
+      else begin
+        Cluster.Refcount.incr t (Int64.add l1_table_cluster i)
+        >>*= fun () ->
+        loop (Int64.succ i)
+      end in
+    loop 0L
+    >>*= fun () ->
+    (* Fold over the mapped data, incrementing refcounts along the way *)
+    let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
+    let rec loop sector =
+      if sector >= t.info.size_sectors
+      then Lwt.return (`Ok ())
+      else begin
+        seek_mapped t sector
+        >>*= fun mapped_sector ->
+        if mapped_sector <> sector
+        then loop mapped_sector
+        else begin
+          Cluster.walk t (Virtual.make ~cluster_bits:t.cluster_bits Int64.(mul (of_int t.info.sector_size) mapped_sector))
+          >>*= function
+          | None -> assert false
+          | Some offset' ->
+            let cluster, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
+            Cluster.Refcount.incr t cluster
+            >>*= fun () ->
+            loop (Int64.add mapped_sector sectors_per_cluster)
+        end
+      end in
+    loop 0L
+
   type t' = t
   type error' = error
   module Debug = struct
@@ -616,8 +721,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
        let refcount_table_offset = Physical.make t.h.Header.refcount_table_offset in
        let refcount_table_cluster, within = Physical.to_cluster ~cluster_bits:t.cluster_bits refcount_table_offset in
        assert (within = 0);
-       (* Check the L1 table and refcount table don't overlap *)
-       (* Rebuild the refcount table and check for no zero references *)
+       (* This will `assert` if any cluster has a refcount >1 *)
+       rebuild_refcount_table t
+       >>*= fun () ->
        Lwt.return (`Ok ())
   end
 end

@@ -259,7 +259,9 @@ let read_write sector_size size_sectors (start, length) () =
     >>= fun x ->
     let total_bytes_seen = expect_ok x in
     assert_equal ~printer:string_of_int length total_bytes_seen;
-
+    B.Debug.check_no_overlaps b
+    >>= fun x ->
+    let () = expect_ok x in
     Lwt.return () in
   Lwt_main.run t
 
