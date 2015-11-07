@@ -13,6 +13,7 @@
  * OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
  *)
+open Sexplib.Std
 open Qcow
 open Lwt
 open OUnit
@@ -152,7 +153,10 @@ module Extent = struct
   type t = {
     start: int64;
     length: int64;
-  }
+  } with sexp
+  type ts = t list with sexp
+
+  let to_string t = Sexplib.Sexp.to_string_hum (sexp_of_ts t)
 
   type overlap =
     | AABB
@@ -161,6 +165,7 @@ module Extent = struct
     | BAAB
     | ABBA
     | ABAB
+  with sexp
 
   let classify ({ start = a_start; length = a_length } as a) ({ start = b_start; length = b_length } as b) =
     let a_end = add a_start a_length in
@@ -178,8 +183,7 @@ module Extent = struct
       end
     end
 
-
-  let sub ({ start = a_start; length = a_length } as a) ({ start = b_start; length = b_length } as b) =
+  let difference ({ start = a_start; length = a_length } as a) ({ start = b_start; length = b_length } as b) =
     let a_end = add a_start a_length in
     let b_end = add b_start b_length in
     match classify a b with
@@ -190,6 +194,16 @@ module Extent = struct
                 { start = b_end; length = sub a_end b_end } ]
     | ABAB -> [ { start = a_start; length = sub b_start a_start } ]
 
+  let intersect ({ start = a_start; length = a_length } as a) ({ start = b_start; length = b_length } as b) : t list =
+    let a_end = add a_start a_length in
+    let b_end = add b_start b_length in
+    Printf.fprintf stderr "classified as %s\n%!" (Sexplib.Sexp.to_string_hum @@ sexp_of_overlap @@ classify a b);
+    match classify a b with
+    | BBAA | AABB -> [ ]
+    | BABA -> [ { start = a_start; length = sub b_end a_start } ]
+    | BAAB -> [ { start = a_start; length = sub a_end a_start } ]
+    | ABBA -> [ { start = b_start; length = sub b_end b_start } ]
+    | ABAB -> [ { start = b_start; length = sub a_end b_start } ]
 end
 
 let read_write sector_size size_sectors (start, length) () =
@@ -224,7 +238,7 @@ let read_write sector_size size_sectors (start, length) () =
       ~f:(fun () ofs data ->
         let actual = { Extent.start = ofs; length = Int64.of_int (Cstruct.len data / 512) } in
         (* Any data we read now which wasn't expected must be full of zeroes *)
-        let extra = Extent.sub actual expected in
+        let extra = Extent.difference actual expected in
         List.iter
           (fun { Extent.start; length } ->
             let buf = Cstruct.sub data (512 * Int64.(to_int (sub start ofs))) (Int64.to_int length * 512) in
@@ -232,6 +246,15 @@ let read_write sector_size size_sectors (start, length) () =
               assert_equal ~printer:string_of_int ~cmp:(fun a b -> a = b) 0 (Cstruct.get_uint8 buf i)
             done;
           ) extra;
+        let common = Extent.intersect actual expected in
+        List.iter
+          (fun { Extent.start; length } ->
+            let buf = Cstruct.sub data (512 * Int64.(to_int (sub start ofs))) (Int64.to_int length * 512) in
+            for i = 0 to Cstruct.len buf - 1 do
+              assert_equal ~printer:string_of_int ~cmp:(fun a b -> a = b) (id mod 256) (Cstruct.get_uint8 buf i)
+            done;
+          ) common;
+
           return (`Ok ())
         ) () (module B) b
     >>= fun _ ->
