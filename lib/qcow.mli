@@ -41,4 +41,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
   (** [seek_mapped t start] returns the offset of the next region of the
       device which may have data in it (typically this is the next mapped
       region) *)
+
+  module Debug: Qcow_s.DEBUG
+    with type t = t
+     and type error = error
 end

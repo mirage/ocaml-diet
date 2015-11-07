@@ -62,3 +62,10 @@ module type RESIZABLE_BLOCK = sig
   val resize: t -> int64 -> [ `Ok of unit | `Error of error ] Lwt.t
   (** Resize the file to the given number of sectors. *)
 end
+
+module type DEBUG = sig
+  type t
+  type error
+
+  val check_no_overlaps: t -> [ `Ok of unit | `Error of error ] Lwt.t
+end
