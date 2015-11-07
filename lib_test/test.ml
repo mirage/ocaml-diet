@@ -197,7 +197,6 @@ module Extent = struct
   let intersect ({ start = a_start; length = a_length } as a) ({ start = b_start; length = b_length } as b) : t list =
     let a_end = add a_start a_length in
     let b_end = add b_start b_length in
-    Printf.fprintf stderr "classified as %s\n%!" (Sexplib.Sexp.to_string_hum @@ sexp_of_overlap @@ classify a b);
     match classify a b with
     | BBAA | AABB -> [ ]
     | BABA -> [ { start = a_start; length = sub b_end a_start } ]
@@ -235,7 +234,7 @@ let read_write sector_size size_sectors (start, length) () =
     let expected = { Extent.start = sector; length = Int64.(div (of_int length) 512L) } in
     let ofs' = Int64.(mul sector (of_int sector_size)) in
     Mirage_block.fold_mapped_s
-      ~f:(fun () ofs data ->
+      ~f:(fun bytes_seen ofs data ->
         let actual = { Extent.start = ofs; length = Int64.of_int (Cstruct.len data / 512) } in
         (* Any data we read now which wasn't expected must be full of zeroes *)
         let extra = Extent.difference actual expected in
@@ -254,10 +253,12 @@ let read_write sector_size size_sectors (start, length) () =
               assert_equal ~printer:string_of_int ~cmp:(fun a b -> a = b) (id mod 256) (Cstruct.get_uint8 buf i)
             done;
           ) common;
-
-          return (`Ok ())
-        ) () (module B) b
-    >>= fun _ ->
+        let seen_this_time = 512 * List.(fold_left (+) 0 (map (fun e -> Int64.to_int e.Extent.length) common)) in
+          return (`Ok (bytes_seen + seen_this_time))
+        ) 0 (module B) b
+    >>= fun x ->
+    let total_bytes_seen = expect_ok x in
+    assert_equal ~printer:string_of_int length total_bytes_seen;
 
     Lwt.return () in
   Lwt_main.run t
