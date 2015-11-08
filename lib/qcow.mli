@@ -41,4 +41,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
   (** [seek_mapped t start] returns the offset of the next region of the
       device which may have data in it (typically this is the next mapped
       region) *)
+
+  val rebuild_refcount_table: t -> [ `Ok of unit | `Error of error ] io
+  (** [rebuild_refcount_table t] rebuilds the refcount table from scratch.
+      Normally we won't update the refcount table live, for performance. *)
+
+  module Debug: Qcow_s.DEBUG
+    with type t = t
+     and type error = error
 end

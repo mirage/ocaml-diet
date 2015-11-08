@@ -57,6 +57,25 @@ let check filename =
           return (`Ok ()) in
   Lwt_main.run t
 
+let repair filename =
+  let module B = Qcow.Make(Block) in
+  let open Lwt in
+  let t =
+    Block.connect filename
+    >>= function
+    | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
+    | `Ok x ->
+      B.connect x
+      >>= function
+      | `Error _ -> failwith (Printf.sprintf "Failed to read qcow formatted data on %s" filename)
+      | `Ok x ->
+        B.Debug.check_no_overlaps x
+        >>= function
+        | `Error _ -> failwith "Failed to regenerate refcount table"
+        | `Ok () ->
+          return (`Ok ()) in
+  Lwt_main.run t
+
 let copy filename output =
   let module B = Qcow.Make(Block) in
   let open Lwt in
