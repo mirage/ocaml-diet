@@ -442,22 +442,28 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
   end
 
-  (* Decompose into single sector reads *)
-  let rec chop into ofs = function
+  (* Starting at byte offset [ofs], map a list of buffers onto a list of
+     [byte offset, buffer] pairs, where
+       - no [byte offset, buffer] pair crosses an [alignment] boundary;
+       - each [buffer] is as large as possible (so for example if we supply
+         one large buffer it will only be fragmented to the minimum extent. *)
+  let rec chop_into_aligned alignment ofs = function
     | [] -> []
     | buf :: bufs ->
+      (* If we're not aligned, sync to the next boundary *)
+      let into = Int64.(to_int (sub alignment (rem ofs alignment))) in
       if Cstruct.len buf > into then begin
         let this = ofs, Cstruct.sub buf 0 into in
-        let rest = chop into (Int64.succ ofs) (Cstruct.shift buf into :: bufs) in
+        let rest = chop_into_aligned alignment Int64.(add ofs (of_int into)) (Cstruct.shift buf into :: bufs) in
         this :: rest
       end else begin
-        (ofs, buf) :: (chop into (Int64.succ ofs) bufs)
+        (ofs, buf) :: (chop_into_aligned alignment Int64.(add ofs (of_int (Cstruct.len buf))) bufs)
       end
 
   let read t sector bufs =
-    (* Inefficiently perform 3x physical I/Os for every 1 virtual I/O *)
-    iter (fun (sector, buf) ->
-      let byte = Int64.mul sector 512L in
+    let cluster_size = 1L <| t.cluster_bits in
+    let byte = Int64.(mul sector (of_int t.info.sector_size)) in
+    iter (fun (byte, buf) ->
       let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
       Cluster.walk t vaddr
       >>*= function
@@ -467,12 +473,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       | Some offset' ->
         let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
         B.read t.base base_sector [ buf ]
-    ) (chop t.base_info.B.sector_size sector bufs)
+    ) (chop_into_aligned cluster_size byte bufs)
 
   let write t sector bufs =
-    (* Inefficiently perform 3x physical I/Os for every 1 virtual I/O *)
-    iter (fun (sector, buf) ->
-      let byte = Int64.mul sector 512L in
+    let cluster_size = 1L <| t.cluster_bits in
+    let byte = Int64.(mul sector (of_int t.info.sector_size)) in
+    iter (fun (byte, buf) ->
       let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
       Cluster.walk ~allocate:true t vaddr
       >>*= function
@@ -481,7 +487,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       | Some offset' ->
         let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
         B.write t.base base_sector [ buf ]
-    ) (chop t.base_info.B.sector_size sector bufs)
+    ) (chop_into_aligned cluster_size byte bufs)
 
   let seek_mapped t from =
     let bytes = Int64.(mul from (of_int t.sector_size)) in
