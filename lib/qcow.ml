@@ -134,12 +134,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
             else begin
               t.read_cluster cluster
               >>*= fun buf ->
-              t.clusters <- Int64Map.add cluster buf t.clusters;
               Lwt.return (`Ok buf)
             end
           ) >>*= fun buf ->
           f buf
           >>*= fun () ->
+          t.clusters <- Int64Map.add cluster buf t.clusters;
           t.write_cluster cluster buf
         )
   end
