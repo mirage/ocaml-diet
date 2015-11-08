@@ -144,8 +144,15 @@ let get_id =
 
 let malloc (length: int) =
   let npages = (length + 4095)/4096 in
-  let buf = Io_page.(to_cstruct (get npages)) in
-  Cstruct.sub buf 0 length
+  Cstruct.sub Io_page.(to_cstruct (get npages)) 0 length
+
+let rec fragment into remaining =
+  if into >= Cstruct.len remaining
+  then [ remaining ]
+  else
+    let this = Cstruct.sub remaining 0 into in
+    let rest = Cstruct.shift remaining into in
+    this :: (fragment into rest)
 
 module Extent = struct
   open Int64
@@ -220,11 +227,11 @@ let read_write sector_size size_sectors (start, length) () =
     let id = get_id () in
     let buf = malloc length in
     Cstruct.memset buf (id mod 256);
-    B.write b sector [ buf ]
+    B.write b sector (fragment 4096 buf)
     >>= fun x ->
     let () = expect_ok x in
     let buf' = malloc length in
-    B.read b sector [ buf' ]
+    B.read b sector (fragment 4096 buf')
     >>= fun x ->
     let () = expect_ok x in
     let cmp a b = Cstruct.compare a b = 0 in
