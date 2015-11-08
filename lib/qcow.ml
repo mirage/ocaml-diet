@@ -45,11 +45,17 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     | `Error x -> Lwt.return (`Error x)
     | `Ok x -> f x
 
-  let rec iter f = function
-    | [] -> Lwt.return (`Ok ())
-    | x :: xs ->
-        f x >>*= fun () ->
-        iter f xs
+  (* Run all threads in parallel, wait for all to complete, then iterate through
+     the results and return the first failure we discover. *)
+  let rec iter_p f xs =
+    let open Lwt in
+    let threads = List.map f xs in
+    Lwt_list.fold_left_s (fun acc t ->
+      t >>= fun result ->
+      match acc with
+      | `Error x -> Lwt.return (`Error x) (* first error wins *)
+      | `Ok () -> t
+    ) (`Ok ()) threads
 
   module Int64Map = Map.Make(Int64)
   module Int64Set = Set.Make(Int64)
@@ -463,7 +469,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   let read t sector bufs =
     let cluster_size = 1L <| t.cluster_bits in
     let byte = Int64.(mul sector (of_int t.info.sector_size)) in
-    iter (fun (byte, buf) ->
+    iter_p (fun (byte, buf) ->
       let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
       Cluster.walk t vaddr
       >>*= function
@@ -478,7 +484,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   let write t sector bufs =
     let cluster_size = 1L <| t.cluster_bits in
     let byte = Int64.(mul sector (of_int t.info.sector_size)) in
-    iter (fun (byte, buf) ->
+    iter_p (fun (byte, buf) ->
       let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
       Cluster.walk ~allocate:true t vaddr
       >>*= function
