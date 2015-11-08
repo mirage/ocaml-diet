@@ -331,6 +331,35 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       >>*= fun l2_table_offset ->
       Lwt.return (`Ok l2_table_offset)
 
+    (* Find the first l1_index whose values satisfies [f] *)
+    let find_mapped_l1_table t l1_index f =
+      let table_offset = t.h.Header.l1_table_offset in
+      (* Read l1[l1_index] as a 64-bit offset *)
+      let rec loop l1_index =
+        if l1_index >= Int64.of_int32 t.h.Header.l1_size
+        then Lwt.return (`Ok None)
+        else begin
+          let l1_table_start = Physical.make t.h.Header.l1_table_offset in
+          let l1_index_offset = Physical.shift l1_table_start (Int64.mul 8L l1_index) in
+
+          let cluster, within = Physical.to_cluster ~cluster_bits:t.cluster_bits l1_index_offset in
+          ClusterCache.read t.cache cluster
+            (fun buf ->
+              let rec loop i : [ `Skip of int | `GotOne of int ]=
+                if i >= (Cstruct.len buf) then `Skip (i / 8) else begin
+                  if f (Cstruct.BE.get_uint64 buf i)
+                  then `GotOne (i / 8)
+                  else loop (i + 8)
+                end in
+              Lwt.return (`Ok (loop within)))
+          >>*= function
+          | `GotOne i ->
+            Lwt.return (`Ok (Some (Int64.(add l1_index (of_int i)))))
+          | `Skip n ->
+            loop Int64.(add l1_index (of_int n))
+        end in
+      loop l1_index
+
     let write_l1_table t l1_index l2_table_offset =
       let table_offset = t.h.Header.l1_table_offset in
       (* Read l1[l1_index] as a 64-bit offset *)
@@ -462,6 +491,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       if a.Virtual.l1_index >= Int64.of_int32 t.h.Header.l1_size
       then Lwt.return (`Ok Int64.(mul t.info.size_sectors (of_int t.sector_size)))
       else
+        Cluster.find_mapped_l1_table t a.Virtual.l1_index (fun x -> x <> 0L)
+        >>*= function
+        | None -> Lwt.return (`Ok Int64.(mul t.info.size_sectors (of_int t.sector_size)))
+        | Some l1_index ->
+        let a = { a with Virtual.l1_index } in
         Cluster.read_l1_table t a.Virtual.l1_index
         >>*= fun x ->
         if Physical.to_bytes x = 0L
