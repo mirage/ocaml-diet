@@ -488,7 +488,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
     let rec scan_l1 a =
       if a.Virtual.l1_index >= Int64.of_int32 t.h.Header.l1_size
-      then Lwt.return (`Ok t.info.size_sectors)
+      then Lwt.return (`Ok Int64.(mul t.info.size_sectors (of_int t.sector_size)))
       else
         Cluster.read_l1_table t a.Virtual.l1_index
         >>*= fun x ->
