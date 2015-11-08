@@ -267,7 +267,8 @@ let read_write sector_size size_sectors (start, length) () =
 
 let _ =
   let sector_size = 512 in
-  let size_sectors = pib in
+  (* Test with a 1 PiB disk, bigger than we'll need for a while. *)
+  let size_sectors = Int64.div pib 512L in
   let cluster_bits = 16 in
   let interesting_writes = List.map
     (fun (label, start, length) -> label >:: read_write sector_size size_sectors (start, Int64.to_int length))
