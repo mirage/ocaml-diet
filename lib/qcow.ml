@@ -480,6 +480,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     scan_l1 (Virtual.make ~cluster_bits:t.cluster_bits bytes)
     >>*= fun offset ->
     let x = Int64.(div offset (of_int t.sector_size)) in
+    assert (x >= from);
     Lwt.return (`Ok x)
 
   let seek_unmapped t from =
@@ -508,6 +509,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     scan_l1 (Virtual.make ~cluster_bits:t.cluster_bits bytes)
     >>*= fun offset ->
     let x = Int64.(div offset (of_int t.sector_size)) in
+    assert (x >= from);
     Lwt.return (`Ok x)
 
   let disconnect t = B.disconnect t.base
