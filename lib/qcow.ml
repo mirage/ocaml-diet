@@ -151,6 +151,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     base_info: B.info;
     info: info;
     mutable next_cluster: int64;
+    next_cluster_m: Lwt_mutex.t;
     cache: ClusterCache.t;
     (* for convenience *)
     cluster_bits: int;
@@ -206,11 +207,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
     (** Allocate contiguous clusters, increasing the size of the underying device *)
     let allocate_clusters t n =
-      let cluster = t.next_cluster in
-      t.next_cluster <- Int64.add t.next_cluster n;
-      resize_base t.base t.sector_size (Physical.make (t.next_cluster <| t.cluster_bits))
-      >>*= fun () ->
-      Lwt.return (`Ok cluster)
+      Lwt_mutex.with_lock t.next_cluster_m
+        (fun () ->
+          let cluster = t.next_cluster in
+          t.next_cluster <- Int64.add t.next_cluster n;
+          resize_base t.base t.sector_size (Physical.make (t.next_cluster <| t.cluster_bits))
+          >>*= fun () ->
+          Lwt.return (`Ok cluster)
+        )
 
     module Refcount = struct
         (* The refcount table contains pointers to clusters which themselves
@@ -577,6 +581,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     (* The first cluster is allocated after the L1 table *)
     let size_bytes = Int64.(mul base_info.B.size_sectors (of_int sector_size)) in
     let next_cluster = Int64.(div size_bytes (1L <| cluster_bits)) in
+    let next_cluster_m = Lwt_mutex.create () in
     let read_cluster i =
       let buf = malloc h in
       let offset = i <| cluster_bits in
@@ -589,7 +594,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let sector = Int64.(div offset (of_int sector_size)) in
       B.write base sector [ buf ] in
     let cache = ClusterCache.make ~read_cluster ~write_cluster () in
-    Lwt.return (`Ok { h; base; info = info'; base_info; next_cluster; cache; sector_size; cluster_bits })
+    Lwt.return (`Ok { h; base; info = info'; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits })
 
   let connect base =
     let open Lwt in
