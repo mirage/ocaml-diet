@@ -107,6 +107,37 @@ let decode filename output =
           | `Ok () -> return (`Ok ()) in
   Lwt_main.run t
 
+let encode filename output =
+  let module B = Qcow.Make(Block) in
+  let open Lwt in
+  let t =
+    Block.connect filename
+    >>= function
+    | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
+    | `Ok raw_input ->
+      Block.get_info raw_input
+      >>= fun raw_input_info ->
+      let total_size = Int64.(mul raw_input_info.Block.size_sectors (of_int raw_input_info.Block.sector_size)) in
+      Lwt_unix.openfile output [ Lwt_unix.O_WRONLY; Lwt_unix.O_CREAT ] 0o0644
+      >>= fun fd ->
+      Lwt_unix.close fd
+      >>= fun () ->
+      Block.connect output
+      >>= function
+      | `Error _ -> failwith (Printf.sprintf "Failed to open %s" output)
+      | `Ok raw_output ->
+        B.create raw_output total_size
+        >>= function
+        | `Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" output)
+        | `Ok qcow_output ->
+
+          Mirage_block.sparse_copy (module Block) raw_input (module B) qcow_output
+          >>= function
+          | `Error (`Msg m) -> failwith m
+          | `Error _ -> failwith "copy failed"
+          | `Ok () -> return (`Ok ()) in
+  Lwt_main.run t
+
 let create size filename =
   let module B = Qcow.Make(Block) in
   let open Lwt in

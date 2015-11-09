@@ -79,6 +79,15 @@ let decode_cmd =
   Term.(ret(pure Impl.decode $ filename $ output)),
   Term.info "decode" ~sdocs:_common_options ~doc ~man
 
+let encode_cmd =
+  let doc = "Convert the file from raw to qcow2" in
+  let man = [
+    `S "DESCRIPTION";
+    `P "Convert a raw file to qcow2 ."
+  ] @ help in
+  Term.(ret(pure Impl.encode $ filename $ output)),
+  Term.info "encode" ~sdocs:_common_options ~doc ~man
+
 let create_cmd =
   let doc = "create a qcow-formatted data file" in
   let man = [
@@ -105,7 +114,7 @@ let default_cmd =
   Term.(ret (pure (fun _ -> `Help (`Pager, None)) $ common_options_t)),
   Term.info "qcow-tool" ~version:"1.0.0" ~sdocs:_common_options ~doc ~man
 
-let cmds = [info_cmd; copy_cmd; create_cmd; check_cmd; repair_cmd]
+let cmds = [info_cmd; create_cmd; check_cmd; repair_cmd; encode_cmd; decode_cmd]
 
 let _ =
   match Term.eval_choice default_cmd cmds with
