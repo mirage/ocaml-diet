@@ -44,13 +44,59 @@ let filename =
   let doc = Printf.sprintf "Path to the qcow2 file." in
   Arg.(value & pos 0 file "test.qcow2" & info [] ~doc)
 
+let kib = 1024L
+let mib = Int64.mul kib 1024L
+let gib = Int64.mul mib 1024L
+let tib = Int64.mul gib 1024L
+let pib = Int64.mul tib 1024L
+
+let sizes = List.sort (fun (_, a) (_, b) -> compare a b) [
+  "KiB", kib;
+  "MiB", mib;
+  "GiB", gib;
+  "TiB", tib;
+  "PiB", pib;
+]
+
+let size_parser txt =
+  let endswith suffix txt =
+    let suffix' = String.length suffix in
+    let txt' = String.length txt in
+    txt' >= suffix' && (String.sub txt (txt' - suffix') suffix' = suffix) in
+  let prefix suffix txt =
+    let suffix' = String.length suffix in
+    let txt' = String.length txt in
+    String.sub txt 0 (txt' - suffix') in
+  try
+    match List.fold_left (fun acc (suffix, multiplier) -> match acc with
+      | Some x -> Some x
+      | None when not(endswith suffix txt) -> None
+      | None -> Some (Int64.(mul multiplier (of_string (prefix suffix txt))))
+    ) None sizes with
+    | None -> `Ok (Int64.of_string txt)
+    | Some x -> `Ok x
+  with Failure _ -> `Error ("invalid size: " ^ txt)
+
+let size_printer ppf v =
+  let txt =
+    match List.fold_left (fun acc (suffix, multiplier) -> match acc with
+      | Some x -> Some x
+      | None when Int64.rem v multiplier = 0L -> Some (Int64.(to_string (div v multiplier) ^ suffix))
+      | None -> None
+    ) None sizes with
+    | None -> Int64.to_string v
+    | Some x -> x in
+  Format.fprintf ppf "%s" txt
+
+let size_converter = size_parser, size_printer
+
 let size =
   let doc = Printf.sprintf "Virtual size of the qcow image" in
-  Arg.(value & pos 0 int64 1024L & info [] ~doc)
+  Arg.(value & opt size_converter 1024L & info [ "size" ] ~doc)
 
 let output =
   let doc = Printf.sprintf "Path to the output file." in
-  Arg.(value & pos 1 string "test.raw" & info [] ~doc)
+  Arg.(value & pos 0 string "test.raw" & info [] ~doc)
 
 let info_cmd =
   let doc = "display general information about a qcow2" in
