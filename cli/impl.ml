@@ -76,7 +76,7 @@ let repair filename =
           return (`Ok ()) in
   Lwt_main.run t
 
-let copy filename output =
+let decode filename output =
   let module B = Qcow.Make(Block) in
   let open Lwt in
   let t =

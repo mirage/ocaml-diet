@@ -70,14 +70,14 @@ let check_cmd =
   Term.(ret(pure Impl.check $ filename)),
   Term.info "check" ~sdocs:_common_options ~doc ~man
 
-let copy_cmd =
-  let doc = "decode qcow2 formatted data and write to stdout" in
+let decode_cmd =
+  let doc = "decode qcow2 formatted data and write a raw image" in
   let man = [
     `S "DESCRIPTION";
-    `P "Decode qcow2 formatted data and write to stdout.";
+    `P "Decode qcow2 formatted data and write to a raw file.";
   ] @ help in
-  Term.(ret(pure Impl.copy $ filename $ output)),
-  Term.info "copy" ~sdocs:_common_options ~doc ~man
+  Term.(ret(pure Impl.decode $ filename $ output)),
+  Term.info "decode" ~sdocs:_common_options ~doc ~man
 
 let create_cmd =
   let doc = "create a qcow-formatted data file" in
