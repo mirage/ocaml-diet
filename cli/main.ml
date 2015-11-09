@@ -125,6 +125,19 @@ let write_cmd =
   Term.(ret(pure Impl.write $ filename $ sector $ text)),
   Term.info "write" ~sdocs:_common_options ~doc ~man
 
+let length =
+  let doc = Printf.sprintf "Length of the data in 512-byte sectors" in
+  Arg.(value & opt int64 1L & info [ "length" ] ~doc)
+
+let read_cmd =
+  let doc = "Read a string from a virtual address in a qcow2 image" in
+  let man = [
+    `S "DESCRIPTION";
+    `P "Read a string at a given virtual sector offset in the qcow2 image."
+  ] @ help in
+  Term.(ret(pure Impl.read $ filename $ sector $ length)),
+  Term.info "read" ~sdocs:_common_options ~doc ~man
+
 let default_cmd =
   let doc = "manipulate virtual disks stored in qcow2 files" in
   let man = help in
@@ -132,7 +145,7 @@ let default_cmd =
   Term.info "qcow-tool" ~version:"1.0.0" ~sdocs:_common_options ~doc ~man
 
 let cmds = [info_cmd; create_cmd; check_cmd; repair_cmd; encode_cmd; decode_cmd;
-  write_cmd]
+  write_cmd; read_cmd]
 
 let _ =
   match Term.eval_choice default_cmd cmds with

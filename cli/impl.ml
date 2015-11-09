@@ -63,6 +63,30 @@ let write filename sector data =
         | `Ok () -> return (`Ok ()) in
   Lwt_main.run t
 
+let read filename sector length =
+  let module B = Qcow.Make(Block) in
+  let t =
+    let open Lwt in
+    Block.connect filename
+    >>= function
+    | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
+    | `Ok x ->
+      B.connect x
+      >>= function
+      | `Error _ -> failwith (Printf.sprintf "Failed to read qcow formatted data on %s" filename)
+      | `Ok x ->
+        let length = Int64.to_int length * 512 in
+        let npages = (length + 4095) / 4096 in
+        let buf = Io_page.(to_cstruct (get npages)) in
+        B.read x sector [ buf ]
+        >>= function
+        | `Error _ -> failwith "write failed"
+        | `Ok () ->
+          let result = Cstruct.sub buf 0 length in
+          Printf.printf "%s%!" (Cstruct.to_string result);
+          return (`Ok ()) in
+  Lwt_main.run t
+
 let check filename =
   let module B = Qcow.Make(Block) in
   let open Lwt in
