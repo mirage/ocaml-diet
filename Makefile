@@ -2,6 +2,7 @@
 all: build test doc
 
 PREFIX ?= /usr/local
+BINDIR ?= ${PREFIX}/bin
 NAME=qcow
 
 #LWT ?= $(shell if ocamlfind query lwt >/dev/null 2>&1; then echo --enable-lwt; fi)
@@ -27,13 +28,21 @@ doc: setup.data setup.bin
 
 install: setup.bin
 	./setup.bin -install
+	install -m 755 main.native ${BINDIR}/qcow-tool
 
 test: setup.bin build
 	./setup.bin -test -runner sequential
 
 reinstall: setup.bin
 	ocamlfind remove $(NAME) || true
+	rm -f ${BINDIR}/qcow-tool || true
 	./setup.bin -reinstall
+	install -m 755 main.native ${BINDIR}/qcow-tool
+
+.PHONY: uninstall
+uninstall:
+	ocamlfind remove $(NAME) || true
+	rm -f ${BINDIR}/qcow-tool || true
 
 clean:
 	ocamlbuild -clean
