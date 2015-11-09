@@ -160,6 +160,28 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
   let get_info t = Lwt.return t.info
 
+  (* Another way to achieve this would be to create a virtual block device
+     with a little bit of padding on the end *)
+  let read_base base base_sector buf =
+    (* Qemu-img will 'allocate' the last cluster by writing only the last sector.
+       Cope with this by assuming all later sectors are full of zeroes *)
+    let open Lwt in
+    B.get_info base
+    >>= fun base_info ->
+    let buf_len = Int64.of_int (Cstruct.len buf) in
+    let missing_sectors =
+      Int64.sub
+      Int64.(add base_sector (div buf_len (of_int base_info.B.sector_size)))
+      base_info.B.size_sectors in
+    if missing_sectors > 0L then begin
+      let available_sectors = Int64.(sub (div buf_len (of_int base_info.B.sector_size)) missing_sectors) in
+      let bytes = Int64.(to_int (mul available_sectors (of_int base_info.B.sector_size))) in
+      B.read base base_sector [ Cstruct.sub buf 0 bytes ]
+      >>*= fun () ->
+      Cstruct.(memset (shift buf bytes) 0);
+      Lwt.return (`Ok ())
+    end else B.read base base_sector [ buf ]
+
   let malloc t =
     let cluster_bits = Int32.to_int t.Header.cluster_bits in
     let npages = max 1 (cluster_bits lsl (cluster_bits - 12)) in
@@ -256,7 +278,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
               else begin
                 let physical = Physical.make Int64.(add t.h.Header.refcount_table_offset (of_int (i lsl t.cluster_bits))) in
                 let sector, _ = Physical.to_sector ~sector_size:t.sector_size physical in
-                B.read t.base sector [ buf ]
+                read_base t.base sector buf
                 >>*= fun () ->
                 let physical = Physical.make Int64.((add start (of_int i)) <| t.cluster_bits) in
                 let sector, _ = Physical.to_sector ~sector_size:t.sector_size physical in
@@ -505,14 +527,18 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         Cstruct.memset buf 0;
         Lwt.return (`Ok ())
       | Some offset' ->
+        (* Qemu-img will 'allocate' the last cluster by writing only the last sector.
+           Cope with this by assuming all later sectors are full of zeroes *)
+        let buf_len = Int64.of_int (Cstruct.len buf) in
         let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
-        B.read t.base base_sector [ buf ]
+        read_base t.base base_sector buf
     ) (chop_into_aligned cluster_size byte bufs)
 
   let write t sector bufs =
     let cluster_size = 1L <| t.cluster_bits in
     let byte = Int64.(mul sector (of_int t.info.sector_size)) in
     iter_p (fun (byte, buf) ->
+
       let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
       ( Cluster.walk_readonly t vaddr
         >>*= function
@@ -608,13 +634,16 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let cluster_bits = Int32.to_int h.Header.cluster_bits in
     (* The first cluster is allocated after the L1 table *)
     let size_bytes = Int64.(mul base_info.B.size_sectors (of_int sector_size)) in
-    let next_cluster = Int64.(div size_bytes (1L <| cluster_bits)) in
+    let cluster_size = 1L <| cluster_bits in
+    (* qemu-img will allocate a cluster by writing only a single sector to the end
+       of the file. Therefore we must round up: *)
+    let next_cluster = Int64.(div (round_up size_bytes cluster_size) cluster_size) in
     let next_cluster_m = Lwt_mutex.create () in
     let read_cluster i =
       let buf = malloc h in
       let offset = i <| cluster_bits in
       let sector = Int64.(div offset (of_int sector_size)) in
-      B.read base sector [ buf ]
+      read_base base sector buf
       >>*= fun () ->
       Lwt.return (`Ok buf) in
     let write_cluster i buf =
@@ -629,7 +658,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     B.get_info base
     >>= fun base_info ->
     let sector = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 base_info.B.sector_size in
-    B.read base 0L [ sector ]
+    read_base base 0L sector
     >>= function
     | `Error x -> Lwt.return (`Error x)
     | `Ok () ->

@@ -70,14 +70,23 @@ let check_cmd =
   Term.(ret(pure Impl.check $ filename)),
   Term.info "check" ~sdocs:_common_options ~doc ~man
 
-let copy_cmd =
-  let doc = "decode qcow2 formatted data and write to stdout" in
+let decode_cmd =
+  let doc = "decode qcow2 formatted data and write a raw image" in
   let man = [
     `S "DESCRIPTION";
-    `P "Decode qcow2 formatted data and write to stdout.";
+    `P "Decode qcow2 formatted data and write to a raw file.";
   ] @ help in
-  Term.(ret(pure Impl.copy $ filename $ output)),
-  Term.info "copy" ~sdocs:_common_options ~doc ~man
+  Term.(ret(pure Impl.decode $ filename $ output)),
+  Term.info "decode" ~sdocs:_common_options ~doc ~man
+
+let encode_cmd =
+  let doc = "Convert the file from raw to qcow2" in
+  let man = [
+    `S "DESCRIPTION";
+    `P "Convert a raw file to qcow2 ."
+  ] @ help in
+  Term.(ret(pure Impl.encode $ filename $ output)),
+  Term.info "encode" ~sdocs:_common_options ~doc ~man
 
 let create_cmd =
   let doc = "create a qcow-formatted data file" in
@@ -105,7 +114,7 @@ let default_cmd =
   Term.(ret (pure (fun _ -> `Help (`Pager, None)) $ common_options_t)),
   Term.info "qcow-tool" ~version:"1.0.0" ~sdocs:_common_options ~doc ~man
 
-let cmds = [info_cmd; copy_cmd; create_cmd; check_cmd; repair_cmd]
+let cmds = [info_cmd; create_cmd; check_cmd; repair_cmd; encode_cmd; decode_cmd]
 
 let _ =
   match Term.eval_choice default_cmd cmds with

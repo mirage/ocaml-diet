@@ -22,7 +22,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
 
   val create: B.t -> int64 -> [ `Ok of t | `Error of error ] io
   (** [create block size] initialises a qcow-formatted image on [block]
-      with virtual size [size]. *)
+      with virtual size [size] in bytes. *)
 
   val connect: B.t -> [ `Ok of t | `Error of error ] io
   (** [connect block] connects to an existing qcow-formatted image on
