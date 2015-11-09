@@ -101,7 +101,7 @@ let decode filename output =
         >>= function
         | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
         | `Ok y ->
-          Mirage_block.copy (module B) x (module Block) y
+          Mirage_block.sparse_copy (module B) x (module Block) y
           >>= function
           | `Error _ -> failwith "copy failed"
           | `Ok () -> return (`Ok ()) in
