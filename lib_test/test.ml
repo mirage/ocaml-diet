@@ -272,6 +272,30 @@ let read_write sector_size size_sectors (start, length) () =
     Lwt.return () in
   Lwt_main.run t
 
+let check_refcount_table_allocation () =
+  let module B = Qcow.Make(Ramdisk) in
+  let t =
+    Ramdisk.destroy ~name:"test";
+    Ramdisk.connect "test"
+    >>= fun x ->
+    let ramdisk = expect_ok x in
+    B.create ramdisk pib
+    >>= fun x ->
+    let b = expect_ok x in
+
+    let h = B.header b in
+    let max_cluster = Int64.shift_right h.Header.size (Int32.to_int h.Header.cluster_bits) in
+    B.Debug.set_next_cluster b (Int64.pred max_cluster);
+    let length = 1 lsl (Int32.to_int h.Header.cluster_bits) in
+    let sector = 0L in
+
+    let buf = malloc length in
+    B.write b sector (fragment 4096 buf)
+    >>= fun x ->
+    let () = expect_ok x in
+    Lwt.return () in
+  Lwt_main.run t
+
 let _ =
   let sector_size = 512 in
   (* Test with a 1 PiB disk, bigger than we'll need for a while. *)
@@ -282,6 +306,7 @@ let _ =
     (interesting_ranges sector_size size_sectors cluster_bits) in
 
   let suite = "qcow2" >::: [
+    "check we can reallocate the refcount table" >:: check_refcount_table_allocation;
     "create 1K" >:: create_1K;
     "create 1M" >:: create_1M;
     "create 1P" >:: create_1P;
