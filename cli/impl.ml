@@ -33,7 +33,34 @@ let info filename =
     >>= fun () ->
     let h, _ = expect_ok (Header.read buffer) in
     Printf.printf "%s\n" (Sexplib.Sexp.to_string_hum (Header.sexp_of_t h));
+    Printf.printf "Max clusters: %Ld\n" (Int64.shift_right h.Header.size (Int32.to_int h.Header.cluster_bits));
+
+    Printf.printf "Refcounts per cluster: %Ld\n" (Header.refcounts_per_cluster h);
+    Printf.printf "Max refcount table size: %Ld\n" (Header.max_refcount_table_size h);
+
     return (`Ok ()) in
+  Lwt_main.run t
+
+let write filename sector data =
+  let module B = Qcow.Make(Block) in
+  let t =
+    let open Lwt in
+    Block.connect filename
+    >>= function
+    | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
+    | `Ok x ->
+      B.connect x
+      >>= function
+      | `Error _ -> failwith (Printf.sprintf "Failed to read qcow formatted data on %s" filename)
+      | `Ok x ->
+        let npages = (String.length data + 4095) / 4096 in
+        let buf = Io_page.(to_cstruct (get npages)) in
+        Cstruct.memset buf 0;
+        Cstruct.blit_from_string data 0 buf 0 (String.length data);
+        B.write x sector [ buf ]
+        >>= function
+        | `Error _ -> failwith "write failed"
+        | `Ok () -> return (`Ok ()) in
   Lwt_main.run t
 
 let check filename =

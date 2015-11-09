@@ -108,13 +108,31 @@ let repair_cmd =
   Term.(ret(pure Impl.repair $ filename)),
   Term.info "repair" ~sdocs:_common_options ~doc ~man
 
+let sector =
+  let doc = Printf.sprintf "Virtual sector within the qcow2 image" in
+  Arg.(value & opt int64 0L & info [ "sector" ] ~doc)
+
+let text =
+  let doc = Printf.sprintf "Test to write into the qcow2 image" in
+  Arg.(value & opt string "" & info [ "text" ] ~doc)
+
+let write_cmd =
+  let doc = "Write a string to a virtual address in a qcow2 image" in
+  let man = [
+    `S "DESCRIPTION";
+    `P "Write a string at a given virtual sector offset in the qcow2 image."
+  ] @ help in
+  Term.(ret(pure Impl.write $ filename $ sector $ text)),
+  Term.info "write" ~sdocs:_common_options ~doc ~man
+
 let default_cmd =
   let doc = "manipulate virtual disks stored in qcow2 files" in
   let man = help in
   Term.(ret (pure (fun _ -> `Help (`Pager, None)) $ common_options_t)),
   Term.info "qcow-tool" ~version:"1.0.0" ~sdocs:_common_options ~doc ~man
 
-let cmds = [info_cmd; create_cmd; check_cmd; repair_cmd; encode_cmd; decode_cmd]
+let cmds = [info_cmd; create_cmd; check_cmd; repair_cmd; encode_cmd; decode_cmd;
+  write_cmd]
 
 let _ =
   match Term.eval_choice default_cmd cmds with
