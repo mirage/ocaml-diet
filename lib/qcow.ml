@@ -266,8 +266,17 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
         (* If the table (containing pointers to clusters which contain the refcounts)
            is too small, then reallocate it now. *)
-        ( if within_table >= Int64.of_int32 t.h.Header.refcount_table_clusters then begin
+        let cluster_containing_pointer =
+          let within_table_offset = Int64.mul within_table 8L in
+          within_table_offset |> t.cluster_bits in
+        let current_size_clusters = Int64.of_int32 t.h.Header.refcount_table_clusters in
+        ( if cluster_containing_pointer >= current_size_clusters then begin
             let needed = Header.max_refcount_table_size t.h in
+            (* Make sure this is actually an increase: make the table 2x larger if not *)
+            let needed =
+              if needed = current_size_clusters
+              then Int64.mul 2L current_size_clusters
+              else needed in
             allocate_clusters t needed
             >>*= fun start ->
             (* Copy any existing refcounts into new table *)
@@ -819,6 +828,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       end in
     loop 0L
 
+  let header t = t.h
+
   type t' = t
   type error' = error
   module Debug = struct
@@ -835,5 +846,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
        rebuild_refcount_table t
        >>*= fun () ->
        Lwt.return (`Ok ())
+
+    let set_next_cluster t x = t.next_cluster <- x
   end
 end

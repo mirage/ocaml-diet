@@ -68,4 +68,6 @@ module type DEBUG = sig
   type error
 
   val check_no_overlaps: t -> [ `Ok of unit | `Error of error ] Lwt.t
+
+  val set_next_cluster: t -> int64 -> unit
 end

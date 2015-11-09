@@ -46,6 +46,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
   (** [rebuild_refcount_table t] rebuilds the refcount table from scratch.
       Normally we won't update the refcount table live, for performance. *)
 
+  val header: t -> Header.t
+  (** Return a snapshot of the current header *)
+
   module Debug: Qcow_s.DEBUG
     with type t = t
      and type error = error
