@@ -27,7 +27,7 @@ depends: [
   "mirage-types-lwt"
   "lwt"
   "mirage-block"
-  "mirage-block-unix"
+  "mirage-block-unix" {>= "2.1.0" }
   "cmdliner"
   "sexplib"
   "ocamlfind" {build}
