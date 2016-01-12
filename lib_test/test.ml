@@ -350,10 +350,10 @@ let test_dir =
   path
 
 let qemu_img size =
-  let path = Filename.concat test_dir (string_of_int size) in
+  let path = Filename.concat test_dir (Int64.to_string size) in
   Qemu.Img.create path size;
   let info = Qemu.Img.info path in
-  assert_equal ~printer:string_of_int size info.Qemu.Img.virtual_size;
+  assert_equal ~printer:Int64.to_string size info.Qemu.Img.virtual_size;
   Qemu.Img.check path;
   let t =
     let module M = Qcow.Make(Block) in
@@ -363,7 +363,7 @@ let qemu_img size =
     M.connect b
     >>= fun qcow ->
     let h = M.header qcow in
-    assert_equal ~printer:string_of_int size (Int64.to_int h.Qcow.Header.size);
+    assert_equal ~printer:Int64.to_string size h.Qcow.Header.size;
     let open Lwt.Infix in
     M.disconnect qcow
     >>= fun () ->
@@ -372,9 +372,10 @@ let qemu_img size =
     Lwt.return (`Ok ()) in
   or_failwith @@ Lwt_main.run t
 
-let qemu_img_suite = List.map (fun size ->
-    Printf.sprintf "check that qemu-img creates files and we can read the metadata, size = %d bytes" size >:: (fun () -> qemu_img size)
-  )
+let qemu_img_suite =
+  List.map (fun size ->
+      Printf.sprintf "check that qemu-img creates files and we can read the metadata, size = %Ld bytes" size >:: (fun () -> qemu_img size)
+    ) virtual_sizes
 
 let _ =
   let sector_size = 512 in
@@ -391,7 +392,7 @@ let _ =
       "create 1K" >:: create_1K;
       "create 1M" >:: create_1M;
       "create 1P" >:: create_1P;
-    ] @ interesting_writes in
+    ] @ interesting_writes @ qemu_img_suite in
   OUnit2.run_test_tt_main (ounit2_of_ounit1 suite);
   (* If no error, delete the directory *)
   ignore(run "rm" [ "-rf"; test_dir ])

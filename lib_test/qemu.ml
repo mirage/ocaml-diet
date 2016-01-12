@@ -18,15 +18,28 @@
    ocaml-qcow images and qemu-produced images. *)
 open Utils
 
+module Block = struct
+  type t = {
+    server: process;
+  }
+
+  let connect file =
+    let socket = Filename.(concat (get_temp_dir_name()) "qcow.socket") in
+    (try Unix.unlink socket with Unix.Unix_error(Unix.ENOENT, _, _) -> ());
+    let server = start "qemu-nbd" [ "--socket"; socket; "-f"; "qcow2"; file] in
+    Lwt.return (`Ok { server })
+
+end
+
 module Img = struct
   let create file size =
-    ignore_output @@ run "qemu-img" [ "create"; "-f"; "qcow2"; file; string_of_int size ]
+    ignore_output @@ run "qemu-img" [ "create"; "-f"; "qcow2"; file; Int64.to_string size ]
 
   let check file =
-    run "qemu-img" [ "check"; file ]
+    ignore_output @@ run "qemu-img" [ "check"; file ]
 
   type info = {
-    virtual_size: int;
+    virtual_size: int64;
     filename: string;
     cluster_size: int;
     actual_size: int;
@@ -44,7 +57,7 @@ module Img = struct
       if List.mem_assoc name json
       then List.assoc name json
       else failwith (Printf.sprintf "Failed to find '%s' in %s" name (String.concat "\n" lines)) in
-    let virtual_size = Ezjsonm.get_int @@ find "virtual-size" json in
+    let virtual_size = Ezjsonm.get_int64 @@ find "virtual-size" json in
     let filename = Ezjsonm.get_string @@ find "filename" json in
     let cluster_size = Ezjsonm.get_int @@ find "cluster-size" json in
     let format = Ezjsonm.get_string @@ find "format" json in
