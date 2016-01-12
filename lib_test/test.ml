@@ -98,11 +98,11 @@ let boundaries cluster_bits =
     Printf.sprintf "one %Ld byte cluster" cluster_size, cluster_size;
     Printf.sprintf "one L2 table (containing %Ld 8-byte pointers to cluster)"
       pointers_in_cluster,
-      Int64.(mul cluster_size pointers_in_cluster);
+    Int64.(mul cluster_size pointers_in_cluster);
     Printf.sprintf "one L1 table (containing %Ld 8-byte pointers to L2 tables)"
       pointers_in_cluster,
-      Int64.(mul (mul cluster_size pointers_in_cluster) pointers_in_cluster)
-    ]
+    Int64.(mul (mul cluster_size pointers_in_cluster) pointers_in_cluster)
+  ]
 
 let sizes sector_size cluster_bits = [
   "one sector", Int64.of_int sector_size;
@@ -128,11 +128,11 @@ let interesting_ranges sector_size size_sectors cluster_bits =
   let all = starts @ (List.map (fun (label, offset) -> label ^ " from the end", Int64.sub size_bytes offset) starts) in
   (* add lengths *)
   let all = List.map (fun ((label', length'), (label, offset)) ->
-    label' ^ " @ " ^ label, offset, length'
-  ) (cross (sizes sector_size cluster_bits) all) in
+      label' ^ " @ " ^ label, offset, length'
+    ) (cross (sizes sector_size cluster_bits) all) in
   List.filter
     (fun (label, offset, length) ->
-      offset >= 0L && (Int64.add offset length <= size_bytes)
+       offset >= 0L && (Int64.add offset length <= size_bytes)
     ) all
 
 let get_id =
@@ -242,25 +242,25 @@ let read_write sector_size size_sectors (start, length) () =
     let ofs' = Int64.(mul sector (of_int sector_size)) in
     Mirage_block.fold_mapped_s
       ~f:(fun bytes_seen ofs data ->
-        let actual = { Extent.start = ofs; length = Int64.of_int (Cstruct.len data / 512) } in
-        (* Any data we read now which wasn't expected must be full of zeroes *)
-        let extra = Extent.difference actual expected in
-        List.iter
-          (fun { Extent.start; length } ->
-            let buf = Cstruct.sub data (512 * Int64.(to_int (sub start ofs))) (Int64.to_int length * 512) in
-            for i = 0 to Cstruct.len buf - 1 do
-              assert_equal ~printer:string_of_int ~cmp:(fun a b -> a = b) 0 (Cstruct.get_uint8 buf i)
-            done;
-          ) extra;
-        let common = Extent.intersect actual expected in
-        List.iter
-          (fun { Extent.start; length } ->
-            let buf = Cstruct.sub data (512 * Int64.(to_int (sub start ofs))) (Int64.to_int length * 512) in
-            for i = 0 to Cstruct.len buf - 1 do
-              assert_equal ~printer:string_of_int ~cmp:(fun a b -> a = b) (id mod 256) (Cstruct.get_uint8 buf i)
-            done;
-          ) common;
-        let seen_this_time = 512 * List.(fold_left (+) 0 (map (fun e -> Int64.to_int e.Extent.length) common)) in
+          let actual = { Extent.start = ofs; length = Int64.of_int (Cstruct.len data / 512) } in
+          (* Any data we read now which wasn't expected must be full of zeroes *)
+          let extra = Extent.difference actual expected in
+          List.iter
+            (fun { Extent.start; length } ->
+               let buf = Cstruct.sub data (512 * Int64.(to_int (sub start ofs))) (Int64.to_int length * 512) in
+               for i = 0 to Cstruct.len buf - 1 do
+                 assert_equal ~printer:string_of_int ~cmp:(fun a b -> a = b) 0 (Cstruct.get_uint8 buf i)
+               done;
+            ) extra;
+          let common = Extent.intersect actual expected in
+          List.iter
+            (fun { Extent.start; length } ->
+               let buf = Cstruct.sub data (512 * Int64.(to_int (sub start ofs))) (Int64.to_int length * 512) in
+               for i = 0 to Cstruct.len buf - 1 do
+                 assert_equal ~printer:string_of_int ~cmp:(fun a b -> a = b) (id mod 256) (Cstruct.get_uint8 buf i)
+               done;
+            ) common;
+          let seen_this_time = 512 * List.(fold_left (+) 0 (map (fun e -> Int64.to_int e.Extent.length) common)) in
           return (`Ok (bytes_seen + seen_this_time))
         ) 0 (module B) b
     >>= fun x ->
@@ -334,14 +334,14 @@ let _ =
   let size_sectors = Int64.div pib 512L in
   let cluster_bits = 16 in
   let interesting_writes = List.map
-    (fun (label, start, length) -> label >:: read_write sector_size size_sectors (start, Int64.to_int length))
-    (interesting_ranges sector_size size_sectors cluster_bits) in
+      (fun (label, start, length) -> label >:: read_write sector_size size_sectors (start, Int64.to_int length))
+      (interesting_ranges sector_size size_sectors cluster_bits) in
 
   let suite = "qcow2" >::: [
-    "check we can fill the disk" >:: check_full_disk;
-    "check we can reallocate the refcount table" >:: check_refcount_table_allocation;
-    "create 1K" >:: create_1K;
-    "create 1M" >:: create_1M;
-    "create 1P" >:: create_1P;
-  ] @ interesting_writes in
+      "check we can fill the disk" >:: check_full_disk;
+      "check we can reallocate the refcount table" >:: check_refcount_table_allocation;
+      "create 1K" >:: create_1K;
+      "create 1M" >:: create_1M;
+      "create 1P" >:: create_1P;
+    ] @ interesting_writes in
   OUnit2.run_test_tt_main (ounit2_of_ounit1 suite)

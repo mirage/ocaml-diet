@@ -49,7 +49,7 @@ module Int64 : sig
 
   val t_of_sexp: Sexp.t -> t
   val sexp_of_t: t -> Sexp.t
-  
+
   val round_up: int64 -> int64 -> int64
   (** [round_up value to] rounds [value] to the next multiple of [to] *)
 

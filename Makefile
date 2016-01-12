@@ -1,4 +1,4 @@
-.PHONY: all clean install build
+.PHONY: all clean install build reindent
 all: build test doc
 
 PREFIX ?= /usr/local
@@ -43,6 +43,11 @@ reinstall: setup.bin
 uninstall:
 	ocamlfind remove $(NAME) || true
 	rm -f ${BINDIR}/qcow-tool || true
+
+reindent:
+	ocp-indent --syntax cstruct -i lib/*.mli
+	ocp-indent --syntax cstruct -i lib/*.ml
+	ocp-indent --syntax cstruct -i lib_test/*.ml
 
 clean:
 	ocamlbuild -clean

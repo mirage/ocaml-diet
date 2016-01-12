@@ -25,9 +25,9 @@ let ( |> ) = Int64.shift_right_logical
    remembering the byte value and force implementations to round on demand *)
 
 type t = {
-	bytes: int64;
-	is_mutable: bool;
-	is_compressed: bool;
+  bytes: int64;
+  is_mutable: bool;
+  is_compressed: bool;
 }
 with sexp
 
@@ -38,8 +38,8 @@ let sizeof _ = 8
 let shift t bytes = { t with bytes = Int64.add t.bytes bytes }
 
 let make ?(is_mutable = true) ?(is_compressed = false) x =
-	let bytes = (x <| 2) |> 2 in
-	{ bytes; is_mutable; is_compressed}
+  let bytes = (x <| 2) |> 2 in
+  { bytes; is_mutable; is_compressed}
 
 let is_mutable t = t.is_mutable
 let is_compressed t = t.is_compressed
@@ -61,11 +61,11 @@ let read rest =
   let is_mutable = x |> 63 = 1L in
   let is_compressed = (x <| 1) |> 63 = 1L in
   let bytes = (x <| 2) |> 2 in
-	Ok({bytes; is_mutable; is_compressed}, Cstruct.shift rest 8)
+  Ok({bytes; is_mutable; is_compressed}, Cstruct.shift rest 8)
 
 let write t rest =
   let is_mutable = if t.is_mutable then 1L <| 63 else 0L in
-	let is_compressed = if t.is_compressed then 1L <| 62 else 0L in
-	let raw = Int64.(logor (logor t.bytes is_mutable) is_compressed) in
-	Cstruct.BE.set_uint64 rest 0 raw;
-	Ok(Cstruct.shift rest 8)
+  let is_compressed = if t.is_compressed then 1L <| 62 else 0L in
+  let raw = Int64.(logor (logor t.bytes is_mutable) is_compressed) in
+  Cstruct.BE.set_uint64 rest 0 raw;
+  Ok(Cstruct.shift rest 8)
