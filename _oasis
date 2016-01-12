@@ -38,7 +38,7 @@ Executable test
   MainIs:             test.ml
   Custom:             true
   Install:            false
-  BuildDepends:       lwt, lwt.unix, qcow, mirage-block, mirage-block-ramdisk, mirage-block-unix, cstruct, oUnit, io-page.unix, io-page
+  BuildDepends:       lwt, lwt.unix, qcow, mirage-block, mirage-block-ramdisk, mirage-block-unix, cstruct, oUnit, io-page.unix, io-page, ezjsonm
 
 Test test
   Run$:               flag(tests)

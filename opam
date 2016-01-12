@@ -34,6 +34,7 @@ depends: [
   "oasis" {build}
   "ounit" {test}
   "mirage-block-ramdisk" {test}
+  "ezjsonm" {test}
 ]
 build-doc: ["ocaml" "setup.ml" "-doc"]
 

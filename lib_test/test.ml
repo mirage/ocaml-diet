@@ -352,6 +352,9 @@ let test_dir =
 let qemu_img size =
   let path = Filename.concat test_dir (string_of_int size) in
   Qemu.Img.create path size;
+  let info = Qemu.Img.info path in
+  assert_equal ~printer:string_of_int size info.Qemu.Img.virtual_size;
+  Qemu.Img.check path;
   let t =
     let module M = Qcow.Make(Block) in
     let open FromBlock in
@@ -370,8 +373,8 @@ let qemu_img size =
   or_failwith @@ Lwt_main.run t
 
 let qemu_img_suite = List.map (fun size ->
-  Printf.sprintf "check that qemu-img creates files and we can read the metadata, size = %d bytes" size >:: (fun () -> qemu_img size)
-)
+    Printf.sprintf "check that qemu-img creates files and we can read the metadata, size = %d bytes" size >:: (fun () -> qemu_img size)
+  )
 
 let _ =
   let sector_size = 512 in

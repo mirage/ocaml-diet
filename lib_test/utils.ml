@@ -52,4 +52,4 @@ let run cmd args =
   let out = read_lines oc in
   let err = read_lines ec in
   let exit_status = Unix.close_process_full (oc, ic, ec) in
-  ignore_output @@ or_failwith @@ check_exit_status cmdline (out, err) exit_status
+  or_failwith @@ check_exit_status cmdline (out, err) exit_status
