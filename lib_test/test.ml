@@ -17,6 +17,7 @@ open Sexplib.Std
 open Qcow
 open Lwt
 open OUnit
+open Utils
 
 let expect_ok = function
   | `Error _ -> failwith "IO failure"
@@ -328,6 +329,30 @@ let check_full_disk () =
     Lwt.return () in
   Lwt_main.run t
 
+(* Compare the output of this code against qemu *)
+let virtual_sizes = [
+  mib;
+  gib;
+  tib;
+]
+
+(* Create a temporary directory for our images. We want these to be
+   manually examinable afterwards, so we give images human-readable names *)
+let test_dir =
+  (* a bit racy but if we lose, the test will simply fail *)
+  let path = Filename.temp_file "ocaml-qcow" "" in
+  Unix.unlink path;
+  Unix.mkdir path 0o0755;
+  debug "Creating temporary files in %s" path;
+  path
+
+let qemu_img size =
+  Qemu.Img.create (Filename.concat test_dir (string_of_int size)) size
+
+let qemu_img_suite = List.map (fun size ->
+  "check that qemu-img creates files" >:: (fun () -> qemu_img size)
+)
+
 let _ =
   let sector_size = 512 in
   (* Test with a 1 PiB disk, bigger than we'll need for a while. *)
@@ -344,4 +369,6 @@ let _ =
       "create 1M" >:: create_1M;
       "create 1P" >:: create_1P;
     ] @ interesting_writes in
-  OUnit2.run_test_tt_main (ounit2_of_ounit1 suite)
+  OUnit2.run_test_tt_main (ounit2_of_ounit1 suite);
+  (* If no error, delete the directory *)
+  ignore(run "rm" [ "-rf"; test_dir ])
