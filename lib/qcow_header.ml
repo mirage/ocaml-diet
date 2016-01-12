@@ -70,11 +70,11 @@ end
 type offset = int64 with sexp
 
 type extension = {
- incompatible_features: int64;
- compatible_features: int64;
- autoclear_features: int64;
- refcount_order: int32;
- header_length: int32;
+  incompatible_features: int64;
+  compatible_features: int64;
+  autoclear_features: int64;
+  refcount_order: int32;
+  header_length: int32;
 } with sexp
 
 type t = {
@@ -185,8 +185,8 @@ let read rest =
   Int64.read rest
   >>= fun (snapshots_offset, rest) ->
   return ({ version; backing_file_offset; backing_file_size; cluster_bits;
-    size; crypt_method; l1_size; l1_table_offset; refcount_table_offset;
-    refcount_table_clusters; nb_snapshots; snapshots_offset }, rest)
+            size; crypt_method; l1_size; l1_table_offset; refcount_table_offset;
+            refcount_table_clusters; nb_snapshots; snapshots_offset }, rest)
 
 
 let refcounts_per_cluster t =

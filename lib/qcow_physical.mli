@@ -16,8 +16,8 @@
  *)
 
 (* TODO:
-  - represent 0L as a None
-	*)
+   - represent 0L as a None
+   	*)
 
 type t with sexp
 (** A physical address within the backing disk *)
@@ -35,7 +35,7 @@ val shift: t -> int64 -> t
 val make: ?is_mutable:bool -> ?is_compressed:bool -> int64 -> t
 (** Create an address at the given byte offset. This defaults to [is_mutable = true]
     which meand there are no snapshots implying that directly writing to this
-		offset is ok; and [is_compressed = false]. *)
+    		offset is ok; and [is_compressed = false]. *)
 
 val to_sector: sector_size:int -> t -> int64 * int
 (** Return the sector on disk, plus a remainder within the sector *)
