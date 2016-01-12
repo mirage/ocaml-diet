@@ -19,13 +19,6 @@ let debug fmt =
       Printf.fprintf stderr "%s\n%!" s
     ) fmt
 
-let check_exit_status cmd (out, err) status =
-  if out <> [] then debug "stdout: %s" (String.concat "\n" out);
-  if err <> [] then debug "stderr: %s" (String.concat "\n" err);
-  match status with
-  | Unix.WEXITED 0   -> `Ok (out, err)
-  | _ -> debug "%s failed" cmd; `Error (`Msg cmd)
-
 let read_lines oc =
   let rec aux acc =
     let line =
@@ -44,12 +37,25 @@ let or_failwith = function
 
 let ignore_output (_: (string list * string list)) = ()
 
-let run cmd args =
+type process = (in_channel * out_channel * in_channel) * string
+
+let check_exit_status cmdline = function
+  | Unix.WEXITED 0 -> `Ok ()
+  | _ -> debug "%s failed" cmdline; `Error (`Msg cmdline)
+
+let start cmd args : process =
   let args' = List.map (fun x -> "'" ^ (String.escaped x) ^ "'") args in
   let cmdline = Printf.sprintf "%s %s " cmd (String.concat " " args') in
   debug "%s" cmdline;
-  let oc, ic, ec = Unix.open_process_full cmdline (Unix.environment ()) in
+  Unix.open_process_full cmdline (Unix.environment ()), cmdline
+
+let wait ((oc, ic, ec), cmdline) =
+  let exit_status = Unix.close_process_full (oc, ic, ec) in
+  or_failwith @@ check_exit_status cmdline exit_status
+
+let run cmd args =
+  let (oc, ic, ec), cmdline = start cmd args in
   let out = read_lines oc in
   let err = read_lines ec in
-  let exit_status = Unix.close_process_full (oc, ic, ec) in
-  or_failwith @@ check_exit_status cmdline (out, err) exit_status
+  wait ((oc, ic, ec), cmdline);
+  out, err
