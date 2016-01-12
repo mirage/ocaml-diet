@@ -13,11 +13,14 @@
  * OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
  *)
+module FromBlock = Error.FromBlock
+
 open Sexplib.Std
 open Qcow
 open Lwt
 open OUnit
 open Utils
+
 
 let expect_ok = function
   | `Error _ -> failwith "IO failure"
@@ -347,10 +350,27 @@ let test_dir =
   path
 
 let qemu_img size =
-  Qemu.Img.create (Filename.concat test_dir (string_of_int size)) size
+  let path = Filename.concat test_dir (string_of_int size) in
+  Qemu.Img.create path size;
+  let t =
+    let module M = Qcow.Make(Block) in
+    let open FromBlock in
+    Block.connect path
+    >>= fun b ->
+    M.connect b
+    >>= fun qcow ->
+    let h = M.header qcow in
+    assert_equal ~printer:string_of_int size (Int64.to_int h.Qcow.Header.size);
+    let open Lwt.Infix in
+    M.disconnect qcow
+    >>= fun () ->
+    Block.disconnect b
+    >>= fun () ->
+    Lwt.return (`Ok ()) in
+  or_failwith @@ Lwt_main.run t
 
 let qemu_img_suite = List.map (fun size ->
-  "check that qemu-img creates files" >:: (fun () -> qemu_img size)
+  Printf.sprintf "check that qemu-img creates files and we can read the metadata, size = %d bytes" size >:: (fun () -> qemu_img size)
 )
 
 let _ =
