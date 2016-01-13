@@ -338,7 +338,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         ( if Physical.to_bytes addr = 0L then begin
               allocate_clusters t 1L
               >>*= fun cluster ->
-              let addr = Physical.make (cluster <| t.cluster_bits) in
+              (* NB: the pointers in the refcount table are different from the pointers
+                 in the cluster table: the high order bits are not used to encode extra
+                 information and wil confuse qemu/qemu-img. *)
+              let addr = Physical.make ~is_mutable:false (cluster <| t.cluster_bits) in
               (* zero the cluster *)
               let buf = malloc t.h in
               Cstruct.memset buf 0;
