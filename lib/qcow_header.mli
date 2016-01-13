@@ -37,7 +37,7 @@ type offset = int64
 type extension = {
   dirty: bool;
   corrupt: bool;
-  compatible_features: int64;
+  lazy_refcounts: bool;
   autoclear_features: int64;
   refcount_order: int32;
   header_length: int32;

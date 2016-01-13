@@ -72,7 +72,7 @@ type offset = int64 with sexp
 type extension = {
   dirty: bool;
   corrupt: bool;
-  compatible_features: int64;
+  lazy_refcounts: bool;
   autoclear_features: int64;
   refcount_order: int32;
   header_length: int32;
@@ -147,7 +147,13 @@ let write t rest =
       List.fold_left Int64.logor 0L bits in
     Int64.write incompatible_features rest
     >>= fun rest ->
-    Int64.write e.compatible_features rest
+    let compatible_features =
+      let open Int64 in
+      let bits = [
+        (if e.lazy_refcounts then 1L <| 0 else 0L);
+      ] in
+      List.fold_left Int64.logor 0L bits in
+    Int64.write compatible_features rest
     >>= fun rest ->
     Int64.write e.autoclear_features rest
     >>= fun rest ->
@@ -219,13 +225,14 @@ let read rest =
       ) >>= fun () ->
       Int64.read rest
       >>= fun (compatible_features, rest) ->
+      let lazy_refcounts = Int64.logand 1L (compatible_features |> 0) = 1L in
       Int64.read rest
       >>= fun (autoclear_features, rest) ->
       Int32.read rest
       >>= fun (refcount_order, rest) ->
       Int32.read rest
       >>= fun (header_length, rest) ->
-      return (Some { dirty; corrupt; compatible_features; autoclear_features;
+      return (Some { dirty; corrupt; lazy_refcounts; autoclear_features;
                 refcount_order; header_length }, rest)
   ) >>= fun (extension, rest) ->
   return ({ version; backing_file_offset; backing_file_size; cluster_bits;
