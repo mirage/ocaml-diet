@@ -81,7 +81,6 @@ type additional = {
   lazy_refcounts: bool;
   autoclear_features: int64;
   refcount_order: int32;
-  header_length: int32;
 } with sexp
 
 type t = {
@@ -175,7 +174,8 @@ let write t rest =
     >>= fun rest ->
     Int32.write e.refcount_order rest
     >>= fun rest ->
-    Int32.write e.header_length rest
+    let header_length = Int32.of_int (sizeof t) in
+    Int32.write header_length rest
 
 let read rest =
   Int8.read rest
@@ -275,7 +275,7 @@ let read rest =
       >>= fun (e, rest) ->
       let extensions = List.map parse_extension e in
       return (Some { dirty; corrupt; lazy_refcounts; autoclear_features;
-                refcount_order; header_length }, extensions, rest)
+                refcount_order }, extensions, rest)
   ) >>= fun (additional, extensions, rest) ->
   return ({ version; backing_file_offset; backing_file_size; cluster_bits;
             size; crypt_method; l1_size; l1_table_offset; refcount_table_offset;

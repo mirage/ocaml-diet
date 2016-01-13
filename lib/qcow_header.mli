@@ -46,7 +46,6 @@ type additional = {
   lazy_refcounts: bool;
   autoclear_features: int64;
   refcount_order: int32;
-  header_length: int32;
 } with sexp
 (** Version 3 and above have additional header fields *)
 
