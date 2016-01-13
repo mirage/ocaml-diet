@@ -349,43 +349,72 @@ let test_dir =
   debug "Creating temporary files in %s" path;
   path
 
-let qemu_img size =
-  let path = Filename.concat test_dir (Int64.to_string size) in
-  Qemu.Img.create path size;
+let check_file path size =
   let info = Qemu.Img.info path in
   assert_equal ~printer:Int64.to_string size info.Qemu.Img.virtual_size;
   Qemu.Img.check path;
-  let t =
-    let module M = Qcow.Make(Block) in
-    let open FromBlock in
-    Block.connect path
-    >>= fun b ->
-    M.connect b
-    >>= fun qcow ->
-    let h = M.header qcow in
-    assert_equal ~printer:Int64.to_string size h.Qcow.Header.size;
-    let open Lwt.Infix in
-    M.disconnect qcow
-    >>= fun () ->
-    Block.disconnect b
-    >>= fun () ->
-    let open FromBlock in
-    (* Check the qemu-nbd wrapper works *)
-    Qemu.Block.connect path
-    >>= fun block ->
-    let open Lwt.Infix in
-    Qemu.Block.get_info block
-    >>= fun info ->
-    let size = Int64.(mul info.Qemu.Block.size_sectors (of_int info.Qemu.Block.sector_size)) in
-    assert_equal ~printer:Int64.to_string size size;
-    Qemu.Block.disconnect block
-    >>= fun () ->
-    Lwt.return (`Ok ()) in
-  or_failwith @@ Lwt_main.run t
+  let module M = Qcow.Make(Block) in
+  let open FromBlock in
+  Block.connect path
+  >>= fun b ->
+  M.connect b
+  >>= fun qcow ->
+  let h = M.header qcow in
+  assert_equal ~printer:Int64.to_string size h.Qcow.Header.size;
+  let open Lwt.Infix in
+  M.disconnect qcow
+  >>= fun () ->
+  Block.disconnect b
+  >>= fun () ->
+  let open FromBlock in
+  (* Check the qemu-nbd wrapper works *)
+  Qemu.Block.connect path
+  >>= fun block ->
+  let open Lwt.Infix in
+  Qemu.Block.get_info block
+  >>= fun info ->
+  let size = Int64.(mul info.Qemu.Block.size_sectors (of_int info.Qemu.Block.sector_size)) in
+  assert_equal ~printer:Int64.to_string size size;
+  Qemu.Block.disconnect block
+  >>= fun () ->
+  Lwt.return (`Ok ())
+
+let qemu_img size =
+  let path = Filename.concat test_dir (Int64.to_string size) in
+  Qemu.Img.create path size;
+  or_failwith @@ Lwt_main.run @@ check_file path size
 
 let qemu_img_suite =
   List.map (fun size ->
       Printf.sprintf "check that qemu-img creates files and we can read the metadata, size = %Ld bytes" size >:: (fun () -> qemu_img size)
+    ) virtual_sizes
+
+let qcow_tool size =
+  let open Lwt.Infix in
+  let module B = Qcow.Make(Block) in
+  let path = Filename.concat test_dir (Int64.to_string size) in
+
+  let t =
+    Lwt_unix.openfile path [ Unix.O_CREAT ] 0o0644
+    >>= fun fd ->
+    Lwt_unix.close fd
+    >>= fun () ->
+    let open FromBlock in
+    Block.connect path
+    >>= fun block ->
+    B.create block size
+    >>= fun qcow ->
+    let open Lwt.Infix in
+    B.disconnect qcow
+    >>= fun () ->
+    Block.disconnect block
+    >>= fun () ->
+    check_file path size in
+  or_failwith @@ Lwt_main.run t
+
+let qcow_tool_suite =
+  List.map (fun size ->
+      Printf.sprintf "check that qcow-tool creates files and we can read the metadata, size = %Ld bytes" size >:: (fun () -> qcow_tool size)
     ) virtual_sizes
 
 let _ =
@@ -403,7 +432,7 @@ let _ =
       "create 1K" >:: create_1K;
       "create 1M" >:: create_1M;
       "create 1P" >:: create_1P;
-    ] @ interesting_writes @ qemu_img_suite in
+    ] @ interesting_writes @ qemu_img_suite @ qcow_tool_suite in
   OUnit2.run_test_tt_main (ounit2_of_ounit1 suite);
   (* If no error, delete the directory *)
   ignore(run "rm" [ "-rf"; test_dir ])

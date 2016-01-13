@@ -92,9 +92,9 @@ module Img = struct
     cluster_size: int;
     actual_size: int;
     compat: string;
-    lazy_refcounts: bool;
+    lazy_refcounts: bool option;
     refcount_bits: int;
-    corrupt: bool;
+    corrupt: bool option;
     dirty_flag: bool;
   }
 
@@ -116,9 +116,9 @@ module Img = struct
     if ty <> "qcow2" then failwith (Printf.sprintf "Expected qcow2 type, got %s" ty);
     let data = Ezjsonm.get_dict @@ find "data" specific in
     let compat = Ezjsonm.get_string @@ find "compat" data in
-    let lazy_refcounts = Ezjsonm.get_bool @@ find "lazy-refcounts" data in
+    let lazy_refcounts = try Some (Ezjsonm.get_bool @@ find "lazy-refcounts" data) with _ -> None in
     let refcount_bits = Ezjsonm.get_int @@ find "refcount-bits" data in
-    let corrupt = Ezjsonm.get_bool @@ find "corrupt" data in
+    let corrupt = try Some (Ezjsonm.get_bool @@ find "corrupt" data) with _ -> None in
     let dirty_flag = Ezjsonm.get_bool @@ find "dirty-flag" json in
     { virtual_size; filename; cluster_size; actual_size; compat;
       lazy_refcounts; refcount_bits; corrupt; dirty_flag }
