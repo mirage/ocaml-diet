@@ -35,7 +35,8 @@ type offset = int64
 (** Offset within the image *)
 
 type extension = {
-  incompatible_features: int64;
+  dirty: bool;
+  corrupt: bool;
   compatible_features: int64;
   autoclear_features: int64;
   refcount_order: int32;

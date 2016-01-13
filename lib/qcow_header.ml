@@ -70,7 +70,8 @@ end
 type offset = int64 with sexp
 
 type extension = {
-  incompatible_features: int64;
+  dirty: bool;
+  corrupt: bool;
   compatible_features: int64;
   autoclear_features: int64;
   refcount_order: int32;
@@ -137,7 +138,14 @@ let write t rest =
   match t.extension with
   | None -> return rest
   | Some e ->
-    Int64.write e.incompatible_features rest
+    let incompatible_features =
+      let open Int64 in
+      let bits = [
+        (if e.dirty then 1L <| 0 else 0L);
+        (if e.corrupt then 1L <| 1 else 0L);
+      ] in
+      List.fold_left Int64.logor 0L bits in
+    Int64.write incompatible_features rest
     >>= fun rest ->
     Int64.write e.compatible_features rest
     >>= fun rest ->
@@ -203,6 +211,12 @@ let read rest =
     | _ ->
       Int64.read rest
       >>= fun (incompatible_features, rest) ->
+      let dirty = Int64.logand 1L (incompatible_features |> 0) = 1L in
+      let corrupt = Int64.logand 1L (incompatible_features |> 1) = 1L in
+      ( if incompatible_features |> 2 <> 0L
+        then error_msg "unknown incompatible_features set: 0x%Lx" incompatible_features
+        else return ()
+      ) >>= fun () ->
       Int64.read rest
       >>= fun (compatible_features, rest) ->
       Int64.read rest
@@ -211,7 +225,7 @@ let read rest =
       >>= fun (refcount_order, rest) ->
       Int32.read rest
       >>= fun (header_length, rest) ->
-      return (Some { incompatible_features; compatible_features; autoclear_features;
+      return (Some { dirty; corrupt; compatible_features; autoclear_features;
                 refcount_order; header_length }, rest)
   ) >>= fun (extension, rest) ->
   return ({ version; backing_file_offset; backing_file_size; cluster_bits;
