@@ -90,6 +90,7 @@ type t = {
   refcount_table_clusters: int32;
   nb_snapshots: int32;
   snapshots_offset: offset;
+  extension: extension option;
 } with sexp
 
 let compare (a: t) (b: t) = compare a b
@@ -132,6 +133,19 @@ let write t rest =
   Int32.write t.nb_snapshots rest
   >>= fun rest ->
   Int64.write t.snapshots_offset rest
+  >>= fun rest ->
+  match t.extension with
+  | None -> return rest
+  | Some e ->
+    Int64.write e.incompatible_features rest
+    >>= fun rest ->
+    Int64.write e.compatible_features rest
+    >>= fun rest ->
+    Int64.write e.autoclear_features rest
+    >>= fun rest ->
+    Int32.write e.refcount_order rest
+    >>= fun rest ->
+    Int32.write e.header_length rest
 
 let read rest =
   big_enough_for "Header" rest (sizeof ())
@@ -184,9 +198,25 @@ let read rest =
   >>= fun (nb_snapshots, rest) ->
   Int64.read rest
   >>= fun (snapshots_offset, rest) ->
+  (match version with
+    | `One | `Two -> return (None, rest)
+    | _ ->
+      Int64.read rest
+      >>= fun (incompatible_features, rest) ->
+      Int64.read rest
+      >>= fun (compatible_features, rest) ->
+      Int64.read rest
+      >>= fun (autoclear_features, rest) ->
+      Int32.read rest
+      >>= fun (refcount_order, rest) ->
+      Int32.read rest
+      >>= fun (header_length, rest) ->
+      return (Some { incompatible_features; compatible_features; autoclear_features;
+                refcount_order; header_length }, rest)
+  ) >>= fun (extension, rest) ->
   return ({ version; backing_file_offset; backing_file_size; cluster_bits;
             size; crypt_method; l1_size; l1_table_offset; refcount_table_offset;
-            refcount_table_clusters; nb_snapshots; snapshots_offset }, rest)
+            refcount_table_clusters; nb_snapshots; snapshots_offset; extension }, rest)
 
 
 let refcounts_per_cluster t =
