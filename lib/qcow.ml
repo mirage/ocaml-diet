@@ -688,7 +688,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     else update_header t { t.h with Header.l1_size = Int64.to_int32 l2_tables_required }
 
   let create base size =
-    let version = `Two in
+    let version = `Three in
     let backing_file_offset = 0L in
     let backing_file_size = 0l in
     let cluster_bits = 16 in
@@ -704,7 +704,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let l2_tables_required = Header.l2_tables_required ~cluster_bits size in
     let nb_snapshots = 0l in
     let snapshots_offset = 0L in
-    let additional = None in
+    let additional = Some {
+      Header.dirty = true;
+      corrupt = false;
+      lazy_refcounts = true;
+      autoclear_features = 0L;
+      refcount_order = 4l;
+      } in
     let extensions = [] in
     let h = {
       Header.version; backing_file_offset; backing_file_size;
