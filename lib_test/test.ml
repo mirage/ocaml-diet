@@ -59,6 +59,7 @@ let create_1K () =
     crypt_method = `None; l1_size = 1l; l1_table_offset = 131072L;
     refcount_table_offset = 65536L; refcount_table_clusters = 1l;
     nb_snapshots = 0l; snapshots_offset = 0L; additional = None;
+    extensions = [];
   } in
   let cmp a b = Qcow.Header.compare a b = 0 in
   let printer = Qcow.Header.to_string in
@@ -72,6 +73,7 @@ let create_1M () =
     crypt_method = `None; l1_size = 1l; l1_table_offset = 131072L;
     refcount_table_offset = 65536L; refcount_table_clusters = 1l;
     nb_snapshots = 0l; snapshots_offset = 0L; additional = None;
+    extensions = [];
   } in
   let cmp a b = Qcow.Header.compare a b = 0 in
   let printer = Qcow.Header.to_string in
@@ -90,6 +92,7 @@ let create_1P () =
     crypt_method = `None; l1_size = 2097152l; l1_table_offset = 131072L;
     refcount_table_offset = 65536L; refcount_table_clusters = 1l;
     nb_snapshots = 0l; snapshots_offset = 0L; additional = None;
+    extensions = [];
   } in
   let cmp a b = Qcow.Header.compare a b = 0 in
   let printer = Qcow.Header.to_string in

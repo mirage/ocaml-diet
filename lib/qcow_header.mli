@@ -34,6 +34,12 @@ end
 type offset = int64
 (** Offset within the image *)
 
+type extension = [
+  | `Unknown of int32 * string
+  | `Backing_file of string
+  | `Feature_name_table of string
+] with sexp
+
 type additional = {
   dirty: bool;
   corrupt: bool;
@@ -42,6 +48,7 @@ type additional = {
   refcount_order: int32;
   header_length: int32;
 } with sexp
+(** Version 3 and above have additional header fields *)
 
 type t = {
   version: Version.t;
@@ -56,7 +63,8 @@ type t = {
   refcount_table_clusters: int32; (** size of the refcount table in clusters *)
   nb_snapshots: int32;            (** the number of internal snapshots *)
   snapshots_offset: offset;       (** offset of the snapshot header *)
-  additional: additional option;    (** for version 3 or higher *)
+  additional: additional option;  (** for version 3 or higher *)
+  extensions: extension list;     (** for version 3 or higher *)
 } with sexp
 (** The qcow2 header *)
 

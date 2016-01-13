@@ -69,6 +69,12 @@ end
 
 type offset = int64 with sexp
 
+type extension = [
+  | `Unknown of int32 * string
+  | `Backing_file of string
+  | `Feature_name_table of string
+] with sexp
+
 type additional = {
   dirty: bool;
   corrupt: bool;
@@ -92,6 +98,7 @@ type t = {
   nb_snapshots: int32;
   snapshots_offset: offset;
   additional: additional option;
+  extensions: extension list;
 } with sexp
 
 let compare (a: t) (b: t) = compare a b
@@ -213,7 +220,7 @@ let read rest =
   Int64.read rest
   >>= fun (snapshots_offset, rest) ->
   (match version with
-    | `One | `Two -> return (None, rest)
+    | `One | `Two -> return (None, [], rest)
     | _ ->
       Int64.read rest
       >>= fun (incompatible_features, rest) ->
@@ -236,12 +243,38 @@ let read rest =
       >>= fun (refcount_order, rest) ->
       Int32.read rest
       >>= fun (header_length, rest) ->
+      let remaining_bytes = Int32.to_int header_length - (sizeof ()) in
+      let rec read_lowlevel rest =
+        Int32.read rest
+        >>= fun (kind, rest) ->
+        if kind = 0l
+        then return ([], rest)
+        else begin
+          Int32.read rest
+          >>= fun (len, rest) ->
+          let len = Int32.to_int len in
+          let payload = Cstruct.sub rest 0 len in
+          let rest = Cstruct.shift rest len in
+          let padding_length = if len mod 8 = 0 then 0 else 8 - (len mod 8) in
+          let rest = Cstruct.shift rest padding_length in
+          read_lowlevel rest
+          >>= fun (extensions, rest) ->
+          return ((kind, payload) :: extensions, rest)
+        end in
+      let parse_extension (kind, payload) = match kind with
+        | 0xE2792ACAl -> `Backing_file (Cstruct.to_string payload)
+        | 0x6803f857l -> `Feature_name_table (Cstruct.to_string payload)
+        | _ -> `Unknown (kind, Cstruct.to_string payload) in
+      read_lowlevel rest
+      >>= fun (e, rest) ->
+      let extensions = List.map parse_extension e in
       return (Some { dirty; corrupt; lazy_refcounts; autoclear_features;
-                refcount_order; header_length }, rest)
-  ) >>= fun (additional, rest) ->
+                refcount_order; header_length }, extensions, rest)
+  ) >>= fun (additional, extensions, rest) ->
   return ({ version; backing_file_offset; backing_file_size; cluster_bits;
             size; crypt_method; l1_size; l1_table_offset; refcount_table_offset;
-            refcount_table_clusters; nb_snapshots; snapshots_offset; additional }, rest)
+            refcount_table_clusters; nb_snapshots; snapshots_offset; additional;
+            extensions }, rest)
 
 
 let refcounts_per_cluster t =
