@@ -69,7 +69,7 @@ end
 
 type offset = int64 with sexp
 
-type extension = {
+type additional = {
   dirty: bool;
   corrupt: bool;
   lazy_refcounts: bool;
@@ -91,7 +91,7 @@ type t = {
   refcount_table_clusters: int32;
   nb_snapshots: int32;
   snapshots_offset: offset;
-  extension: extension option;
+  additional: additional option;
 } with sexp
 
 let compare (a: t) (b: t) = compare a b
@@ -135,7 +135,7 @@ let write t rest =
   >>= fun rest ->
   Int64.write t.snapshots_offset rest
   >>= fun rest ->
-  match t.extension with
+  match t.additional with
   | None -> return rest
   | Some e ->
     let incompatible_features =
@@ -238,10 +238,10 @@ let read rest =
       >>= fun (header_length, rest) ->
       return (Some { dirty; corrupt; lazy_refcounts; autoclear_features;
                 refcount_order; header_length }, rest)
-  ) >>= fun (extension, rest) ->
+  ) >>= fun (additional, rest) ->
   return ({ version; backing_file_offset; backing_file_size; cluster_bits;
             size; crypt_method; l1_size; l1_table_offset; refcount_table_offset;
-            refcount_table_clusters; nb_snapshots; snapshots_offset; extension }, rest)
+            refcount_table_clusters; nb_snapshots; snapshots_offset; additional }, rest)
 
 
 let refcounts_per_cluster t =

@@ -704,14 +704,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let l2_tables_required = Header.l2_tables_required ~cluster_bits size in
     let nb_snapshots = 0l in
     let snapshots_offset = 0L in
-    let extension = None in
+    let additional = None in
     let h = {
       Header.version; backing_file_offset; backing_file_size;
       cluster_bits = Int32.of_int cluster_bits; size; crypt_method;
       l1_size = Int64.to_int32 l2_tables_required;
       l1_table_offset; refcount_table_offset;
       refcount_table_clusters = Int64.to_int32 refcount_table_clusters;
-      nb_snapshots; snapshots_offset; extension
+      nb_snapshots; snapshots_offset; additional;
     } in
     (* Resize the underlying device to contain the header + refcount table
        + l1 table. Future allocations will enlarge the file. *)

@@ -34,7 +34,7 @@ end
 type offset = int64
 (** Offset within the image *)
 
-type extension = {
+type additional = {
   dirty: bool;
   corrupt: bool;
   lazy_refcounts: bool;
@@ -56,7 +56,7 @@ type t = {
   refcount_table_clusters: int32; (** size of the refcount table in clusters *)
   nb_snapshots: int32;            (** the number of internal snapshots *)
   snapshots_offset: offset;       (** offset of the snapshot header *)
-  extension: extension option;    (** for version 3 or higher *)
+  additional: additional option;    (** for version 3 or higher *)
 } with sexp
 (** The qcow2 header *)
 
