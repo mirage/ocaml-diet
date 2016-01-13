@@ -228,6 +228,10 @@ let read rest =
       let lazy_refcounts = Int64.logand 1L (compatible_features |> 0) = 1L in
       Int64.read rest
       >>= fun (autoclear_features, rest) ->
+      ( if autoclear_features <> 0L
+        then error_msg "dealing with autoclear_features not implemented"
+        else return ()
+      ) >>= fun () ->
       Int32.read rest
       >>= fun (refcount_order, rest) ->
       Int32.read rest
