@@ -19,10 +19,28 @@
 open Utils
 
 module Block = struct
+
+  type info = {
+    read_write: bool;
+    sector_size: int;
+    size_sectors: int64;
+  }
+
   type t = {
     server: process;
-    channel: Nbd.Channel.channel;
+    client: Nbd_lwt_unix.Client.t;
+    info: info;
   }
+
+  let get_info { info } = Lwt.return info
+
+  type id = unit
+  type 'a io = 'a Lwt.t
+  type page_aligned_buffer = Cstruct.t
+  type error = Mirage_block.Error.error
+
+  let read { client } = Nbd_lwt_unix.Client.read client
+  let write { client } = Nbd_lwt_unix.Client.write client
 
   let connect file =
     let open Lwt.Infix in
@@ -43,9 +61,18 @@ module Block = struct
     connect ()
     >>= fun s ->
     let channel = Nbd_lwt_unix.of_fd s in
-    Lwt.return (`Ok { server; channel })
+    Nbd_lwt_unix.Client.negotiate channel ""
+    >>= fun (client, size, flags) ->
+    let read_write = not(List.mem Nbd.Protocol.PerExportFlag.Read_only flags) in
+    let sector_size = 512 in
+    let size_sectors = Int64.(div size (of_int sector_size)) in
+    let info = { read_write; sector_size; size_sectors } in
+    Lwt.return (`Ok { server; client; info })
 
-  let disconnect { server } =
+  let disconnect { server; client } =
+    let open Lwt.Infix in
+    Nbd_lwt_unix.Client.disconnect client
+    >>= fun () ->
     signal server Sys.sigterm;
     wait server;
     Lwt.return ()

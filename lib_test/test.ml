@@ -374,6 +374,10 @@ let qemu_img size =
     Qemu.Block.connect path
     >>= fun block ->
     let open Lwt.Infix in
+    Qemu.Block.get_info block
+    >>= fun info ->
+    let size = Int64.(mul info.Qemu.Block.size_sectors (of_int info.Qemu.Block.sector_size)) in
+    assert_equal ~printer:Int64.to_string size size;
     Qemu.Block.disconnect block
     >>= fun () ->
     Lwt.return (`Ok ()) in
