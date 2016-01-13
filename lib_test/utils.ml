@@ -56,11 +56,18 @@ let start cmd args : process =
   let ec = Unix.in_channel_of_descr stderr_r in
   pid, (oc, ic, ec), Printf.sprintf "%s %s" cmd (String.concat " " args)
 
+let signal (pid, _, _) s = Unix.kill pid s
+
 let wait (pid, (oc, ic, ec), cmdline) =
   close_out ic;
   close_in oc;
   close_in ec;
-  let _, exit_status = Unix.waitpid [] pid in
+  let _, exit_status =
+    let rec loop () =
+      try
+        Unix.waitpid [] pid
+      with Unix.Unix_error(Unix.EINTR, _, _) -> loop () in
+    loop () in
   or_failwith @@ check_exit_status cmdline exit_status
 
 let run cmd args =

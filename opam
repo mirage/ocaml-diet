@@ -35,6 +35,7 @@ depends: [
   "ounit" {test}
   "mirage-block-ramdisk" {test}
   "ezjsonm" {test}
+  "nbd" {>= "2.0.0"} {test}
 ]
 build-doc: ["ocaml" "setup.ml" "-doc"]
 

@@ -21,13 +21,34 @@ open Utils
 module Block = struct
   type t = {
     server: process;
+    channel: Nbd.Channel.channel;
   }
 
   let connect file =
+    let open Lwt.Infix in
     let socket = Filename.(concat (get_temp_dir_name()) "qcow.socket") in
     (try Unix.unlink socket with Unix.Unix_error(Unix.ENOENT, _, _) -> ());
     let server = start "qemu-nbd" [ "--socket"; socket; "-f"; "qcow2"; file] in
-    Lwt.return (`Ok { server })
+    let rec connect () =
+      let s = Lwt_unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+      Lwt.catch
+        (fun () ->
+          Lwt_unix.connect s (Unix.ADDR_UNIX socket)
+          >>= fun () ->
+          Lwt.return s)
+        (fun _ ->
+          Lwt_unix.sleep 0.1
+          >>= fun () ->
+          connect ()) in
+    connect ()
+    >>= fun s ->
+    let channel = Nbd_lwt_unix.of_fd s in
+    Lwt.return (`Ok { server; channel })
+
+  let disconnect { server } =
+    signal server Sys.sigterm;
+    wait server;
+    Lwt.return ()
 
 end
 

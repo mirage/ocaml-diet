@@ -369,6 +369,13 @@ let qemu_img size =
     >>= fun () ->
     Block.disconnect b
     >>= fun () ->
+    let open FromBlock in
+    (* Check the qemu-nbd wrapper works *)
+    Qemu.Block.connect path
+    >>= fun block ->
+    let open Lwt.Infix in
+    Qemu.Block.disconnect block
+    >>= fun () ->
     Lwt.return (`Ok ()) in
   or_failwith @@ Lwt_main.run t
 
