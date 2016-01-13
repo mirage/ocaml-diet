@@ -227,7 +227,7 @@ let read rest =
   Int64.read rest
   >>= fun (snapshots_offset, rest) ->
   (match version with
-    | `One | `Two -> return (None, [], rest)
+    | `One | `Two -> return (None, [], 72, rest)
     | _ ->
       Int64.read rest
       >>= fun (incompatible_features, rest) ->
@@ -274,13 +274,17 @@ let read rest =
       read_lowlevel rest
       >>= fun (e, rest) ->
       let extensions = List.map parse_extension e in
+      let header_length = Int32.to_int header_length in
       return (Some { dirty; corrupt; lazy_refcounts; autoclear_features;
-                refcount_order }, extensions, rest)
-  ) >>= fun (additional, extensions, rest) ->
-  return ({ version; backing_file_offset; backing_file_size; cluster_bits;
+                refcount_order }, extensions, header_length, rest)
+  ) >>= fun (additional, extensions, header_length, rest) ->
+  let t = { version; backing_file_offset; backing_file_size; cluster_bits;
             size; crypt_method; l1_size; l1_table_offset; refcount_table_offset;
             refcount_table_clusters; nb_snapshots; snapshots_offset; additional;
-            extensions }, rest)
+            extensions } in
+  if sizeof t <> header_length
+  then error_msg "Read a header_length of %d but we computed %d" header_length (sizeof t)
+  else return (t, rest)
 
 
 let refcounts_per_cluster t =
