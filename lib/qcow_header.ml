@@ -105,7 +105,16 @@ let compare (a: t) (b: t) = compare a b
 
 let to_string t = Sexplib.Sexp.to_string_hum (sexp_of_t t)
 
-let sizeof _ = 4 + 4 + 8 + 4 + 4 + 8 + 4 + 4 + 8 + 8 + 4 + 4 + 8
+let sizeof t =
+  let base = 4 + 4 + 8 + 4 + 4 + 8 + 4 + 4 + 8 + 8 + 4 + 4 + 8 in
+  let additional = match t.additional with None -> 0 | Some _ -> 8 + 8 + 8 + 4 + 4 in
+  let unpadded_sizeof_extension = function
+    | `Unknown (_, data)
+    | `Backing_file data
+    | `Feature_name_table data -> 4 + 4 + (String.length data) in
+  let pad_to_8 x = if x mod 8 = 0 then x else x + (8 - (x mod 8)) in
+  let extensions = List.(fold_left (+) 0 (map (fun x -> pad_to_8 @@ unpadded_sizeof_extension x) t.extensions)) in
+  base + additional + extensions
 
 let write t rest =
   big_enough_for "Header" rest (sizeof t)
@@ -169,8 +178,6 @@ let write t rest =
     Int32.write e.header_length rest
 
 let read rest =
-  big_enough_for "Header" rest (sizeof ())
-  >>= fun () ->
   Int8.read rest
   >>= fun (x, rest) ->
   ( if char_of_int x = 'Q'
@@ -243,7 +250,6 @@ let read rest =
       >>= fun (refcount_order, rest) ->
       Int32.read rest
       >>= fun (header_length, rest) ->
-      let remaining_bytes = Int32.to_int header_length - (sizeof ()) in
       let rec read_lowlevel rest =
         Int32.read rest
         >>= fun (kind, rest) ->
