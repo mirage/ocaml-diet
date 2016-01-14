@@ -9,4 +9,4 @@ env:
   global:
     - PACKAGE="qcow-format" OCAML_VERSION=4.02
     - COV_CONF="export TESTS=--enable-tests"
-    - PRE_INSTALL_HOOK="sudo apt-get install qemu-utils"
+    - PRE_INSTALL_HOOK="sudo apt-get install qemu-utils -y"
