@@ -6,6 +6,6 @@ script: bash -ex .travis-opam.sh
 sudo: required
 env:
   global:
-    - PACKAGE="qcow-format" OCAML_VERSION=4.02 PINS="nbd:git://github.com/xapi-project/nbd"
+    - PACKAGE="qcow-format" OCAML_VERSION=4.02
     - COV_CONF="export TESTS=--enable-tests"
     - PRE_INSTALL_HOOK="sudo apt-get install qemu-utils"
