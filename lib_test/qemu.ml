@@ -106,6 +106,8 @@ module Block = struct
         (fun _ ->
           Lwt_unix.sleep 0.1
           >>= fun () ->
+          Lwt_unix.close s
+          >>= fun () ->
           connect ()) in
     connect ()
     >>= fun s ->
