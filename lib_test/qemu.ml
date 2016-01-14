@@ -74,6 +74,7 @@ module Block = struct
   type t = {
     server: process;
     client: Nbd_lwt_unix.Client.t;
+    s: Lwt_unix.file_descr;
     info: info;
   }
 
@@ -118,15 +119,17 @@ module Block = struct
     let sector_size = 512 in
     let size_sectors = Int64.(div size (of_int sector_size)) in
     let info = { read_write; sector_size; size_sectors } in
-    Lwt.return (`Ok { server; client; info })
+    Lwt.return (`Ok { server; client; s; info })
 
   let create file size =
     Img.create file size;
     connect file
 
-  let disconnect { server; client } =
+  let disconnect { server; client; s } =
     let open Lwt.Infix in
     Nbd_lwt_unix.Client.disconnect client
+    >>= fun () ->
+    Lwt_unix.close s
     >>= fun () ->
     signal server Sys.sigterm;
     wait server;
