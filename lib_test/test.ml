@@ -159,6 +159,8 @@ let read_write sector_size size_sectors (start, length) () =
     let cmp a b = Cstruct.compare a b = 0 in
     assert_equal ~printer:(fun x -> String.escaped (Cstruct.to_string x)) ~cmp buf buf';
 
+    Qemu.Img.check path;
+
     (* This is the range that we expect to see written *)
     let expected = { Extent.start = sector; length = Int64.(div (of_int length) 512L) } in
     let ofs' = Int64.(mul sector (of_int sector_size)) in
