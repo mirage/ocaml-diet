@@ -242,13 +242,7 @@ let write_read_qemu sector_size size_sectors (start, length) () =
     >>= fun () ->
     Qemu.Img.check path;
     check_file_contents path id sector_size size_sectors (start, length) () in
-  try
     or_failwith @@ Lwt_main.run t
-  with e ->
-    Printf.fprintf stderr "STOP %s\n%!" (Printexc.to_string e);
-    Printexc.print_backtrace stderr;
-    Printf.fprintf stderr "%s\n%!" path;
-    exit 1
 
 let check_refcount_table_allocation () =
   let module B = Qcow.Make(Ramdisk) in
