@@ -42,6 +42,8 @@ type process = int * (in_channel * out_channel * in_channel) * string
 let check_exit_status cmdline = function
   | Unix.WEXITED 0 -> `Ok ()
   | Unix.WEXITED n -> debug "%s failed" cmdline; `Error (`Msg (cmdline ^ ": " ^ (string_of_int n)))
+  | Unix.WSIGNALED n -> debug "%s killed by signal %d" cmdline n; `Error (`Msg (cmdline ^ " killed by signal %d" ^ (string_of_int n)))
+  | Unix.WSTOPPED n -> debug "%s stopped by signal %d" cmdline n; `Error (`Msg (cmdline ^ " stopped by signal %d" ^ (string_of_int n)))
 
 let start cmd args : process =
   let stdin_r, stdin_w = Unix.pipe () in
