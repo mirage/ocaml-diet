@@ -23,20 +23,41 @@ open OUnit
 open Utils
 open Sizes
 
+let truncate path =
+  Lwt_unix.openfile path [ Unix.O_CREAT ] 0o0644
+  >>= fun fd ->
+  Lwt_unix.close fd
+
+(* Create a temporary directory for our images. We want these to be
+   manually examinable afterwards, so we give images human-readable names *)
+let test_dir =
+  (* a bit racy but if we lose, the test will simply fail *)
+  let path = Filename.temp_file "ocaml-qcow" "" in
+  Unix.unlink path;
+  Unix.mkdir path 0o0755;
+  debug "Creating temporary files in %s" path;
+  path
+
 (* qemu-img will set version = `Three and leave an extra cluster
    presumably for extension headers *)
 
 let read_write_header name size =
-  let module B = Qcow.Make(Ramdisk) in
+  let module B = Qcow.Make(Block) in
+  let path = Filename.concat test_dir (Printf.sprintf "%s.%Ld" name size) in
+
   let t =
+    truncate path
+    >>= fun () ->
     let open FromBlock in
-    Ramdisk.connect name
-    >>= fun ramdisk ->
-    B.create ramdisk size
+    Block.connect path
+    >>= fun raw ->
+    B.create raw size
     >>= fun b ->
 
+    Qemu.Img.check path;
+
     let page = Io_page.(to_cstruct (get 1)) in
-    Ramdisk.read ramdisk 0L [ page ]
+    Block.read raw 0L [ page ]
     >>= fun () ->
     let open FromResult in
     Qcow.Header.read page
@@ -226,16 +247,6 @@ let virtual_sizes = [
   tib;
 ]
 
-(* Create a temporary directory for our images. We want these to be
-   manually examinable afterwards, so we give images human-readable names *)
-let test_dir =
-  (* a bit racy but if we lose, the test will simply fail *)
-  let path = Filename.temp_file "ocaml-qcow" "" in
-  Unix.unlink path;
-  Unix.mkdir path 0o0755;
-  debug "Creating temporary files in %s" path;
-  path
-
 let check_file path size =
   let info = Qemu.Img.info path in
   assert_equal ~printer:Int64.to_string size info.Qemu.Img.virtual_size;
@@ -276,15 +287,14 @@ let qemu_img_suite =
       Printf.sprintf "check that qemu-img creates files and we can read the metadata, size = %Ld bytes" size >:: (fun () -> qemu_img size)
     ) virtual_sizes
 
+
 let qcow_tool size =
   let open Lwt.Infix in
   let module B = Qcow.Make(Block) in
   let path = Filename.concat test_dir (Int64.to_string size) in
 
   let t =
-    Lwt_unix.openfile path [ Unix.O_CREAT ] 0o0644
-    >>= fun fd ->
-    Lwt_unix.close fd
+    truncate path
     >>= fun () ->
     let open FromBlock in
     Block.connect path
