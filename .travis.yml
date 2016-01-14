@@ -4,6 +4,7 @@ install:
   - wget https://raw.githubusercontent.com/simonjbeaumont/ocaml-travis-coveralls/master/travis-coveralls.sh
 script: bash -ex .travis-opam.sh
 sudo: required
+dist: trusty
 env:
   global:
     - PACKAGE="qcow-format" OCAML_VERSION=4.02
