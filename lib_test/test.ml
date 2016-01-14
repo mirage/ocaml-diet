@@ -135,33 +135,46 @@ let rec fragment into remaining =
     this :: (fragment into rest)
 
 let read_write sector_size size_sectors (start, length) () =
-  let module B = Qcow.Make(Block) in
+  let module RawReader = Block in
+  let module Reader = Qcow.Make(RawReader) in
+  let module RawWriter = Block in
+  let module Writer = Qcow.Make(RawWriter) in
   let path = Filename.concat test_dir (Printf.sprintf "%Ld.%Ld.%d" size_sectors start length) in
 
   let t =
     truncate path
     >>= fun () ->
     let open FromBlock in
-    Block.connect path
+    RawWriter.connect path
     >>= fun raw ->
-    B.create raw Int64.(mul size_sectors (of_int sector_size))
+    Writer.create raw Int64.(mul size_sectors (of_int sector_size))
     >>= fun b ->
 
     let sector = Int64.div start 512L in
     let id = get_id () in
     let buf = malloc length in
     Cstruct.memset buf (id mod 256);
-    B.write b sector (fragment 4096 buf)
+    Writer.write b sector (fragment 4096 buf)
     >>= fun () ->
     let buf' = malloc length in
-    B.read b sector (fragment 4096 buf')
+    Writer.read b sector (fragment 4096 buf')
     >>= fun () ->
     let cmp a b = Cstruct.compare a b = 0 in
     assert_equal ~printer:(fun x -> String.escaped (Cstruct.to_string x)) ~cmp buf buf';
+    let open Lwt.Infix in
+    Writer.disconnect b
+    >>= fun () ->
+    RawWriter.disconnect raw
+    >>= fun () ->
 
     Qemu.Img.check path;
 
     (* This is the range that we expect to see written *)
+    let open FromBlock in
+    RawReader.connect path
+    >>= fun raw ->
+    Reader.connect raw
+    >>= fun b ->
     let expected = { Extent.start = sector; length = Int64.(div (of_int length) 512L) } in
     let ofs' = Int64.(mul sector (of_int sector_size)) in
     Mirage_block.fold_mapped_s
@@ -186,15 +199,15 @@ let read_write sector_size size_sectors (start, length) () =
             ) common;
           let seen_this_time = 512 * List.(fold_left (+) 0 (map (fun e -> Int64.to_int e.Extent.length) common)) in
           return (`Ok (bytes_seen + seen_this_time))
-        ) 0 (module B) b
+        ) 0 (module Reader) b
     >>= fun total_bytes_seen ->
     assert_equal ~printer:string_of_int length total_bytes_seen;
-    B.Debug.check_no_overlaps b
+    Reader.Debug.check_no_overlaps b
     >>= fun () ->
     let open Lwt.Infix in
-    B.disconnect b
+    Reader.disconnect b
     >>= fun () ->
-    Block.disconnect raw
+    RawReader.disconnect raw
     >>= fun () ->
     Lwt.return (`Ok ()) in
   or_failwith @@ Lwt_main.run t
