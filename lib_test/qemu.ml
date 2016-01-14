@@ -84,8 +84,11 @@ module Block = struct
   type page_aligned_buffer = Cstruct.t
   type error = Mirage_block.Error.error
 
-  let read { client } = Nbd_lwt_unix.Client.read client
-  let write { client } = Nbd_lwt_unix.Client.write client
+  let read { client } sector bufs =
+    Nbd_lwt_unix.Client.read client (Int64.mul sector 512L) bufs
+
+  let write { client } sector bufs =
+    Nbd_lwt_unix.Client.write client (Int64.mul sector 512L) bufs
 
   let connect file =
     let open Lwt.Infix in
@@ -109,6 +112,9 @@ module Block = struct
     Nbd_lwt_unix.Client.negotiate channel ""
     >>= fun (client, size, flags) ->
     let read_write = not(List.mem Nbd.Protocol.PerExportFlag.Read_only flags) in
+    Nbd_lwt_unix.Client.get_info client
+    >>= function { sector_size } ->
+    assert (sector_size == 1);
     let sector_size = 512 in
     let size_sectors = Int64.(div size (of_int sector_size)) in
     let info = { read_write; sector_size; size_sectors } in
