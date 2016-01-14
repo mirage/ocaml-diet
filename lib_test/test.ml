@@ -169,64 +169,6 @@ let rec fragment into remaining =
     let rest = Cstruct.shift remaining into in
     this :: (fragment into rest)
 
-module Extent = struct
-  open Int64
-
-  type t = {
-    start: int64;
-    length: int64;
-  } with sexp
-  type ts = t list with sexp
-
-  let to_string t = Sexplib.Sexp.to_string_hum (sexp_of_ts t)
-
-  type overlap =
-    | AABB
-    | BBAA
-    | BABA
-    | BAAB
-    | ABBA
-    | ABAB
-  with sexp
-
-  let classify ({ start = a_start; length = a_length } as a) ({ start = b_start; length = b_length } as b) =
-    let a_end = add a_start a_length in
-    let b_end = add b_start b_length in
-    if b_end < a_start
-    then BBAA
-    else if a_end < b_start
-    then AABB
-    else begin
-      (* there is some overlap *)
-      if b_start < a_start then begin
-        if b_end < a_end then BABA else BAAB
-      end else begin
-        if b_end < a_end then ABBA else ABAB
-      end
-    end
-
-  let difference ({ start = a_start; length = a_length } as a) ({ start = b_start; length = b_length } as b) =
-    let a_end = add a_start a_length in
-    let b_end = add b_start b_length in
-    match classify a b with
-    | BBAA | AABB -> [ a ]
-    | BABA -> [ { start = b_end; length = sub a_end b_end } ]
-    | BAAB -> [ ]
-    | ABBA -> [ { start = a_start; length = sub b_start a_start; };
-                { start = b_end; length = sub a_end b_end } ]
-    | ABAB -> [ { start = a_start; length = sub b_start a_start } ]
-
-  let intersect ({ start = a_start; length = a_length } as a) ({ start = b_start; length = b_length } as b) : t list =
-    let a_end = add a_start a_length in
-    let b_end = add b_start b_length in
-    match classify a b with
-    | BBAA | AABB -> [ ]
-    | BABA -> [ { start = a_start; length = sub b_end a_start } ]
-    | BAAB -> [ { start = a_start; length = sub a_end a_start } ]
-    | ABBA -> [ { start = b_start; length = sub b_end b_start } ]
-    | ABAB -> [ { start = b_start; length = sub a_end b_start } ]
-end
-
 let read_write sector_size size_sectors (start, length) () =
   let module B = Qcow.Make(Ramdisk) in
   let t =
