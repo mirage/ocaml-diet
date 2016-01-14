@@ -338,7 +338,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         ( if Physical.to_bytes addr = 0L then begin
               allocate_clusters t 1L
               >>*= fun cluster ->
-              let addr = Physical.make (cluster <| t.cluster_bits) in
+              (* NB: the pointers in the refcount table are different from the pointers
+                 in the cluster table: the high order bits are not used to encode extra
+                 information and wil confuse qemu/qemu-img. *)
+              let addr = Physical.make ~is_mutable:false (cluster <| t.cluster_bits) in
               (* zero the cluster *)
               let buf = malloc t.h in
               Cstruct.memset buf 0;
@@ -688,7 +691,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     else update_header t { t.h with Header.l1_size = Int64.to_int32 l2_tables_required }
 
   let create base size =
-    let version = `Two in
+    let version = `Three in
     let backing_file_offset = 0L in
     let backing_file_size = 0l in
     let cluster_bits = 16 in
@@ -704,13 +707,21 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let l2_tables_required = Header.l2_tables_required ~cluster_bits size in
     let nb_snapshots = 0l in
     let snapshots_offset = 0L in
+    let additional = Some {
+      Header.dirty = true;
+      corrupt = false;
+      lazy_refcounts = true;
+      autoclear_features = 0L;
+      refcount_order = 4l;
+      } in
+    let extensions = [] in
     let h = {
       Header.version; backing_file_offset; backing_file_size;
       cluster_bits = Int32.of_int cluster_bits; size; crypt_method;
       l1_size = Int64.to_int32 l2_tables_required;
       l1_table_offset; refcount_table_offset;
       refcount_table_clusters = Int64.to_int32 refcount_table_clusters;
-      nb_snapshots; snapshots_offset
+      nb_snapshots; snapshots_offset; additional; extensions;
     } in
     (* Resize the underlying device to contain the header + refcount table
        + l1 table. Future allocations will enlarge the file. *)
@@ -733,14 +744,18 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     Cstruct.memset cluster 0;
     B.write base Int64.(div refcount_table_offset (of_int t.base_info.B.sector_size)) [ cluster ]
     >>*= fun () ->
-    Cluster.Refcount.incr t 0L (* header *)
-    >>*= fun () ->
-    Cluster.Refcount.incr t (Int64.div refcount_table_offset cluster_size)
+    let rec loop limit i =
+      if i = limit
+      then Lwt.return (`Ok ())
+      else
+        Cluster.Refcount.incr t i
+        >>*= fun () ->
+        loop limit (Int64.succ i) in
+    (* Increase the refcount of all header clusters i.e. those < next_free_cluster *)
+    loop t.next_cluster 0L
     >>*= fun () ->
     (* Write an initial empty L1 table *)
     B.write base Int64.(div l1_table_offset (of_int t.base_info.B.sector_size)) [ cluster ]
-    >>*= fun () ->
-    Cluster.Refcount.incr t (Int64.div l1_table_offset cluster_size)
     >>*= fun () ->
     Lwt.return (`Ok t)
 

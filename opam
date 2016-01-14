@@ -1,5 +1,5 @@
 opam-version: "1.2"
-name: "qcow"
+name: "qcow-format"
 maintainer: "dave@recoil.org"
 version: "0.1"
 authors: [ "David Scott" ]
@@ -34,6 +34,8 @@ depends: [
   "oasis" {build}
   "ounit" {test}
   "mirage-block-ramdisk" {test}
+  "ezjsonm" {test}
+  "nbd" {test & >= "2.0.1"}
 ]
 build-doc: ["ocaml" "setup.ml" "-doc"]
 

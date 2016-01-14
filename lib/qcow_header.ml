@@ -69,12 +69,18 @@ end
 
 type offset = int64 with sexp
 
-type extension = {
-  incompatible_features: int64;
-  compatible_features: int64;
+type extension = [
+  | `Unknown of int32 * string
+  | `Backing_file of string
+  | `Feature_name_table of string
+] with sexp
+
+type additional = {
+  dirty: bool;
+  corrupt: bool;
+  lazy_refcounts: bool;
   autoclear_features: int64;
   refcount_order: int32;
-  header_length: int32;
 } with sexp
 
 type t = {
@@ -90,13 +96,24 @@ type t = {
   refcount_table_clusters: int32;
   nb_snapshots: int32;
   snapshots_offset: offset;
+  additional: additional option;
+  extensions: extension list;
 } with sexp
 
 let compare (a: t) (b: t) = compare a b
 
 let to_string t = Sexplib.Sexp.to_string_hum (sexp_of_t t)
 
-let sizeof _ = 4 + 4 + 8 + 4 + 4 + 8 + 4 + 4 + 8 + 8 + 4 + 4 + 8
+let sizeof t =
+  let base = 4 + 4 + 8 + 4 + 4 + 8 + 4 + 4 + 8 + 8 + 4 + 4 + 8 in
+  let additional = match t.additional with None -> 0 | Some _ -> 8 + 8 + 8 + 4 + 4 in
+  let unpadded_sizeof_extension = function
+    | `Unknown (_, data)
+    | `Backing_file data
+    | `Feature_name_table data -> 4 + 4 + (String.length data) in
+  let pad_to_8 x = if x mod 8 = 0 then x else x + (8 - (x mod 8)) in
+  let extensions = List.(fold_left (+) 0 (map (fun x -> pad_to_8 @@ unpadded_sizeof_extension x) t.extensions)) in
+  base + additional + extensions
 
 let write t rest =
   big_enough_for "Header" rest (sizeof t)
@@ -132,10 +149,35 @@ let write t rest =
   Int32.write t.nb_snapshots rest
   >>= fun rest ->
   Int64.write t.snapshots_offset rest
+  >>= fun rest ->
+  match t.additional with
+  | None -> return rest
+  | Some e ->
+    let incompatible_features =
+      let open Int64 in
+      let bits = [
+        (if e.dirty then 1L <| 0 else 0L);
+        (if e.corrupt then 1L <| 1 else 0L);
+      ] in
+      List.fold_left Int64.logor 0L bits in
+    Int64.write incompatible_features rest
+    >>= fun rest ->
+    let compatible_features =
+      let open Int64 in
+      let bits = [
+        (if e.lazy_refcounts then 1L <| 0 else 0L);
+      ] in
+      List.fold_left Int64.logor 0L bits in
+    Int64.write compatible_features rest
+    >>= fun rest ->
+    Int64.write e.autoclear_features rest
+    >>= fun rest ->
+    Int32.write e.refcount_order rest
+    >>= fun rest ->
+    let header_length = Int32.of_int (sizeof t) in
+    Int32.write header_length rest
 
 let read rest =
-  big_enough_for "Header" rest (sizeof ())
-  >>= fun () ->
   Int8.read rest
   >>= fun (x, rest) ->
   ( if char_of_int x = 'Q'
@@ -184,9 +226,66 @@ let read rest =
   >>= fun (nb_snapshots, rest) ->
   Int64.read rest
   >>= fun (snapshots_offset, rest) ->
-  return ({ version; backing_file_offset; backing_file_size; cluster_bits;
+  (match version with
+    | `One | `Two -> return (None, [], 72, rest)
+    | _ ->
+      Int64.read rest
+      >>= fun (incompatible_features, rest) ->
+      let dirty = Int64.logand 1L (incompatible_features |> 0) = 1L in
+      let corrupt = Int64.logand 1L (incompatible_features |> 1) = 1L in
+      ( if incompatible_features |> 2 <> 0L
+        then error_msg "unknown incompatible_features set: 0x%Lx" incompatible_features
+        else return ()
+      ) >>= fun () ->
+      Int64.read rest
+      >>= fun (compatible_features, rest) ->
+      let lazy_refcounts = Int64.logand 1L (compatible_features |> 0) = 1L in
+      Int64.read rest
+      >>= fun (autoclear_features, rest) ->
+      ( if autoclear_features <> 0L
+        then error_msg "dealing with autoclear_features not implemented"
+        else return ()
+      ) >>= fun () ->
+      Int32.read rest
+      >>= fun (refcount_order, rest) ->
+      Int32.read rest
+      >>= fun (header_length, rest) ->
+      let rec read_lowlevel rest =
+        Int32.read rest
+        >>= fun (kind, rest) ->
+        if kind = 0l
+        then return ([], rest)
+        else begin
+          Int32.read rest
+          >>= fun (len, rest) ->
+          let len = Int32.to_int len in
+          let payload = Cstruct.sub rest 0 len in
+          let rest = Cstruct.shift rest len in
+          let padding_length = if len mod 8 = 0 then 0 else 8 - (len mod 8) in
+          let rest = Cstruct.shift rest padding_length in
+          read_lowlevel rest
+          >>= fun (extensions, rest) ->
+          return ((kind, payload) :: extensions, rest)
+        end in
+      let parse_extension (kind, payload) = match kind with
+        | 0xE2792ACAl -> `Backing_file (Cstruct.to_string payload)
+        | 0x6803f857l -> `Feature_name_table (Cstruct.to_string payload)
+        | _ -> `Unknown (kind, Cstruct.to_string payload) in
+      read_lowlevel rest
+      >>= fun (e, rest) ->
+      let extensions = List.map parse_extension e in
+      let header_length = Int32.to_int header_length in
+      return (Some { dirty; corrupt; lazy_refcounts; autoclear_features;
+                refcount_order }, extensions, header_length, rest)
+  ) >>= fun (additional, extensions, header_length, rest) ->
+  let t = { version; backing_file_offset; backing_file_size; cluster_bits;
             size; crypt_method; l1_size; l1_table_offset; refcount_table_offset;
-            refcount_table_clusters; nb_snapshots; snapshots_offset }, rest)
+            refcount_table_clusters; nb_snapshots; snapshots_offset; additional;
+            extensions } in
+  (* qemu excludes extensions from the header_length *)
+  if sizeof { t with extensions = [] } <> header_length
+  then error_msg "Read a header_length of %d but we computed %d" header_length (sizeof t)
+  else return (t, rest)
 
 
 let refcounts_per_cluster t =
