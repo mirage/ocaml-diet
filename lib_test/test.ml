@@ -134,9 +134,53 @@ let rec fragment into remaining =
     let rest = Cstruct.shift remaining into in
     this :: (fragment into rest)
 
-let read_write sector_size size_sectors (start, length) () =
+let check_file_contents path id sector_size size_sectors (start, length) () =
   let module RawReader = Block in
   let module Reader = Qcow.Make(RawReader) in
+  let sector = Int64.div start 512L in
+  (* This is the range that we expect to see written *)
+  let open FromBlock in
+  RawReader.connect path
+  >>= fun raw ->
+  Reader.connect raw
+  >>= fun b ->
+  let expected = { Extent.start = sector; length = Int64.(div (of_int length) 512L) } in
+  let ofs' = Int64.(mul sector (of_int sector_size)) in
+  Mirage_block.fold_mapped_s
+    ~f:(fun bytes_seen ofs data ->
+        let actual = { Extent.start = ofs; length = Int64.of_int (Cstruct.len data / 512) } in
+        (* Any data we read now which wasn't expected must be full of zeroes *)
+        let extra = Extent.difference actual expected in
+        List.iter
+          (fun { Extent.start; length } ->
+             let buf = Cstruct.sub data (512 * Int64.(to_int (sub start ofs))) (Int64.to_int length * 512) in
+             for i = 0 to Cstruct.len buf - 1 do
+               assert_equal ~printer:string_of_int ~cmp:(fun a b -> a = b) 0 (Cstruct.get_uint8 buf i);
+             done;
+          ) extra;
+        let common = Extent.intersect actual expected in
+        List.iter
+          (fun { Extent.start; length } ->
+             let buf = Cstruct.sub data (512 * Int64.(to_int (sub start ofs))) (Int64.to_int length * 512) in
+             for i = 0 to Cstruct.len buf - 1 do
+               assert_equal ~printer:string_of_int ~cmp:(fun a b -> a = b) (id mod 256) (Cstruct.get_uint8 buf i)
+             done;
+          ) common;
+        let seen_this_time = 512 * List.(fold_left (+) 0 (map (fun e -> Int64.to_int e.Extent.length) common)) in
+        return (`Ok (bytes_seen + seen_this_time))
+      ) 0 (module Reader) b
+  >>= fun total_bytes_seen ->
+  assert_equal ~printer:string_of_int length total_bytes_seen;
+  Reader.Debug.check_no_overlaps b
+  >>= fun () ->
+  let open Lwt.Infix in
+  Reader.disconnect b
+  >>= fun () ->
+  RawReader.disconnect raw
+  >>= fun () ->
+  Lwt.return (`Ok ())
+
+let write_read_native sector_size size_sectors (start, length) () =
   let module RawWriter = Block in
   let module Writer = Qcow.Make(RawWriter) in
   let path = Filename.concat test_dir (Printf.sprintf "%Ld.%Ld.%d" size_sectors start length) in
@@ -166,51 +210,45 @@ let read_write sector_size size_sectors (start, length) () =
     >>= fun () ->
     RawWriter.disconnect raw
     >>= fun () ->
-
     Qemu.Img.check path;
-
-    (* This is the range that we expect to see written *)
-    let open FromBlock in
-    RawReader.connect path
-    >>= fun raw ->
-    Reader.connect raw
-    >>= fun b ->
-    let expected = { Extent.start = sector; length = Int64.(div (of_int length) 512L) } in
-    let ofs' = Int64.(mul sector (of_int sector_size)) in
-    Mirage_block.fold_mapped_s
-      ~f:(fun bytes_seen ofs data ->
-          let actual = { Extent.start = ofs; length = Int64.of_int (Cstruct.len data / 512) } in
-          (* Any data we read now which wasn't expected must be full of zeroes *)
-          let extra = Extent.difference actual expected in
-          List.iter
-            (fun { Extent.start; length } ->
-               let buf = Cstruct.sub data (512 * Int64.(to_int (sub start ofs))) (Int64.to_int length * 512) in
-               for i = 0 to Cstruct.len buf - 1 do
-                 assert_equal ~printer:string_of_int ~cmp:(fun a b -> a = b) 0 (Cstruct.get_uint8 buf i)
-               done;
-            ) extra;
-          let common = Extent.intersect actual expected in
-          List.iter
-            (fun { Extent.start; length } ->
-               let buf = Cstruct.sub data (512 * Int64.(to_int (sub start ofs))) (Int64.to_int length * 512) in
-               for i = 0 to Cstruct.len buf - 1 do
-                 assert_equal ~printer:string_of_int ~cmp:(fun a b -> a = b) (id mod 256) (Cstruct.get_uint8 buf i)
-               done;
-            ) common;
-          let seen_this_time = 512 * List.(fold_left (+) 0 (map (fun e -> Int64.to_int e.Extent.length) common)) in
-          return (`Ok (bytes_seen + seen_this_time))
-        ) 0 (module Reader) b
-    >>= fun total_bytes_seen ->
-    assert_equal ~printer:string_of_int length total_bytes_seen;
-    Reader.Debug.check_no_overlaps b
-    >>= fun () ->
-    let open Lwt.Infix in
-    Reader.disconnect b
-    >>= fun () ->
-    RawReader.disconnect raw
-    >>= fun () ->
-    Lwt.return (`Ok ()) in
+    check_file_contents path id sector_size size_sectors (start, length) () in
   or_failwith @@ Lwt_main.run t
+
+let write_read_qemu sector_size size_sectors (start, length) () =
+  let module RawWriter = Block in
+  let module Writer = Qemu.Block in
+  let path = Filename.concat test_dir (Printf.sprintf "%Ld.%Ld.%d" size_sectors start length) in
+
+  let t =
+    truncate path
+    >>= fun () ->
+    let open FromBlock in
+    Writer.create path Int64.(mul size_sectors (of_int sector_size))
+    >>= fun b ->
+
+    let sector = Int64.div start 512L in
+    let id = get_id () in
+    let buf = malloc length in
+    Cstruct.memset buf (id mod 256);
+    Writer.write b sector (fragment 4096 buf)
+    >>= fun () ->
+    let buf' = malloc length in
+    Writer.read b sector (fragment 4096 buf')
+    >>= fun () ->
+    let cmp a b = Cstruct.compare a b = 0 in
+    assert_equal ~printer:(fun x -> String.escaped (Cstruct.to_string x)) ~cmp buf buf';
+    let open Lwt.Infix in
+    Writer.disconnect b
+    >>= fun () ->
+    Qemu.Img.check path;
+    check_file_contents path id sector_size size_sectors (start, length) () in
+  try
+    or_failwith @@ Lwt_main.run t
+  with e ->
+    Printf.fprintf stderr "STOP %s\n%!" (Printexc.to_string e);
+    Printexc.print_backtrace stderr;
+    Printf.fprintf stderr "%s\n%!" path;
+    exit 1
 
 let check_refcount_table_allocation () =
   let module B = Qcow.Make(Ramdisk) in
@@ -342,17 +380,19 @@ let _ =
   (* Test with a 1 PiB disk, bigger than we'll need for a while. *)
   let size_sectors = Int64.div pib 512L in
   let cluster_bits = 16 in
-  let interesting_writes = List.map
-      (fun (label, start, length) -> label >:: read_write sector_size size_sectors (start, Int64.to_int length))
+  let interesting_qemu_reads = List.map
+      (fun (label, start, length) -> label >:: write_read_qemu sector_size size_sectors (start, Int64.to_int length))
       (interesting_ranges sector_size size_sectors cluster_bits) in
-
+  let interesting_native_reads = List.map
+      (fun (label, start, length) -> label >:: write_read_native sector_size size_sectors (start, Int64.to_int length))
+      (interesting_ranges sector_size size_sectors cluster_bits) in
   let suite = "qcow2" >::: [
       "check we can fill the disk" >:: check_full_disk;
       "check we can reallocate the refcount table" >:: check_refcount_table_allocation;
       "create 1K" >:: create_1K;
       "create 1M" >:: create_1M;
       "create 1P" >:: create_1P;
-    ] @ interesting_writes @ qemu_img_suite @ qcow_tool_suite in
+    ] @ interesting_native_reads @ interesting_qemu_reads @ qemu_img_suite @ qcow_tool_suite in
   OUnit2.run_test_tt_main (ounit2_of_ounit1 suite);
   (* If no error, delete the directory *)
   ignore(run "rm" [ "-rf"; test_dir ])
