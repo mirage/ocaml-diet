@@ -24,7 +24,7 @@ open Utils
 open Sizes
 
 let truncate path =
-  Lwt_unix.openfile path [ Unix.O_CREAT ] 0o0644
+  Lwt_unix.openfile path [ Unix.O_CREAT; Unix.O_TRUNC ] 0o0644
   >>= fun fd ->
   Lwt_unix.close fd
 
@@ -135,13 +135,16 @@ let rec fragment into remaining =
     this :: (fragment into rest)
 
 let read_write sector_size size_sectors (start, length) () =
-  let module B = Qcow.Make(Ramdisk) in
+  let module B = Qcow.Make(Block) in
+  let path = Filename.concat test_dir (Printf.sprintf "%Ld.%Ld.%d" size_sectors start length) in
+
   let t =
-    Ramdisk.destroy ~name:"test";
+    truncate path
+    >>= fun () ->
     let open FromBlock in
-    Ramdisk.connect "test"
-    >>= fun ramdisk ->
-    B.create ramdisk Int64.(mul size_sectors (of_int sector_size))
+    Block.connect path
+    >>= fun raw ->
+    B.create raw Int64.(mul size_sectors (of_int sector_size))
     >>= fun b ->
 
     let sector = Int64.div start 512L in
@@ -185,6 +188,11 @@ let read_write sector_size size_sectors (start, length) () =
     >>= fun total_bytes_seen ->
     assert_equal ~printer:string_of_int length total_bytes_seen;
     B.Debug.check_no_overlaps b
+    >>= fun () ->
+    let open Lwt.Infix in
+    B.disconnect b
+    >>= fun () ->
+    Block.disconnect raw
     >>= fun () ->
     Lwt.return (`Ok ()) in
   or_failwith @@ Lwt_main.run t
