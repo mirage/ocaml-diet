@@ -14,6 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  *)
 module FromBlock = Error.FromBlock
+module FromResult = Error.FromResult
 
 open Sexplib.Std
 open Qcow
@@ -22,34 +23,26 @@ open OUnit
 open Utils
 open Sizes
 
-let expect_ok = function
-  | `Error _ -> failwith "IO failure"
-  | `Ok x -> x
-
 (* qemu-img will set version = `Three and leave an extra cluster
    presumably for extension headers *)
 
 let read_write_header name size =
   let module B = Qcow.Make(Ramdisk) in
   let t =
+    let open FromBlock in
     Ramdisk.connect name
-    >>= fun x ->
-    let ramdisk = expect_ok x in
-
+    >>= fun ramdisk ->
     B.create ramdisk size
-    >>= fun x ->
-    let b = expect_ok x in
+    >>= fun b ->
 
     let page = Io_page.(to_cstruct (get 1)) in
     Ramdisk.read ramdisk 0L [ page ]
-    >>= fun x ->
-    let () = expect_ok x in
-    let open Error in
-    match Qcow.Header.read page with
-    | Result.Error (`Msg m) -> failwith m
-    | Result.Ok (hdr, _) ->
-      Lwt.return hdr in
-  Lwt_main.run t
+    >>= fun () ->
+    let open FromResult in
+    Qcow.Header.read page
+    >>= fun (hdr, _) ->
+    Lwt.return (`Ok hdr) in
+  or_failwith @@ Lwt_main.run t
 
 let additional = Some {
   Qcow.Header.dirty = true;
@@ -124,24 +117,21 @@ let read_write sector_size size_sectors (start, length) () =
   let module B = Qcow.Make(Ramdisk) in
   let t =
     Ramdisk.destroy ~name:"test";
+    let open FromBlock in
     Ramdisk.connect "test"
-    >>= fun x ->
-    let ramdisk = expect_ok x in
+    >>= fun ramdisk ->
     B.create ramdisk Int64.(mul size_sectors (of_int sector_size))
-    >>= fun x ->
-    let b = expect_ok x in
+    >>= fun b ->
 
     let sector = Int64.div start 512L in
     let id = get_id () in
     let buf = malloc length in
     Cstruct.memset buf (id mod 256);
     B.write b sector (fragment 4096 buf)
-    >>= fun x ->
-    let () = expect_ok x in
+    >>= fun () ->
     let buf' = malloc length in
     B.read b sector (fragment 4096 buf')
-    >>= fun x ->
-    let () = expect_ok x in
+    >>= fun () ->
     let cmp a b = Cstruct.compare a b = 0 in
     assert_equal ~printer:(fun x -> String.escaped (Cstruct.to_string x)) ~cmp buf buf';
 
@@ -171,25 +161,22 @@ let read_write sector_size size_sectors (start, length) () =
           let seen_this_time = 512 * List.(fold_left (+) 0 (map (fun e -> Int64.to_int e.Extent.length) common)) in
           return (`Ok (bytes_seen + seen_this_time))
         ) 0 (module B) b
-    >>= fun x ->
-    let total_bytes_seen = expect_ok x in
+    >>= fun total_bytes_seen ->
     assert_equal ~printer:string_of_int length total_bytes_seen;
     B.Debug.check_no_overlaps b
-    >>= fun x ->
-    let () = expect_ok x in
-    Lwt.return () in
-  Lwt_main.run t
+    >>= fun () ->
+    Lwt.return (`Ok ()) in
+  or_failwith @@ Lwt_main.run t
 
 let check_refcount_table_allocation () =
   let module B = Qcow.Make(Ramdisk) in
   let t =
     Ramdisk.destroy ~name:"test";
+    let open FromBlock in
     Ramdisk.connect "test"
-    >>= fun x ->
-    let ramdisk = expect_ok x in
+    >>= fun ramdisk ->
     B.create ramdisk pib
-    >>= fun x ->
-    let b = expect_ok x in
+    >>= fun b ->
 
     let h = B.header b in
     let max_cluster = Int64.shift_right h.Header.size (Int32.to_int h.Header.cluster_bits) in
@@ -199,22 +186,21 @@ let check_refcount_table_allocation () =
 
     let buf = malloc length in
     B.write b sector (fragment 4096 buf)
-    >>= fun x ->
-    let () = expect_ok x in
-    Lwt.return () in
-  Lwt_main.run t
+    >>= fun () ->
+    Lwt.return (`Ok ()) in
+  or_failwith @@ Lwt_main.run t
 
 let check_full_disk () =
   let module B = Qcow.Make(Ramdisk) in
   let t =
     Ramdisk.destroy ~name:"test";
+    let open FromBlock in
     Ramdisk.connect "test"
-    >>= fun x ->
-    let ramdisk = expect_ok x in
+    >>= fun ramdisk ->
     B.create ramdisk gib
-    >>= fun x ->
-    let b = expect_ok x in
+    >>= fun b ->
 
+    let open Lwt.Infix in
     B.get_info b
     >>= fun info ->
 
@@ -225,16 +211,13 @@ let check_full_disk () =
       if sector >= info.B.size_sectors
       then Lwt.return (`Ok ())
       else begin
+        let open FromBlock in
         B.write b sector [ buf ]
-        >>= fun x ->
-        let () = expect_ok x in
+        >>= fun () ->
         loop Int64.(add sector sectors_per_cluster)
       end in
-    loop 0L
-    >>= fun x ->
-    let () = expect_ok x in
-    Lwt.return () in
-  Lwt_main.run t
+    loop 0L in
+  or_failwith @@ Lwt_main.run t
 
 (* Compare the output of this code against qemu *)
 let virtual_sizes = [

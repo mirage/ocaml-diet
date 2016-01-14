@@ -29,3 +29,9 @@ module Infix = struct
     | `Error e -> Lwt.return (`Error e)
     | `Ok x -> f x
 end
+
+module FromResult = struct
+  let (>>=) m f = match m with
+    | Result.Error x -> Lwt.return (`Error x)
+    | Result.Ok x -> f x
+end

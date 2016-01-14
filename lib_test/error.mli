@@ -26,5 +26,10 @@ end
 module Infix: sig
   val ( >>= ) : [< `Error of 'a | `Ok of 'b ] Lwt.t
     -> ('b -> ([> `Error of 'a ] as 'c) Lwt.t)
-    -> 'c Lwt.t 
+    -> 'c Lwt.t
+end
+
+module FromResult: sig
+  val ( >>= ) :   ('a, 'b) Result.result -> ('a -> ([> `Error of 'b ] as 'c) Lwt.t) -> 'c Lwt.t
+
 end
