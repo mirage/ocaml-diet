@@ -60,7 +60,7 @@ let start cmd args : process =
 
 let signal (pid, _, _) s = Unix.kill pid s
 
-let wait (pid, (oc, ic, ec), cmdline) =
+let wait' (pid, (oc, ic, ec), cmdline) =
   close_out ic;
   close_in oc;
   close_in ec;
@@ -70,11 +70,15 @@ let wait (pid, (oc, ic, ec), cmdline) =
         Unix.waitpid [] pid
       with Unix.Unix_error(Unix.EINTR, _, _) -> loop () in
     loop () in
-  or_failwith @@ check_exit_status cmdline exit_status
+  check_exit_status cmdline exit_status
+
+let wait (pid, (oc, ic, ec), cmdline) =
+  or_failwith @@ wait' (pid, (oc, ic, ec), cmdline)
 
 let run cmd args =
   let pid, (oc, ic, ec), cmdline = start cmd args in
   let out = read_lines oc in
   let err = read_lines ec in
-  wait (pid, (oc, ic, ec), cmdline);
-  out, err
+  match wait' (pid, (oc, ic, ec), cmdline) with
+  | `Ok _ -> out, err
+  | `Error (`Msg m) -> failwith (m ^ "\n" ^ (String.concat "\n" out) ^ "\n" ^ (String.concat "\n" err))
