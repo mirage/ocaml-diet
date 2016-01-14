@@ -282,7 +282,8 @@ let read rest =
             size; crypt_method; l1_size; l1_table_offset; refcount_table_offset;
             refcount_table_clusters; nb_snapshots; snapshots_offset; additional;
             extensions } in
-  if sizeof t <> header_length
+  (* qemu excludes extensions from the header_length *)
+  if sizeof { t with extensions = [] } <> header_length
   then error_msg "Read a header_length of %d but we computed %d" header_length (sizeof t)
   else return (t, rest)
 
