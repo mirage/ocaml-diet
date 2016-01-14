@@ -2,10 +2,10 @@ language: c
 install:
   - wget https://raw.githubusercontent.com/ocaml/ocaml-travisci-skeleton/master/.travis-opam.sh
   - wget https://raw.githubusercontent.com/simonjbeaumont/ocaml-travis-coveralls/master/travis-coveralls.sh
-script: bash -ex .travis-opam.sh && bash -ex travis-coveralls.sh
+script: bash -ex .travis-opam.sh
 sudo: required
 env:
   global:
-    - PACKAGE="qcow-format" OCAML_VERSION=4.02 PINS="mirage-block-ramdisk:git://github.com/mirage/mirage-block-ramdisk mirage-block:git://github.com/mirage/mirage-block mirage-block-unix:git://github.com/mirage/mirage-block-unix"
+    - PACKAGE="qcow-format" OCAML_VERSION=4.02 PINS="nbd:git://github.com/xapi-project/nbd"
     - COV_CONF="export TESTS=--enable-tests"
     - PRE_INSTALL_HOOK="sudo apt-get install qemu-utils"
