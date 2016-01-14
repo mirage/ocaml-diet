@@ -744,14 +744,18 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     Cstruct.memset cluster 0;
     B.write base Int64.(div refcount_table_offset (of_int t.base_info.B.sector_size)) [ cluster ]
     >>*= fun () ->
-    Cluster.Refcount.incr t 0L (* header *)
-    >>*= fun () ->
-    Cluster.Refcount.incr t (Int64.div refcount_table_offset cluster_size)
+    let rec loop limit i =
+      if i = limit
+      then Lwt.return (`Ok ())
+      else
+        Cluster.Refcount.incr t i
+        >>*= fun () ->
+        loop limit (Int64.succ i) in
+    (* Increase the refcount of all header clusters i.e. those < next_free_cluster *)
+    loop t.next_cluster 0L
     >>*= fun () ->
     (* Write an initial empty L1 table *)
     B.write base Int64.(div l1_table_offset (of_int t.base_info.B.sector_size)) [ cluster ]
-    >>*= fun () ->
-    Cluster.Refcount.incr t (Int64.div l1_table_offset cluster_size)
     >>*= fun () ->
     Lwt.return (`Ok t)
 
