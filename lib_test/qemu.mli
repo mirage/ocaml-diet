@@ -22,6 +22,10 @@ module Block : sig
 
   val connect: string -> [ `Ok of t ] Lwt.t
   (** [connect path] connects to a BLOCK device exported by qemu-nbd *)
+
+  val create: string -> int64 -> [ `Ok of t ] Lwt.t
+  (** [create path size] creates an image using qemu-img and then connects
+      to it via qemu-nbd *)
 end
 
 module Img: sig

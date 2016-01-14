@@ -18,6 +18,51 @@
    ocaml-qcow images and qemu-produced images. *)
 open Utils
 
+module Img = struct
+  let create file size =
+    ignore_output @@ run "qemu-img" [ "create"; "-f"; "qcow2"; "-o"; "lazy_refcounts=on"; file; Int64.to_string size ]
+
+  let check file =
+    ignore_output @@ run "qemu-img" [ "check"; file ]
+
+  type info = {
+    virtual_size: int64;
+    filename: string;
+    cluster_size: int;
+    actual_size: int;
+    compat: string;
+    lazy_refcounts: bool option;
+    refcount_bits: int;
+    corrupt: bool option;
+    dirty_flag: bool;
+  }
+
+  let info file =
+    let lines, _ = run "qemu-img" [ "info"; "--output"; "json"; file ] in
+    let json = Ezjsonm.(get_dict @@ from_string @@ String.concat "\n" lines) in
+    let find name json =
+      if List.mem_assoc name json
+      then List.assoc name json
+      else failwith (Printf.sprintf "Failed to find '%s' in %s" name (String.concat "\n" lines)) in
+    let virtual_size = Ezjsonm.get_int64 @@ find "virtual-size" json in
+    let filename = Ezjsonm.get_string @@ find "filename" json in
+    let cluster_size = Ezjsonm.get_int @@ find "cluster-size" json in
+    let format = Ezjsonm.get_string @@ find "format" json in
+    if format <> "qcow2" then failwith (Printf.sprintf "Expected qcow2 format, got %s" format);
+    let actual_size = Ezjsonm.get_int @@ find "actual-size" json in
+    let specific = Ezjsonm.get_dict @@ find "format-specific" json in
+    let ty = Ezjsonm.get_string @@ find "type" specific in
+    if ty <> "qcow2" then failwith (Printf.sprintf "Expected qcow2 type, got %s" ty);
+    let data = Ezjsonm.get_dict @@ find "data" specific in
+    let compat = Ezjsonm.get_string @@ find "compat" data in
+    let lazy_refcounts = try Some (Ezjsonm.get_bool @@ find "lazy-refcounts" data) with _ -> None in
+    let refcount_bits = Ezjsonm.get_int @@ find "refcount-bits" data in
+    let corrupt = try Some (Ezjsonm.get_bool @@ find "corrupt" data) with _ -> None in
+    let dirty_flag = Ezjsonm.get_bool @@ find "dirty-flag" json in
+    { virtual_size; filename; cluster_size; actual_size; compat;
+      lazy_refcounts; refcount_bits; corrupt; dirty_flag }
+end
+
 module Block = struct
 
   type info = {
@@ -69,6 +114,10 @@ module Block = struct
     let info = { read_write; sector_size; size_sectors } in
     Lwt.return (`Ok { server; client; info })
 
+  let create file size =
+    Img.create file size;
+    connect file
+
   let disconnect { server; client } =
     let open Lwt.Infix in
     Nbd_lwt_unix.Client.disconnect client
@@ -77,49 +126,4 @@ module Block = struct
     wait server;
     Lwt.return ()
 
-end
-
-module Img = struct
-  let create file size =
-    ignore_output @@ run "qemu-img" [ "create"; "-f"; "qcow2"; file; Int64.to_string size ]
-
-  let check file =
-    ignore_output @@ run "qemu-img" [ "check"; file ]
-
-  type info = {
-    virtual_size: int64;
-    filename: string;
-    cluster_size: int;
-    actual_size: int;
-    compat: string;
-    lazy_refcounts: bool option;
-    refcount_bits: int;
-    corrupt: bool option;
-    dirty_flag: bool;
-  }
-
-  let info file =
-    let lines, _ = run "qemu-img" [ "info"; "--output"; "json"; file ] in
-    let json = Ezjsonm.(get_dict @@ from_string @@ String.concat "\n" lines) in
-    let find name json =
-      if List.mem_assoc name json
-      then List.assoc name json
-      else failwith (Printf.sprintf "Failed to find '%s' in %s" name (String.concat "\n" lines)) in
-    let virtual_size = Ezjsonm.get_int64 @@ find "virtual-size" json in
-    let filename = Ezjsonm.get_string @@ find "filename" json in
-    let cluster_size = Ezjsonm.get_int @@ find "cluster-size" json in
-    let format = Ezjsonm.get_string @@ find "format" json in
-    if format <> "qcow2" then failwith (Printf.sprintf "Expected qcow2 format, got %s" format);
-    let actual_size = Ezjsonm.get_int @@ find "actual-size" json in
-    let specific = Ezjsonm.get_dict @@ find "format-specific" json in
-    let ty = Ezjsonm.get_string @@ find "type" specific in
-    if ty <> "qcow2" then failwith (Printf.sprintf "Expected qcow2 type, got %s" ty);
-    let data = Ezjsonm.get_dict @@ find "data" specific in
-    let compat = Ezjsonm.get_string @@ find "compat" data in
-    let lazy_refcounts = try Some (Ezjsonm.get_bool @@ find "lazy-refcounts" data) with _ -> None in
-    let refcount_bits = Ezjsonm.get_int @@ find "refcount-bits" data in
-    let corrupt = try Some (Ezjsonm.get_bool @@ find "corrupt" data) with _ -> None in
-    let dirty_flag = Ezjsonm.get_bool @@ find "dirty-flag" json in
-    { virtual_size; filename; cluster_size; actual_size; compat;
-      lazy_refcounts; refcount_bits; corrupt; dirty_flag }
 end
