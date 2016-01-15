@@ -10,6 +10,8 @@ Features
 
 - supports `resize`
 - exposes sparseness information
+- produces files which can be understood by qemu (although not in
+  reverse since we don't support many features)
 
 Example
 -------

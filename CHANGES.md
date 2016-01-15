@@ -1,4 +1,9 @@
-0.1 (9-Nov-2015)
+0.2 (2016-01-15)
+- Use qcow version 3 by default, setting `lazy_refcount=on`
+- Unit tests now verify that `qemu-img check` is happy and that `qemu-nbd`
+  sees the same data we wrote
+
+0.1 (2015-11-09)
 - initial `V1_LWT.BLOCK` support
 - caches metadata for performance
 - CLI tool for manipulating images
