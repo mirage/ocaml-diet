@@ -1,3 +1,6 @@
+0.3 (2016-05-12)
+- Depend on ppx, require OCaml 4.02+
+
 0.2 (2016-01-15)
 - Use qcow version 3 by default, setting `lazy_refcount=on`
 - Unit tests now verify that `qemu-img check` is happy and that `qemu-nbd`
