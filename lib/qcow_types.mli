@@ -24,13 +24,13 @@ val big_enough_for: string -> Cstruct.t -> int -> unit Qcow_error.t
     in the error message. *)
 
 module Int8 : sig
-  type t = int with sexp
+  type t = int [@@deriving sexp]
 
   include Qcow_s.SERIALISABLE with type t := t
 end
 
 module Int16 : sig
-  type t = int with sexp
+  type t = int [@@deriving sexp]
 
   include Qcow_s.SERIALISABLE with type t := t
 end

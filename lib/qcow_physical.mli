@@ -19,7 +19,7 @@
    - represent 0L as a None
    	*)
 
-type t with sexp
+type t [@@deriving sexp]
 (** A physical address within the backing disk *)
 
 val is_compressed: t -> bool

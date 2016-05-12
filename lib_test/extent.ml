@@ -19,8 +19,8 @@ open Int64
 type t = {
   start: int64;
   length: int64;
-} with sexp
-type ts = t list with sexp
+} [@@deriving sexp]
+type ts = t list [@@deriving sexp]
 
 let to_string t = Sexplib.Sexp.to_string_hum (sexp_of_ts t)
 
@@ -31,7 +31,7 @@ type overlap =
   | BAAB
   | ABBA
   | ABAB
-with sexp
+[@@deriving sexp]
 
 let classify ({ start = a_start; length = a_length } as a) ({ start = b_start; length = b_length } as b) =
   let a_end = add a_start a_length in

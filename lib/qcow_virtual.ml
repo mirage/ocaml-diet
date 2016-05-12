@@ -21,7 +21,7 @@ type t = {
   l1_index: int64; (* index in the L1 table *)
   l2_index: int64; (* index in the L2 table *)
   cluster: int64;  (* index within the cluster *)
-} with sexp
+} [@@deriving sexp]
 
 let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right_logical

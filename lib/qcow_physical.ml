@@ -28,8 +28,7 @@ type t = {
   bytes: int64;
   is_mutable: bool;
   is_compressed: bool;
-}
-with sexp
+} [@@deriving sexp]
 
 let to_string t = Sexplib.Sexp.to_string (sexp_of_t t)
 

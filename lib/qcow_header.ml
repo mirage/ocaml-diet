@@ -28,7 +28,7 @@ module Version = struct
     | `One
     | `Two
     | `Three
-  ] with sexp
+  ] [@@deriving sexp]
 
   let sizeof t = 4
 
@@ -49,7 +49,7 @@ end
 
 module CryptMethod = struct
 
-  type t = [ `Aes | `None ] with sexp
+  type t = [ `Aes | `None ] [@@deriving sexp]
 
   let sizeof _ = 4
 
@@ -67,13 +67,13 @@ module CryptMethod = struct
   let compare (a: t) (b: t) = compare a b
 end
 
-type offset = int64 with sexp
+type offset = int64 [@@deriving sexp]
 
 type extension = [
   | `Unknown of int32 * string
   | `Backing_file of string
   | `Feature_name_table of string
-] with sexp
+] [@@deriving sexp]
 
 type additional = {
   dirty: bool;
@@ -81,7 +81,7 @@ type additional = {
   lazy_refcounts: bool;
   autoclear_features: int64;
   refcount_order: int32;
-} with sexp
+} [@@deriving sexp]
 
 type t = {
   version: Version.t;
@@ -98,7 +98,7 @@ type t = {
   snapshots_offset: offset;
   additional: additional option;
   extensions: extension list;
-} with sexp
+} [@@deriving sexp]
 
 let compare (a: t) (b: t) = compare a b
 

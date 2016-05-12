@@ -19,7 +19,7 @@ type t = {
   l1_index: int64; (* index in the L1 table *)
   l2_index: int64; (* index in the L2 table *)
   cluster: int64;  (* index within the cluster *)
-} with sexp
+} [@@deriving sexp]
 (** A virtual address in a qcow image is broken into 3 levels:
     - an index in the L1 table, pointing to
     		 - an index in the L2 table, pointing to
