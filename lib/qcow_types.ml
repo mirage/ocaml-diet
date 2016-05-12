@@ -24,7 +24,7 @@ let big_enough_for name buf needed =
   else return ()
 
 module Int8 = struct
-  type t = int with sexp
+  type t = int [@@deriving sexp]
 
   let sizeof _ = 1
 
@@ -41,7 +41,7 @@ module Int8 = struct
 end
 
 module Int16 = struct
-  type t = int with sexp
+  type t = int [@@deriving sexp]
 
   let sizeof _ = 2
 
@@ -60,7 +60,7 @@ end
 module Int32 = struct
   include Int32
 
-  type _t = int32 with sexp
+  type _t = int32 [@@deriving sexp]
   let sexp_of_t = sexp_of__t
   let t_of_sexp = _t_of_sexp
 
@@ -81,7 +81,7 @@ end
 module Int64 = struct
   include Int64
 
-  type _t = int64 with sexp
+  type _t = int64 [@@deriving sexp]
   let sexp_of_t = sexp_of__t
   let t_of_sexp = _t_of_sexp
 

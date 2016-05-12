@@ -20,13 +20,13 @@ module Version : sig
     | `One
     | `Two
     | `Three
-  ] with sexp
+  ] [@@deriving sexp]
 
   include Qcow_s.SERIALISABLE with type t := t
 end
 
 module CryptMethod : sig
-  type t = [ `Aes | `None ] with sexp
+  type t = [ `Aes | `None ] [@@deriving sexp]
 
   include Qcow_s.SERIALISABLE with type t := t
 end
@@ -38,7 +38,7 @@ type extension = [
   | `Unknown of int32 * string
   | `Backing_file of string
   | `Feature_name_table of string
-] with sexp
+] [@@deriving sexp]
 
 type additional = {
   dirty: bool;
@@ -46,7 +46,7 @@ type additional = {
   lazy_refcounts: bool;
   autoclear_features: int64;
   refcount_order: int32;
-} with sexp
+} [@@deriving sexp]
 (** Version 3 and above have additional header fields *)
 
 type t = {
@@ -64,7 +64,7 @@ type t = {
   snapshots_offset: offset;       (** offset of the snapshot header *)
   additional: additional option;  (** for version 3 or higher *)
   extensions: extension list;     (** for version 3 or higher *)
-} with sexp
+} [@@deriving sexp]
 (** The qcow2 header *)
 
 val refcounts_per_cluster: t -> int64
