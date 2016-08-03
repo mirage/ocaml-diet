@@ -23,6 +23,19 @@ let expect_ok = function
   | Ok x -> x
   | Error (`Msg m) -> failwith m
 
+let (>>*=) m f =
+  let open Lwt in
+  m >>= function
+  | `Error x -> Lwt.return (`Error x)
+  | `Ok x -> f x
+
+let to_cmdliner_error = function
+  | `Error `Disconnected -> `Error(false, "Disconnected")
+  | `Error `Is_read_only -> `Error(false, "Is_read_only")
+  | `Error `Unimplemented -> `Error(false, "Unimplemented")
+  | `Error (`Unknown x) -> `Error(false, x)
+  | `Ok x -> `Ok x
+
 let info filename =
   let t =
     let open Lwt in
@@ -113,19 +126,15 @@ let repair filename =
   let open Lwt in
   let t =
     Block.connect filename
-    >>= function
-    | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
-    | `Ok x ->
-      B.connect x
-      >>= function
-      | `Error _ -> failwith (Printf.sprintf "Failed to read qcow formatted data on %s" filename)
-      | `Ok x ->
-        B.Debug.check_no_overlaps x
-        >>= function
-        | `Error _ -> failwith "Failed to regenerate refcount table"
-        | `Ok () ->
-          return (`Ok ()) in
-  Lwt_main.run t
+    >>*= fun x ->
+    B.connect x
+    >>*= fun x ->
+    B.rebuild_refcount_table x
+    >>*= fun () ->
+    B.Debug.check_no_overlaps x
+    >>*= fun () ->
+    return (`Ok ()) in
+  Lwt_main.run (t >>= fun r -> return (to_cmdliner_error r))
 
 let decode filename output =
   let module B = Qcow.Make(Block) in
