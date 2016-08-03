@@ -166,6 +166,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     (* for convenience *)
     cluster_bits: int;
     sector_size: int;
+    mutable lazy_refcounts: bool; (* true if we are omitting refcounts right now *)
   }
 
   let get_info t = Lwt.return t.info
@@ -280,7 +281,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       (** Increment the refcount of a given cluster. Note this might need
           to allocate itself, to enlarge the refcount table. When this function
           returns the refcount is guaranteed to have been persisted. *)
-      let rec incr t cluster =
+      let rec really_incr t cluster =
         let within_table = Int64.(div cluster (Header.refcounts_per_cluster t.h)) in
         let within_cluster = Int64.(to_int (rem cluster (Header.refcounts_per_cluster t.h))) in
 
@@ -343,7 +344,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
                 if i >= needed
                 then Lwt.return (`Ok ())
                 else begin
-                  incr t (Int64.add start i)
+                  really_incr t (Int64.add start i)
                   >>*= fun () ->
                   loop (Int64.succ i)
                 end in
@@ -376,7 +377,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
               Log.debug (fun f -> f "Allocated new refcount cluster %Ld" cluster);
               marshal_physical_address t offset addr
               >>*= fun () ->
-              incr t cluster
+              really_incr t cluster
               >>*= fun () ->
               Lwt.return (`Ok addr)
             end else Lwt.return (`Ok addr) )
@@ -393,7 +394,16 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         >>*= fun () ->
         Log.debug (fun f -> f "Incremented refcount of cluster %Ld" cluster);
         Lwt.return (`Ok ())
+
+      (* If the lazy refcounts feature is enabled then don't actually Increment
+         the refcounts. *)
+      let incr t cluster =
+        if t.lazy_refcounts
+        then Lwt.return (`Ok ())
+        else really_incr t cluster
+
     end
+
 
     let read_l1_table t l1_index =
       let table_offset = t.h.Header.l1_table_offset in
@@ -696,7 +706,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       B.write base sector [ buf ] in
     let flush () = B.flush base in
     let cache = ClusterCache.make ~read_cluster ~write_cluster ~flush () in
-    Lwt.return (`Ok { h; base; info = info'; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits })
+    let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true } -> true | _ -> false in
+    Lwt.return (`Ok { h; base; info = info'; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits; lazy_refcounts })
 
   let connect base =
     let open Lwt in
@@ -794,7 +805,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     >>*= fun () ->
     Lwt.return (`Ok t)
 
-  let rebuild_refcount_table t =
+  let really_rebuild_refcount_table t =
     (* Zero all clusters allocated in the refcount table *)
     let buf = malloc t.h in
     let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
