@@ -809,9 +809,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     (* Disable lazy refcounts so we actually update the real refcounts *)
     let lazy_refcounts = t.lazy_refcounts in
     t.lazy_refcounts <- false;
-
     (* Zero all clusters allocated in the refcount table *)
-    let buf = malloc t.h in
     let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
     let rec loop i =
       if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
