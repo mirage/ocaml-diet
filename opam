@@ -30,6 +30,7 @@ depends: [
   "cmdliner"
   "sexplib"
   "logs"
+  "fmt"
   "ocamlfind" {build}
   "oasis" {build}
   "ppx_tools" {build}
