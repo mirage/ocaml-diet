@@ -64,17 +64,18 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     type t = {
       read_cluster: int64 -> [ `Ok of Cstruct.t | `Error of error ] Lwt.t;
       write_cluster: int64 -> Cstruct.t -> [ `Ok of unit | `Error of error ] Lwt.t;
+      flush: unit -> [ `Ok of unit | `Error of error ] Lwt.t;
       mutable clusters: Cstruct.t Int64Map.t;
       mutable locked: Int64Set.t;
       m: Lwt_mutex.t;
       c: unit Lwt_condition.t;
     }
-    let make ~read_cluster ~write_cluster () =
+    let make ~read_cluster ~write_cluster ~flush () =
       let m = Lwt_mutex.create () in
       let c = Lwt_condition.create () in
       let clusters = Int64Map.empty in
       let locked = Int64Set.empty in
-      { read_cluster; write_cluster; m; c; clusters; locked }
+      { read_cluster; write_cluster; flush; m; c; clusters; locked }
 
     let with_lock t cluster f =
       let open Lwt in
@@ -142,6 +143,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
            t.clusters <- Int64Map.add cluster buf t.clusters;
            t.write_cluster cluster buf
         )
+      >>*= fun () ->
+      t.flush ()
   end
 
 
@@ -214,6 +217,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     | Result.Ok _ ->
       B.write t.base 0L [ page ]
       >>*= fun () ->
+      B.flush t.base
+      >>*= fun () ->
       t.h <- h;
       Lwt.return (`Ok ())
     | Result.Error (`Msg m) ->
@@ -259,7 +264,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         end
 
       (** Increment the refcount of a given cluster. Note this might need
-          to allocate itself, to enlarge the refcount table. *)
+          to allocate itself, to enlarge the refcount table. When this function
+          returns the refcount is guaranteed to have been persisted. *)
       let rec incr t cluster =
         let within_table = Int64.(div cluster (Header.refcounts_per_cluster t.h)) in
         let within_cluster = Int64.(to_int (rem cluster (Header.refcounts_per_cluster t.h))) in
@@ -347,6 +353,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
               Cstruct.memset buf 0;
               let sector, _ = Physical.to_sector ~sector_size:t.sector_size addr in
               B.write t.base sector [ buf ]
+              >>*= fun () ->
+              (* Ensure the new zeroed cluster has been persisted before we reference
+                 it via `marshal_physical_address` *)
+              B.flush t.base
               >>*= fun () ->
               marshal_physical_address t offset addr
               >>*= fun () ->
@@ -662,7 +672,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let offset = i <| cluster_bits in
       let sector = Int64.(div offset (of_int sector_size)) in
       B.write base sector [ buf ] in
-    let cache = ClusterCache.make ~read_cluster ~write_cluster () in
+    let flush () = B.flush base in
+    let cache = ClusterCache.make ~read_cluster ~write_cluster ~flush () in
     Lwt.return (`Ok { h; base; info = info'; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits })
 
   let connect base =
