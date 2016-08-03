@@ -931,9 +931,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let refcount_table_offset = Physical.make t.h.Header.refcount_table_offset in
       let refcount_table_cluster, within = Physical.to_cluster ~cluster_bits:t.cluster_bits refcount_table_offset in
       assert (within = 0);
-      (* This will `assert` if any cluster has a refcount >1 *)
-      rebuild_refcount_table t
-      >>*= fun () ->
       Lwt.return (`Ok ())
 
     let set_next_cluster t x = t.next_cluster <- x
