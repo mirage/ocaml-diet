@@ -809,6 +809,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     (* Disable lazy refcounts so we actually update the real refcounts *)
     let lazy_refcounts = t.lazy_refcounts in
     t.lazy_refcounts <- false;
+    Log.info (fun f -> f "Zeroing existing refcount table");
     (* Zero all clusters allocated in the refcount table *)
     let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
     let rec loop i =
@@ -842,6 +843,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     >>*= fun () ->
     (* Increment the refcount of the header, existing refcount table clusters
        and L1 table *)
+    Log.info (fun f -> f "Incrementing refcount of the header");
     Cluster.Refcount.incr t 0L
     >>*= fun () ->
     let rec loop i =
@@ -872,6 +874,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         >>*= fun () ->
         loop (Int64.succ i)
       end in
+    Log.info (fun f -> f "Incrementing refcount of the refcount table clusters");
     loop 0L
     >>*= fun () ->
     let l1_table_clusters =
@@ -886,6 +889,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         >>*= fun () ->
         loop (Int64.succ i)
       end in
+    Log.info (fun f -> f "Incrementing refcount of the L1 table clusters");
     loop 0L
     >>*= fun () ->
     (* Fold over the mapped data, incrementing refcounts along the way *)
@@ -909,6 +913,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
             loop (Int64.add mapped_sector sectors_per_cluster)
         end
       end in
+    Log.info (fun f -> f "Incrementing refcount of the data clusters");
     loop 0L
     >>*= fun () ->
     (* Restore the original lazy_refcount setting *)
