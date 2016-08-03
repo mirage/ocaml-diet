@@ -1,3 +1,6 @@
+0.4 (2016-08-03)
+- For buffered block devices, call `flush` to guarantee metadata correctness
+
 0.3 (2016-05-12)
 - Depend on ppx, require OCaml 4.02+
 
