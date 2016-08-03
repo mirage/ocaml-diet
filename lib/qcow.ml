@@ -757,6 +757,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     (* Write an initial empty L1 table *)
     B.write base Int64.(div l1_table_offset (of_int t.base_info.B.sector_size)) [ cluster ]
     >>*= fun () ->
+    B.flush base
+    >>*= fun () ->
     Lwt.return (`Ok t)
 
   let rebuild_refcount_table t =
