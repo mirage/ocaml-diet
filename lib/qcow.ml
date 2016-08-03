@@ -805,7 +805,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     >>*= fun () ->
     Lwt.return (`Ok t)
 
-  let really_rebuild_refcount_table t =
+  let rebuild_refcount_table t =
+    (* Disable lazy refcounts so we actually update the real refcounts *)
+    let lazy_refcounts = t.lazy_refcounts in
+    t.lazy_refcounts <- false;
+
     (* Zero all clusters allocated in the refcount table *)
     let buf = malloc t.h in
     let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
@@ -888,6 +892,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         end
       end in
     loop 0L
+    >>*= fun () ->
+    (* Restore the original lazy_refcount setting *)
+    t.lazy_refcounts <- lazy_refcounts;
+    Lwt.return (`Ok ())
 
   let header t = t.h
 
