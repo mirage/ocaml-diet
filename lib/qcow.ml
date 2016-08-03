@@ -852,6 +852,26 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       else begin
         Cluster.Refcount.incr t (Int64.add cluster i)
         >>*= fun () ->
+        (* If any of the table entries point to a block, increase its refcount too *)
+        ClusterCache.read t.cache Int64.(add cluster i)
+          (fun buf ->
+            Lwt.return (`Ok buf)
+          )
+        >>*= fun buf ->
+        let rec inner i =
+          if i >= (Cstruct.len buf)
+          then Lwt.return (`Ok ())
+          else begin
+            let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
+            ( if Physical.to_bytes addr <> 0L then begin
+                let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
+                Cluster.Refcount.incr t cluster
+              end else Lwt.return (`Ok ()) )
+            >>*= fun () ->
+            inner (8 + i)
+          end in
+        inner 0
+        >>*= fun () ->
         loop (Int64.succ i)
       end in
     loop 0L
