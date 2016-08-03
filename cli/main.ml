@@ -194,6 +194,7 @@ let cmds = [info_cmd; create_cmd; check_cmd; repair_cmd; encode_cmd; decode_cmd;
   write_cmd; read_cmd]
 
 let _ =
+  Logs.set_reporter (Logs_fmt.reporter ());
   match Term.eval_choice default_cmd cmds with
   | `Error _ -> exit 1
   | _ -> exit 0

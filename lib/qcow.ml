@@ -26,6 +26,13 @@ module Physical = Qcow_physical
 let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right_logical
 
+let src =
+  let src = Logs.Src.create "qcow" ~doc:"qcow2-formatted BLOCK device" in
+  Logs.Src.set_level src (Some Logs.Info);
+  src
+
+module Log = (val Logs.src_log src : Logs.LOG)
+
 module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
   type 'a io = 'a Lwt.t
@@ -219,6 +226,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       >>*= fun () ->
       B.flush t.base
       >>*= fun () ->
+      Log.debug (fun f -> f "Written header");
       t.h <- h;
       Lwt.return (`Ok ())
     | Result.Error (`Msg m) ->
@@ -228,7 +236,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let sector, within = Physical.to_sector ~sector_size new_size in
     if within <> 0
     then Lwt.return (`Error (`Unknown (Printf.sprintf "Internal error: attempting to resize to a non-sector multiple %s" (Physical.to_string new_size))))
-    else B.resize base sector
+    else begin
+      B.resize base sector
+      >>*= fun () ->
+      Log.debug (fun f -> f "Resized device to %Ld sectors of size %d" (Qcow_physical.to_bytes new_size) sector_size);
+      Lwt.return (`Ok ())
+    end
 
   module Cluster = struct
 
@@ -239,6 +252,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let allocate_clusters t n =
       let cluster = t.next_cluster in
       t.next_cluster <- Int64.add t.next_cluster n;
+      Log.debug (fun f -> f "Soft allocated span of clusters from %Ld (length %Ld)" cluster n);
       resize_base t.base t.sector_size (Physical.make (t.next_cluster <| t.cluster_bits))
       >>*= fun () ->
       Lwt.return (`Ok cluster)
@@ -303,6 +317,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
                 end in
               loop 0
               >>*= fun () ->
+              Log.debug (fun f -> f "Copied refcounts into new table");
               (* Zero new blocks *)
               Cstruct.memset buf 0;
               let rec loop i =
@@ -358,6 +373,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
                  it via `marshal_physical_address` *)
               B.flush t.base
               >>*= fun () ->
+              Log.debug (fun f -> f "Allocated new refcount cluster %Ld" cluster);
               marshal_physical_address t offset addr
               >>*= fun () ->
               incr t cluster
@@ -374,6 +390,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
              Cstruct.BE.set_uint16 buf (2 * within_cluster) (current + 1);
              Lwt.return (`Ok ())
           )
+        >>*= fun () ->
+        Log.debug (fun f -> f "Incremented refcount of cluster %Ld" cluster);
+        Lwt.return (`Ok ())
     end
 
     let read_l1_table t l1_index =
@@ -421,6 +440,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let l1_index_offset = Physical.shift l1_table_start (Int64.mul 8L l1_index) in
       marshal_physical_address t l1_index_offset l2_table_offset
       >>*= fun () ->
+      Log.debug (fun f -> f "Written l1_table[%Ld] <- %Ld" l1_index (fst @@ Physical.to_cluster ~cluster_bits:t.cluster_bits l2_table_offset));
       Lwt.return (`Ok ())
 
     let read_l2_table t l2_table_offset l2_index =
@@ -433,9 +453,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let l2_index_offset = Physical.shift l2_table_offset (Int64.mul 8L l2_index) in
       marshal_physical_address t l2_index_offset cluster
       >>*= fun _ ->
+      Log.debug (fun f -> f "Written l2_table[%Ld] <- %Ld" l2_index (fst @@ Physical.to_cluster ~cluster_bits:t.cluster_bits cluster));
       Lwt.return (`Ok ())
-
-
 
     (* Walk the L1 and L2 tables to translate an address. If a table entry
        is unallocated then return [None]. Note if a [walk_and_allocate] is
@@ -573,6 +592,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         >>*= fun offset' ->
         let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
         B.write t.base base_sector [ buf ]
+        >>*= fun () ->
+        Log.debug (fun f -> f "Written user data to cluster %Ld" (fst (Physical.to_cluster ~cluster_bits:t.cluster_bits offset')));
+        Lwt.return (`Ok ())
       ) (chop_into_aligned cluster_size byte bufs)
 
   let seek_mapped t from =

@@ -30,6 +30,7 @@ depends: [
   "mirage-block-unix" {>= "2.1.0" }
   "cmdliner"
   "sexplib"
+  "logs"
   "ocamlfind" {build}
   "oasis" {build}
   "ppx_tools" {build}
