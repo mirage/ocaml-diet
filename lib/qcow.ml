@@ -841,11 +841,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       end in
     loop 0L
     >>*= fun () ->
-    (* Increment the refcount of the header, existing refcount table clusters
-       and L1 table *)
-    Log.info (fun f -> f "Incrementing refcount of the header");
-    Cluster.Refcount.incr t 0L
-    >>*= fun () ->
     let rec loop i =
       if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
       then Lwt.return (`Ok ())
@@ -864,8 +859,15 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
           else begin
             let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
             ( if Physical.to_bytes addr <> 0L then begin
-                let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
-                Cluster.Refcount.incr t cluster
+                let cluster', _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
+                Log.debug (fun f -> f "Refcount cluster %Ld has reference to cluster %Ld" cluster cluster');
+                (* It might have been incremented already by a previous `incr` *)
+                Cluster.Refcount.read t cluster'
+                >>*= function
+                | 0 ->
+                  Cluster.Refcount.incr t cluster'
+                | _ ->
+                  Lwt.return (`Ok ())
               end else Lwt.return (`Ok ()) )
             >>*= fun () ->
             inner (8 + i)
@@ -876,6 +878,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       end in
     Log.info (fun f -> f "Incrementing refcount of the refcount table clusters");
     loop 0L
+    >>*= fun () ->
+    (* Increment the refcount of the header and L1 table *)
+    Log.info (fun f -> f "Incrementing refcount of the header");
+    Cluster.Refcount.incr t 0L
     >>*= fun () ->
     let l1_table_clusters =
       let refs_per_cluster = 1L <| (t.cluster_bits - 3) in
