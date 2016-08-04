@@ -38,6 +38,26 @@ let test_dir =
   debug "Creating temporary files in %s" path;
   path
 
+let repair_refcounts path =
+  let module B = Qcow.Make(Block) in
+  let t =
+    let open FromBlock in
+    Block.connect path
+    >>= fun raw ->
+    B.connect raw
+    >>= fun qcow ->
+    B.rebuild_refcount_table qcow
+    >>= fun () ->
+    let open Lwt.Infix in
+    B.disconnect qcow
+    >>= fun () ->
+    Block.disconnect raw
+    >>= fun () ->
+    Lwt.return (`Ok ()) in
+  t >>= function
+  | `Ok () -> Lwt.return ()
+  | `Error (`Msg x) -> failwith x
+
 (* qemu-img will set version = `Three and leave an extra cluster
    presumably for extension headers *)
 
@@ -53,7 +73,10 @@ let read_write_header name size =
     >>= fun raw ->
     B.create raw size
     >>= fun b ->
-
+    let open Lwt.Infix in
+    repair_refcounts path
+    >>= fun () ->
+    let open FromBlock in
     Qemu.Img.check path;
 
     let page = Io_page.(to_cstruct (get 1)) in
@@ -210,6 +233,8 @@ let write_read_native sector_size size_sectors (start, length) () =
     >>= fun () ->
     RawWriter.disconnect raw
     >>= fun () ->
+    repair_refcounts path
+    >>= fun () ->
     Qemu.Img.check path;
     check_file_contents path id sector_size size_sectors (start, length) () in
   or_failwith @@ Lwt_main.run t
@@ -239,6 +264,8 @@ let write_read_qemu sector_size size_sectors (start, length) () =
     assert_equal ~printer:(fun x -> String.escaped (Cstruct.to_string x)) ~cmp buf buf';
     let open Lwt.Infix in
     Writer.disconnect b
+    >>= fun () ->
+    repair_refcounts path
     >>= fun () ->
     Qemu.Img.check path;
     check_file_contents path id sector_size size_sectors (start, length) () in
@@ -305,8 +332,10 @@ let virtual_sizes = [
 let check_file path size =
   let info = Qemu.Img.info path in
   assert_equal ~printer:Int64.to_string size info.Qemu.Img.virtual_size;
-  Qemu.Img.check path;
   let module M = Qcow.Make(Block) in
+  repair_refcounts path
+  >>= fun () ->
+  Qemu.Img.check path;
   let open FromBlock in
   Block.connect path
   >>= fun b ->
