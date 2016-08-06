@@ -734,7 +734,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     then Lwt.return (`Error (`Unknown "I don't know how to resize in the case where the L1 table needs new clusters:"))
     else update_header t { t.h with Header.l1_size = Int64.to_int32 l2_tables_required }
 
-  let create base size =
+  let create base ~size ?(lazy_refcounts=true) () =
     let version = `Three in
     let backing_file_offset = 0L in
     let backing_file_size = 0l in
@@ -752,9 +752,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let nb_snapshots = 0l in
     let snapshots_offset = 0L in
     let additional = Some {
-      Header.dirty = true;
+      Header.dirty = lazy_refcounts;
       corrupt = false;
-      lazy_refcounts = true;
+      lazy_refcounts;
       autoclear_features = 0L;
       refcount_order = 4l;
       } in

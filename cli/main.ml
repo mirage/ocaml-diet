@@ -94,6 +94,10 @@ let size =
   let doc = Printf.sprintf "Virtual size of the qcow image" in
   Arg.(value & opt size_converter 1024L & info [ "size" ] ~doc)
 
+let strict_refcounts =
+  let doc = Printf.sprintf "Use strict (non-lazy) refcounts" in
+  Arg.(value & flag & info [ "strict-refcounts" ] ~doc)
+
 let output =
   let doc = Printf.sprintf "Path to the output file." in
   Arg.(value & pos 0 string "test.raw" & info [] ~doc)
@@ -140,7 +144,7 @@ let create_cmd =
     `S "DESCRIPTION";
     `P "Create a qcow-formatted data file";
   ] @ help in
-  Term.(ret(pure Impl.create $ size $ output)),
+  Term.(ret(pure Impl.create $ size $ strict_refcounts $ output)),
   Term.info "create" ~sdocs:_common_options ~doc ~man
 
 let repair_cmd =

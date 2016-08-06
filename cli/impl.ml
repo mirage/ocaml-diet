@@ -186,7 +186,7 @@ let encode filename output =
       >>= function
       | `Error _ -> failwith (Printf.sprintf "Failed to open %s" output)
       | `Ok raw_output ->
-        B.create raw_output total_size
+        B.create raw_output ~size:total_size ()
         >>= function
         | `Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" output)
         | `Ok qcow_output ->
@@ -198,7 +198,7 @@ let encode filename output =
           | `Ok () -> return (`Ok ()) in
   Lwt_main.run t
 
-let create size filename =
+let create size strict_refcounts filename =
   let module B = Qcow.Make(Block) in
   let open Lwt in
   let t =
@@ -210,7 +210,7 @@ let create size filename =
     >>= function
     | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
     | `Ok x ->
-      B.create x size
+      B.create x ~size ~lazy_refcounts:(not strict_refcounts) ()
       >>= function
       | `Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" filename)
       | `Ok x -> return (`Ok ()) in

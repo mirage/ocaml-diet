@@ -71,7 +71,7 @@ let read_write_header name size =
     let open FromBlock in
     Block.connect path
     >>= fun raw ->
-    B.create raw size
+    B.create raw ~size ()
     >>= fun b ->
     let open Lwt.Infix in
     repair_refcounts path
@@ -214,7 +214,7 @@ let write_read_native sector_size size_sectors (start, length) () =
     let open FromBlock in
     RawWriter.connect path
     >>= fun raw ->
-    Writer.create raw Int64.(mul size_sectors (of_int sector_size))
+    Writer.create raw ~size:Int64.(mul size_sectors (of_int sector_size)) ()
     >>= fun b ->
 
     let sector = Int64.div start 512L in
@@ -278,7 +278,7 @@ let check_refcount_table_allocation () =
     let open FromBlock in
     Ramdisk.connect "test"
     >>= fun ramdisk ->
-    B.create ramdisk pib
+    B.create ramdisk ~size:pib ()
     >>= fun b ->
 
     let h = B.header b in
@@ -300,7 +300,7 @@ let check_full_disk () =
     let open FromBlock in
     Ramdisk.connect "test"
     >>= fun ramdisk ->
-    B.create ramdisk gib
+    B.create ramdisk ~size:gib ()
     >>= fun b ->
 
     let open Lwt.Infix in
@@ -383,7 +383,7 @@ let qcow_tool size =
     let open FromBlock in
     Block.connect path
     >>= fun block ->
-    B.create block size
+    B.create block ~size ()
     >>= fun qcow ->
     let open Lwt.Infix in
     B.disconnect qcow
