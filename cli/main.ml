@@ -147,6 +147,10 @@ let create_cmd =
   Term.(ret(pure Impl.create $ size $ strict_refcounts $ output)),
   Term.info "create" ~sdocs:_common_options ~doc ~man
 
+let unsafe_buffering =
+  let doc = Printf.sprintf "Run faster by caching writes in memory. A failure in the middle could corrupt the file." in
+  Arg.(value & flag & info [ "unsafe-buffering" ] ~doc)
+
 let repair_cmd =
   let doc = "Regenerate the refcount table in an image" in
   let man = [
@@ -155,7 +159,7 @@ let repair_cmd =
     the spec. We normally avoid updating the refcount at runtime as a
     performance optimisation."
   ] @ help in
-  Term.(ret(pure Impl.repair $ filename)),
+  Term.(ret(pure Impl.repair $ unsafe_buffering $ filename)),
   Term.info "repair" ~sdocs:_common_options ~doc ~man
 
 let sector =

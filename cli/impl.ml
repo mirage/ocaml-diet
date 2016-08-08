@@ -121,11 +121,28 @@ let check filename =
           return (`Ok ()) in
   Lwt_main.run t
 
-let repair filename =
-  let module B = Qcow.Make(Block) in
+module type BLOCK = sig
+
+  include Qcow_s.RESIZABLE_BLOCK
+
+  val connect: string -> [ `Ok of t | `Error of error ] Lwt.t
+end
+
+module UnsafeBlock = struct
+  include Block
+  let flush _ = Lwt.return (`Ok ())
+end
+
+let repair unsafe_buffering filename =
+  let block =
+     if unsafe_buffering
+     then (module UnsafeBlock: BLOCK)
+     else (module Block: BLOCK) in
+  let module BLOCK = (val block: BLOCK) in
+  let module B = Qcow.Make(BLOCK) in
   let open Lwt in
   let t =
-    Block.connect filename
+    BLOCK.connect filename
     >>*= fun x ->
     B.connect x
     >>*= fun x ->
