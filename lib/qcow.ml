@@ -940,7 +940,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
           >>*= function
           | None -> assert false
           | Some offset' ->
-            let cluster, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
+            let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset' in
             Cluster.Refcount.incr t cluster
             >>*= fun () ->
             loop (Int64.add mapped_sector sectors_per_cluster)
