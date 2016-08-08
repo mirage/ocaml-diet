@@ -893,9 +893,36 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       else begin
         Cluster.Refcount.incr t (Int64.add l1_table_cluster i)
         >>*= fun () ->
+        (* Increment clusters of L1 tables *)
+        ClusterCache.read t.cache Int64.(add l1_table_cluster i)
+          (fun buf ->
+            Lwt.return (`Ok buf)
+          )
+        >>*= fun buf ->
+        let rec inner i =
+          if i >= (Cstruct.len buf)
+          then Lwt.return (`Ok ())
+          else begin
+            let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
+            ( if Physical.to_bytes addr <> 0L then begin
+                let cluster', _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
+                Log.debug (fun f -> f "L1 cluster %Ld has reference to L2 cluster %Ld" cluster cluster');
+                (* It might have been incremented already by a previous `incr` *)
+                Cluster.Refcount.read t cluster'
+                >>*= function
+                | 0 ->
+                  Cluster.Refcount.incr t cluster'
+                | _ ->
+                  Lwt.return (`Ok ())
+              end else Lwt.return (`Ok ()) )
+            >>*= fun () ->
+            inner (8 + i)
+          end in
+        inner 0
+        >>*= fun () ->
         loop (Int64.succ i)
       end in
-    Log.info (fun f -> f "Incrementing refcount of the L1 table clusters");
+    Log.info (fun f -> f "Incrementing refcount of the %Ld L1 table clusters starting at %Ld" l1_table_clusters l1_table_cluster);
     loop 0L
     >>*= fun () ->
     (* Fold over the mapped data, incrementing refcounts along the way *)
