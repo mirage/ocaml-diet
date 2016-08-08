@@ -63,7 +63,7 @@ let repair_refcounts path =
 
 let read_write_header name size =
   let module B = Qcow.Make(Block) in
-  let path = Filename.concat test_dir (Printf.sprintf "%s.%Ld" name size) in
+  let path = Filename.concat test_dir (Printf.sprintf "read_write_header.%s.%Ld" name size) in
 
   let t =
     truncate path
@@ -206,7 +206,7 @@ let check_file_contents path id sector_size size_sectors (start, length) () =
 let write_read_native sector_size size_sectors (start, length) () =
   let module RawWriter = Block in
   let module Writer = Qcow.Make(RawWriter) in
-  let path = Filename.concat test_dir (Printf.sprintf "%Ld.%Ld.%d" size_sectors start length) in
+  let path = Filename.concat test_dir (Printf.sprintf "write_read_native.%Ld.%Ld.%d" size_sectors start length) in
 
   let t =
     truncate path
@@ -242,7 +242,7 @@ let write_read_native sector_size size_sectors (start, length) () =
 let write_read_qemu sector_size size_sectors (start, length) () =
   let module RawWriter = Block in
   let module Writer = Qemu.Block in
-  let path = Filename.concat test_dir (Printf.sprintf "%Ld.%Ld.%d" size_sectors start length) in
+  let path = Filename.concat test_dir (Printf.sprintf "write_read_qemu.%Ld.%Ld.%d" size_sectors start length) in
 
   let t =
     truncate path
