@@ -907,13 +907,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
             ( if Physical.to_bytes addr <> 0L then begin
                 let cluster', _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
                 Log.debug (fun f -> f "L1 cluster %Ld has reference to L2 cluster %Ld" cluster cluster');
-                (* It might have been incremented already by a previous `incr` *)
-                Cluster.Refcount.read t cluster'
-                >>*= function
-                | 0 ->
-                  Cluster.Refcount.incr t cluster'
-                | _ ->
-                  Lwt.return (`Ok ())
+                Cluster.Refcount.incr t cluster'
               end else Lwt.return (`Ok ()) )
             >>*= fun () ->
             inner (8 + i)
