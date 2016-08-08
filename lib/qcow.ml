@@ -887,7 +887,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let refs_per_cluster = 1L <| (t.cluster_bits - 3) in
       Int64.(div (round_up (of_int32 t.h.Header.l1_size) refs_per_cluster) refs_per_cluster) in
     let l1_table_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.l1_table_offset) in
-    let loop i =
+    let rec loop i =
       if i >= l1_table_clusters
       then Lwt.return (`Ok ())
       else begin
