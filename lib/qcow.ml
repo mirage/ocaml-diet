@@ -428,16 +428,16 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
           let cluster, within = Physical.to_cluster ~cluster_bits:t.cluster_bits l1_index_offset in
           ClusterCache.read t.cache cluster
             (fun buf ->
-               let rec loop i : [ `Skip of int | `GotOne of int ]=
+               let rec loop l1_index i : [ `Skip of int | `GotOne of int64 ]=
                  if i >= (Cstruct.len buf) then `Skip (i / 8) else begin
                    if f (Cstruct.BE.get_uint64 buf i)
-                   then `GotOne (i / 8)
-                   else loop (i + 8)
+                   then `GotOne l1_index
+                   else loop (Int64.succ l1_index) (i + 8)
                  end in
-               Lwt.return (`Ok (loop within)))
+               Lwt.return (`Ok (loop l1_index within)))
           >>*= function
-          | `GotOne i ->
-            Lwt.return (`Ok (Some (Int64.(add l1_index (of_int i)))))
+          | `GotOne l1_index' ->
+            Lwt.return (`Ok (Some l1_index'))
           | `Skip n ->
             loop Int64.(add l1_index (of_int n))
         end in
