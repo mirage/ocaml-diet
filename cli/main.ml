@@ -180,7 +180,7 @@ let write_cmd =
     `S "DESCRIPTION";
     `P "Write a string at a given virtual sector offset in the qcow2 image."
   ] @ help in
-  Term.(ret(pure Impl.write $ filename $ sector $ text)),
+  Term.(ret(pure Impl.write $ filename $ sector $ text $ trace)),
   Term.info "write" ~sdocs:_common_options ~doc ~man
 
 let length =
@@ -193,7 +193,7 @@ let read_cmd =
     `S "DESCRIPTION";
     `P "Read a string at a given virtual sector offset in the qcow2 image."
   ] @ help in
-  Term.(ret(pure Impl.read $ filename $ sector $ length)),
+  Term.(ret(pure Impl.read $ filename $ sector $ length $ trace)),
   Term.info "read" ~sdocs:_common_options ~doc ~man
 
 let default_cmd =

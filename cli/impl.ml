@@ -66,6 +66,18 @@ module TracedBlock = struct
 
 end
 
+module type BLOCK = sig
+
+  include Qcow_s.RESIZABLE_BLOCK
+
+  val connect: string -> [ `Ok of t | `Error of error ] Lwt.t
+end
+
+module UnsafeBlock = struct
+  include Block
+  let flush _ = Lwt.return (`Ok ())
+end
+
 let info filename =
   let t =
     let open Lwt in
@@ -84,11 +96,16 @@ let info filename =
     return (`Ok ()) in
   Lwt_main.run t
 
-let write filename sector data =
-  let module B = Qcow.Make(Block) in
+let write filename sector data trace =
+  let block =
+     if trace
+     then (module TracedBlock: BLOCK)
+     else (module Block: BLOCK) in
+  let module BLOCK = (val block: BLOCK) in
+  let module B = Qcow.Make(BLOCK) in
   let t =
     let open Lwt in
-    Block.connect filename
+    BLOCK.connect filename
     >>= function
     | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
     | `Ok x ->
@@ -106,11 +123,16 @@ let write filename sector data =
         | `Ok () -> return (`Ok ()) in
   Lwt_main.run t
 
-let read filename sector length =
-  let module B = Qcow.Make(Block) in
+let read filename sector length trace =
+  let block =
+     if trace
+     then (module TracedBlock: BLOCK)
+     else (module Block: BLOCK) in
+  let module BLOCK = (val block: BLOCK) in
+  let module B = Qcow.Make(BLOCK) in
   let t =
     let open Lwt in
-    Block.connect filename
+    BLOCK.connect filename
     >>= function
     | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
     | `Ok x ->
@@ -151,17 +173,6 @@ let check filename =
           return (`Ok ()) in
   Lwt_main.run t
 
-module type BLOCK = sig
-
-  include Qcow_s.RESIZABLE_BLOCK
-
-  val connect: string -> [ `Ok of t | `Error of error ] Lwt.t
-end
-
-module UnsafeBlock = struct
-  include Block
-  let flush _ = Lwt.return (`Ok ())
-end
 
 let repair unsafe_buffering filename =
   let block =
