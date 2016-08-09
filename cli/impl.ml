@@ -29,12 +29,42 @@ let (>>*=) m f =
   | `Error x -> Lwt.return (`Error x)
   | `Ok x -> f x
 
+let src =
+  let src = Logs.Src.create "qcow" ~doc:"qcow2-formatted BLOCK device" in
+  Logs.Src.set_level src (Some Logs.Info);
+  src
+
+module Log = (val Logs.src_log src : Logs.LOG)
+
 let to_cmdliner_error = function
   | `Error `Disconnected -> `Error(false, "Disconnected")
   | `Error `Is_read_only -> `Error(false, "Is_read_only")
   | `Error `Unimplemented -> `Error(false, "Unimplemented")
   | `Error (`Unknown x) -> `Error(false, x)
   | `Ok x -> `Ok x
+
+module TracedBlock = struct
+  include Block
+
+  let length_of bufs = List.fold_left (+) 0 (List.map Cstruct.len bufs)
+
+  let read t sector bufs =
+    Log.info (fun f -> f "BLOCK.read %Ld len = %d" sector (length_of bufs));
+    read t sector bufs
+
+  let write t sector bufs =
+    Log.info (fun f -> f "BLOCK.write %Ld len = %d" sector (length_of bufs));
+    write t sector bufs
+
+  let flush t =
+    Log.info (fun f -> f "BLOCK.flush");
+    flush t
+
+  let resize t new_size =
+    Log.info (fun f -> f "BLOCK.resize %Ld" new_size);
+    resize t new_size
+
+end
 
 let info filename =
   let t =
@@ -215,15 +245,20 @@ let encode filename output =
           | `Ok () -> return (`Ok ()) in
   Lwt_main.run t
 
-let create size strict_refcounts filename =
-  let module B = Qcow.Make(Block) in
+let create size strict_refcounts trace filename =
+  let block =
+     if trace
+     then (module TracedBlock: BLOCK)
+     else (module Block: BLOCK) in
+  let module BLOCK = (val block: BLOCK) in
+  let module B = Qcow.Make(BLOCK) in
   let open Lwt in
   let t =
     Lwt_unix.openfile filename [ Lwt_unix.O_CREAT ] 0o0644
     >>= fun fd ->
     Lwt_unix.close fd
     >>= fun () ->
-    Block.connect filename
+    BLOCK.connect filename
     >>= function
     | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
     | `Ok x ->

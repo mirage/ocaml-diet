@@ -102,6 +102,10 @@ let output =
   let doc = Printf.sprintf "Path to the output file." in
   Arg.(value & pos 0 string "test.raw" & info [] ~doc)
 
+let trace =
+  let doc = Printf.sprintf "Print block device accesses for debugging" in
+  Arg.(value & flag & info [ "trace" ] ~doc)
+
 let info_cmd =
   let doc = "display general information about a qcow2" in
   let man = [
@@ -144,7 +148,7 @@ let create_cmd =
     `S "DESCRIPTION";
     `P "Create a qcow-formatted data file";
   ] @ help in
-  Term.(ret(pure Impl.create $ size $ strict_refcounts $ output)),
+  Term.(ret(pure Impl.create $ size $ strict_refcounts $ trace $ output)),
   Term.info "create" ~sdocs:_common_options ~doc ~man
 
 let unsafe_buffering =
