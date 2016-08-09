@@ -508,43 +508,43 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       Lwt_mutex.with_lock t.next_cluster_m
         (fun () ->
            read_l1_table t a.Virtual.l1_index
-           >>*= fun l2_table_offset ->
-
-           (* Look up an L2 table *)
-           ( if Physical.to_bytes l2_table_offset = 0L then begin
+           >>*= fun l2_offset ->
+           (* If there is no L2 table entry then allocate L2 and data clusters
+              at the same time to minimise flushing *)
+           ( if Physical.to_bytes l2_offset = 0L then begin
+               allocate_clusters t 2L
+               >>*= fun l2_cluster ->
+               let data_cluster = Int64.succ l2_cluster in
+               Refcount.incr t l2_cluster
+               >>*= fun () ->
+               Refcount.incr t data_cluster
+               >>*= fun () ->
+               let l2_offset = Physical.make (l2_cluster <| t.cluster_bits) in
+               let data_offset = Physical.make (data_cluster <| t.cluster_bits) in
+               write_l2_table t l2_offset a.Virtual.l2_index data_offset
+               >>*= fun () ->
+               write_l1_table t a.Virtual.l1_index l2_offset
+               >>*= fun () ->
+               Lwt.return (`Ok data_offset)
+             end else begin
+               read_l2_table t l2_offset a.Virtual.l2_index
+               >>*= fun data_offset ->
+               if Physical.to_bytes data_offset = 0L then begin
                  allocate_clusters t 1L
-                 >>*= fun cluster ->
-                 Refcount.incr t cluster
+                 >>*= fun data_cluster ->
+                 Refcount.incr t data_cluster
                  >>*= fun () ->
-                 let offset = Physical.make (cluster <| t.cluster_bits) in
-                 write_l1_table t a.Virtual.l1_index offset
+                 let data_offset = Physical.make (data_cluster <| t.cluster_bits) in
+                 write_l2_table t l2_offset a.Virtual.l2_index data_offset
                  >>*= fun () ->
-                 Lwt.return (`Ok offset)
+                 Lwt.return (`Ok data_offset)
                end else begin
-               if Physical.is_compressed l2_table_offset then failwith "compressed";
-               Lwt.return (`Ok l2_table_offset)
+                 if Physical.is_compressed data_offset then failwith "compressed";
+                 Lwt.return (`Ok data_offset)
+               end
              end
-           ) >>*= fun l2_table_offset ->
-
-           (* Look up a cluster *)
-           read_l2_table t l2_table_offset a.Virtual.l2_index
-           >>*= fun cluster_offset ->
-           ( if Physical.to_bytes cluster_offset = 0L then begin
-                 allocate_clusters t 1L
-                 >>*= fun cluster ->
-                 Refcount.incr t cluster
-                 >>*= fun () ->
-                 let offset = Physical.make (cluster <| t.cluster_bits) in
-                 write_l2_table t l2_table_offset a.Virtual.l2_index offset
-                 >>*= fun () ->
-                 Lwt.return (`Ok offset)
-               end else begin
-               if Physical.is_compressed cluster_offset then failwith "compressed";
-               Lwt.return (`Ok cluster_offset)
-             end
-           ) >>*= fun cluster_offset ->
-
-           Lwt.return (`Ok (Physical.shift cluster_offset a.Virtual.cluster))
+           ) >>*= fun data_offset ->
+           Lwt.return (`Ok (Physical.shift data_offset a.Virtual.cluster))
         )
 
   end
