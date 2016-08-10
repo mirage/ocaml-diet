@@ -452,8 +452,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let l1_index_offset = Physical.shift l1_table_start (Int64.mul 8L l1_index) in
       marshal_physical_address t l1_index_offset l2_table_offset
       >>*= fun () ->
-      B.flush t.base
-      >>*= fun () ->
       Log.debug (fun f -> f "Written l1_table[%Ld] <- %Ld" l1_index (fst @@ Physical.to_cluster ~cluster_bits:t.cluster_bits l2_table_offset));
       Lwt.return (`Ok ())
 
@@ -467,8 +465,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let l2_index_offset = Physical.shift l2_table_offset (Int64.mul 8L l2_index) in
       marshal_physical_address t l2_index_offset cluster
       >>*= fun _ ->
-      B.flush t.base
-      >>*= fun () ->
       Log.debug (fun f -> f "Written l2_table[%Ld] <- %Ld" l2_index (fst @@ Physical.to_cluster ~cluster_bits:t.cluster_bits cluster));
       Lwt.return (`Ok ())
 
@@ -529,7 +525,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
                let data_offset = Physical.make (data_cluster <| t.cluster_bits) in
                write_l2_table t l2_offset a.Virtual.l2_index data_offset
                >>*= fun () ->
+               B.flush t.base
+               >>*= fun () ->
                write_l1_table t a.Virtual.l1_index l2_offset
+               >>*= fun () ->
+               B.flush t.base
                >>*= fun () ->
                Lwt.return (`Ok data_offset)
              end else begin
@@ -542,6 +542,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
                  >>*= fun () ->
                  let data_offset = Physical.make (data_cluster <| t.cluster_bits) in
                  write_l2_table t l2_offset a.Virtual.l2_index data_offset
+                 >>*= fun () ->
+                 B.flush t.base
                  >>*= fun () ->
                  Lwt.return (`Ok data_offset)
                end else begin
