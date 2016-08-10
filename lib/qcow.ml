@@ -150,8 +150,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
            t.clusters <- Int64Map.add cluster buf t.clusters;
            t.write_cluster cluster buf
         )
-      >>*= fun () ->
-      t.flush ()
   end
 
 
@@ -208,6 +206,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
          | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
          | Ok _ -> Lwt.return (`Ok ())
       )
+    >>*= fun () ->
+    B.flush t.base
 
   (* Unmarshal a disk physical address written at a given offset within the disk. *)
   let unmarshal_physical_address t offset =
@@ -391,6 +391,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
              Cstruct.BE.set_uint16 buf (2 * within_cluster) (current + 1);
              Lwt.return (`Ok ())
           )
+        >>*= fun () ->
+        B.flush t.base
         >>*= fun () ->
         Log.debug (fun f -> f "Incremented refcount of cluster %Ld" cluster);
         Lwt.return (`Ok ())
@@ -830,6 +832,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
                             Cstruct.memset buf 0;
                             Lwt.return (`Ok ())
                          )
+                        >>*= fun () ->
+                        B.flush t.base
                      end else Lwt.return (`Ok ()) )
                  >>*= fun () ->
                  loop (8 + i)
