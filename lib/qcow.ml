@@ -525,8 +525,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
                let data_offset = Physical.make (data_cluster <| t.cluster_bits) in
                write_l2_table t l2_offset a.Virtual.l2_index data_offset
                >>*= fun () ->
-               B.flush t.base
-               >>*= fun () ->
                write_l1_table t a.Virtual.l1_index l2_offset
                >>*= fun () ->
                B.flush t.base
