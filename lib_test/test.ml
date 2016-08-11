@@ -343,6 +343,11 @@ let check_file path size =
   >>= fun qcow ->
   let h = M.header qcow in
   assert_equal ~printer:Int64.to_string size h.Qcow.Header.size;
+  let dirty =
+    match h.Qcow.Header.additional with
+    | Some { Qcow.Header.dirty = true } -> true
+    | _ -> false in
+  assert_equal ~printer:string_of_bool dirty info.Qemu.Img.dirty_flag;
   let open Lwt.Infix in
   M.disconnect qcow
   >>= fun () ->
