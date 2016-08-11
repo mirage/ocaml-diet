@@ -43,7 +43,7 @@ module Img: sig
     actual_size: int;
     compat: string;
     lazy_refcounts: bool option;
-    refcount_bits: int;
+    refcount_bits: int option;
     corrupt: bool option;
     dirty_flag: bool;
   }
