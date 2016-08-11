@@ -15,6 +15,7 @@
  *
  *)
 open Sexplib.Std
+open Astring
 open Result
 open Qcow_error
 module OldInt64 = Int64
@@ -67,12 +68,98 @@ module CryptMethod = struct
   let compare (a: t) (b: t) = compare a b
 end
 
+module Feature = struct
+  type ty = [
+    | `Incompatible
+    | `Compatible
+    | `Autoclear
+  ] [@@deriving sexp]
+
+  type feature = [
+    | `Corrupt
+    | `Dirty
+    | `Lazy_refcounts
+    | `Unknown of string
+  ] [@@deriving sexp]
+
+  type t = {
+    ty: ty;
+    bit: int;
+    feature: feature;
+  } [@@deriving sexp]
+
+  let understood = [
+    { ty = `Incompatible; bit = 0; feature = `Dirty; };
+    { ty = `Incompatible; bit = 1; feature = `Corrupt; };
+    { ty = `Compatible; bit = 0; feature = `Lazy_refcounts; };
+  ]
+
+  let sizeof _ = 48
+
+  let write t rest =
+    Int8.write (match t.ty with `Incompatible -> 0 | `Compatible -> 1 | `Autoclear -> 2) rest
+    >>= fun rest ->
+    Int8.write t.bit rest
+    >>= fun rest ->
+    let str = match t.feature with
+      | `Corrupt -> "corrupt bit"
+      | `Dirty -> "dirty bit"
+      | `Lazy_refcounts -> "lazy refcounts"
+      | `Unknown x -> x in
+    Cstruct.(memset (sub rest 0 46) 0);
+    Cstruct.blit_from_string str 0 rest 0 (String.length str);
+    Result.Ok (Cstruct.shift rest 46)
+
+  let read rest =
+    Int8.read rest
+    >>= fun (ty, rest) ->
+    ( match ty with
+      | 0 -> Ok `Incompatible
+      | 1 -> Ok `Compatible
+      | 2 -> Ok `Autoclear
+      | n -> error_msg "Unknown header extension type %d" n)
+    >>= fun ty ->
+    Int8.read rest
+    >>= fun (bit, rest) ->
+    let feature = String.trim ~drop:(fun c -> c = '\000') Cstruct.(to_string (sub rest 0 46)) in
+    let feature = match feature with
+      | "corrupt bit" -> `Corrupt
+      | "dirty bit" -> `Dirty
+      | "lazy refcounts" -> `Lazy_refcounts
+      | x -> `Unknown x in
+    Ok ({ ty; bit; feature }, Cstruct.shift rest 46)
+
+  let read_all rest =
+    let rec loop acc rest =
+      if Cstruct.len rest = 0
+      then Ok (List.rev acc)
+      else begin
+        if Cstruct.len rest < 48
+        then error_msg "Trailing garbage in feature area: %s" (String.Ascii.escape (Cstruct.to_string rest))
+        else begin
+          read rest
+          >>= fun (first, rest) ->
+          loop (first :: acc) rest
+        end
+      end in
+    loop [] rest
+
+  let write_all ts rest =
+    let rec loop rest = function
+      | [] -> Ok rest
+      | t :: ts ->
+        write t rest
+        >>= fun rest ->
+        loop rest ts in
+    loop rest ts
+end
+
 type offset = int64 [@@deriving sexp]
 
 type extension = [
   | `Unknown of int32 * string
   | `Backing_file of string
-  | `Feature_name_table of string
+  | `Feature_name_table of Feature.t list
 ] [@@deriving sexp]
 
 type additional = {
@@ -108,14 +195,16 @@ let sizeof t =
   let base = 4 + 4 + 8 + 4 + 4 + 8 + 4 + 4 + 8 + 8 + 4 + 4 + 8 in
   let additional = match t.additional with None -> 0 | Some _ -> 8 + 8 + 8 + 4 + 4 in
   let unpadded_sizeof_extension = function
-    | `Unknown (_, data)
-    | `Backing_file data
-    | `Feature_name_table data -> 4 + 4 + (String.length data) in
+    | `Unknown (_, data) -> String.length data
+    | `Backing_file data -> String.length data
+    | `Feature_name_table features ->
+      List.fold_left (+) (4 + 4) (List.map Feature.sizeof features) in
   let pad_to_8 x = if x mod 8 = 0 then x else x + (8 - (x mod 8)) in
   let extensions = List.(fold_left (+) 0 (map (fun x -> pad_to_8 @@ unpadded_sizeof_extension x) t.extensions)) in
   base + additional + extensions
 
 let write t rest =
+  let initial_buffer_length = Cstruct.len rest in
   big_enough_for "Header" rest (sizeof t)
   >>= fun () ->
   Int8.write (int_of_char 'Q') rest
@@ -174,9 +263,42 @@ let write t rest =
     >>= fun rest ->
     Int32.write e.refcount_order rest
     >>= fun rest ->
-    let header_length = Int32.of_int (sizeof t) in
+    (* The extensions are not counted in the header_length *)
+    let header_length = Int32.of_int (4 + initial_buffer_length - (Cstruct.len rest)) in
     Int32.write header_length rest
-
+    >>= fun rest ->
+    let write_extension rest = function
+    | `Unknown (kind, data) ->
+      Int32.write kind rest
+      >>= fun rest ->
+      let length = String.length data in
+      Int32.write (Int32.of_int length) rest
+      >>= fun rest ->
+      Cstruct.blit_from_string data 0 rest 0 length;
+      Ok (Cstruct.shift rest (String.length data))
+    | `Backing_file filename ->
+      Int32.write 0xE2792ACAl rest
+      >>= fun rest ->
+      let length = String.length filename in
+      Int32.write (Int32.of_int length) rest
+      >>= fun rest ->
+      Cstruct.blit_from_string filename 0 rest 0 length;
+      Ok (Cstruct.shift rest (String.length filename))
+    | `Feature_name_table fs ->
+      let length = List.fold_left (+) 0 (List.map Feature.sizeof fs) in
+      Int32.write 0x6803f857l rest
+      >>= fun rest ->
+      Int32.write (Int32.of_int length) rest
+      >>= fun rest ->
+      Feature.write_all fs rest in
+    let rec loop rest = function
+      | [] ->
+        Int32.write 0l rest
+      | e :: es ->
+        write_extension rest e
+        >>= fun rest ->
+        loop rest es in
+    loop rest t.extensions
 let read rest =
   Int8.read rest
   >>= fun (x, rest) ->
@@ -268,12 +390,21 @@ let read rest =
           return ((kind, payload) :: extensions, rest)
         end in
       let parse_extension (kind, payload) = match kind with
-        | 0xE2792ACAl -> `Backing_file (Cstruct.to_string payload)
-        | 0x6803f857l -> `Feature_name_table (Cstruct.to_string payload)
-        | _ -> `Unknown (kind, Cstruct.to_string payload) in
+        | 0xE2792ACAl -> Ok (`Backing_file (Cstruct.to_string payload))
+        | 0x6803f857l ->
+          Feature.read_all payload
+          >>= fun features ->
+          Ok (`Feature_name_table features)
+        | _ -> Ok (`Unknown (kind, Cstruct.to_string payload)) in
       read_lowlevel rest
       >>= fun (e, rest) ->
-      let extensions = List.map parse_extension e in
+      List.fold_left (fun acc x ->
+        acc >>= fun acc ->
+        parse_extension x
+        >>= fun extension ->
+        Ok (extension :: acc)
+      ) (Ok []) e
+      >>= fun extensions ->
       let header_length = Int32.to_int header_length in
       return (Some { dirty; corrupt; lazy_refcounts; autoclear_features;
                 refcount_order }, extensions, header_length, rest)

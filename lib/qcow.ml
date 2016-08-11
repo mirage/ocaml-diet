@@ -764,7 +764,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       autoclear_features = 0L;
       refcount_order = 4l;
       } in
-    let extensions = [] in
+    let extensions = [
+      `Feature_name_table Header.Feature.understood
+    ] in
     let h = {
       Header.version; backing_file_offset; backing_file_size;
       cluster_bits = Int32.of_int cluster_bits; size; crypt_method;

@@ -31,13 +31,39 @@ module CryptMethod : sig
   include Qcow_s.SERIALISABLE with type t := t
 end
 
+module Feature : sig
+  type ty = [
+    | `Incompatible
+    | `Compatible
+    | `Autoclear
+  ]
+
+  type feature = [
+    | `Corrupt
+    | `Dirty
+    | `Lazy_refcounts
+    | `Unknown of string
+  ]
+
+  type t = {
+    ty: ty;
+    bit: int;
+    feature: feature;
+  }
+
+  val understood: t list
+  (** The features understood by this implementation *)
+
+  include Qcow_s.SERIALISABLE with type t := t
+end
+
 type offset = int64
 (** Offset within the image *)
 
 type extension = [
   | `Unknown of int32 * string
   | `Backing_file of string
-  | `Feature_name_table of string
+  | `Feature_name_table of Feature.t list
 ] [@@deriving sexp]
 
 type additional = {

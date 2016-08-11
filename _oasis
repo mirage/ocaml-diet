@@ -13,7 +13,8 @@ Library qcow
   Path:               lib
   Findlibname:        qcow
   Modules:            Qcow_s, Qcow_header, Qcow_error, Qcow_types, Qcow_virtual, Qcow_physical, Qcow
-  BuildDepends:       result, cstruct, sexplib, ppx_sexp_conv, mirage-types.lwt, lwt, io-page, logs
+  BuildDepends:       result, cstruct, sexplib, ppx_sexp_conv, mirage-types.lwt,
+    lwt, io-page, logs, astring
 
 Document qcow
   Title:                Qcow docs

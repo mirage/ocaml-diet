@@ -104,7 +104,7 @@ let create_1K () =
     crypt_method = `None; l1_size = 1l; l1_table_offset = 131072L;
     refcount_table_offset = 65536L; refcount_table_clusters = 1l;
     nb_snapshots = 0l; snapshots_offset = 0L; additional;
-    extensions = [];
+    extensions = [ `Feature_name_table Qcow.Header.Feature.understood ];
   } in
   let cmp a b = Qcow.Header.compare a b = 0 in
   let printer = Qcow.Header.to_string in
@@ -118,7 +118,7 @@ let create_1M () =
     crypt_method = `None; l1_size = 1l; l1_table_offset = 131072L;
     refcount_table_offset = 65536L; refcount_table_clusters = 1l;
     nb_snapshots = 0l; snapshots_offset = 0L; additional;
-    extensions = [];
+    extensions = [ `Feature_name_table Qcow.Header.Feature.understood ];
   } in
   let cmp a b = Qcow.Header.compare a b = 0 in
   let printer = Qcow.Header.to_string in
@@ -132,7 +132,7 @@ let create_1P () =
     crypt_method = `None; l1_size = 2097152l; l1_table_offset = 131072L;
     refcount_table_offset = 65536L; refcount_table_clusters = 1l;
     nb_snapshots = 0l; snapshots_offset = 0L; additional;
-    extensions = [];
+    extensions = [ `Feature_name_table Qcow.Header.Feature.understood ];
   } in
   let cmp a b = Qcow.Header.compare a b = 0 in
   let printer = Qcow.Header.to_string in
@@ -347,7 +347,10 @@ let check_file path size =
     match h.Qcow.Header.additional with
     | Some { Qcow.Header.dirty = true } -> true
     | _ -> false in
+  (* Unfortunately qemu-img info doesn't query the dirty flag:
+     https://github.com/djs55/qemu/commit/9ac8f24fde855c66b1378cee30791a4aef5c33ba
   assert_equal ~printer:string_of_bool dirty info.Qemu.Img.dirty_flag;
+  *)
   let open Lwt.Infix in
   M.disconnect qcow
   >>= fun () ->
