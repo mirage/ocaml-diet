@@ -1,5 +1,7 @@
 0.4 (2016-08-03)
 - For buffered block devices, call `flush` to guarantee metadata correctness
+- In lazy_refcounts mode (the default), do not compute any refcounts
+- CLI: the `repair` command should recompute refcounts
 
 0.3 (2016-05-12)
 - Depend on ppx, require OCaml 4.02+
