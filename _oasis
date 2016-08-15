@@ -1,6 +1,6 @@
 OASISFormat: 0.3
 Name:        qcow
-Version:     0.3
+Version:     0.4
 Synopsis:    Qcow2 image format
 Authors:     David Scott
 License:     ISC
@@ -13,7 +13,8 @@ Library qcow
   Path:               lib
   Findlibname:        qcow
   Modules:            Qcow_s, Qcow_header, Qcow_error, Qcow_types, Qcow_virtual, Qcow_physical, Qcow
-  BuildDepends:       result, cstruct, sexplib, ppx_sexp_conv, mirage-types.lwt, lwt, io-page
+  BuildDepends:       result, cstruct, sexplib, ppx_sexp_conv, mirage-types.lwt,
+    lwt, io-page, logs, astring
 
 Document qcow
   Title:                Qcow docs
@@ -29,7 +30,8 @@ Executable "qcow-tool"
   MainIs:             main.ml
   Custom:             true
   Install:            false
-  BuildDepends:       lwt, lwt.unix, qcow, cmdliner, cstruct.lwt, mirage-block-unix, mirage-block, io-page.unix
+  BuildDepends:       lwt, lwt.unix, qcow, cmdliner, cstruct.lwt, logs.fmt,
+    mirage-block-unix, mirage-block, io-page.unix
 
 Executable test
   Build$:             flag(tests)

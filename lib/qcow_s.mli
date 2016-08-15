@@ -61,6 +61,10 @@ module type RESIZABLE_BLOCK = sig
 
   val resize: t -> int64 -> [ `Ok of unit | `Error of error ] Lwt.t
   (** Resize the file to the given number of sectors. *)
+
+  val flush : t -> [ `Ok of unit | `Error of error ] io
+  (** [flush t] flushes any buffers, if the file has been opened in buffered
+      mode *)
 end
 
 module type DEBUG = sig

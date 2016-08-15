@@ -94,9 +94,17 @@ let size =
   let doc = Printf.sprintf "Virtual size of the qcow image" in
   Arg.(value & opt size_converter 1024L & info [ "size" ] ~doc)
 
+let strict_refcounts =
+  let doc = Printf.sprintf "Use strict (non-lazy) refcounts" in
+  Arg.(value & flag & info [ "strict-refcounts" ] ~doc)
+
 let output =
   let doc = Printf.sprintf "Path to the output file." in
   Arg.(value & pos 0 string "test.raw" & info [] ~doc)
+
+let trace =
+  let doc = Printf.sprintf "Print block device accesses for debugging" in
+  Arg.(value & flag & info [ "trace" ] ~doc)
 
 let info_cmd =
   let doc = "display general information about a qcow2" in
@@ -140,8 +148,12 @@ let create_cmd =
     `S "DESCRIPTION";
     `P "Create a qcow-formatted data file";
   ] @ help in
-  Term.(ret(pure Impl.create $ size $ output)),
+  Term.(ret(pure Impl.create $ size $ strict_refcounts $ trace $ output)),
   Term.info "create" ~sdocs:_common_options ~doc ~man
+
+let unsafe_buffering =
+  let doc = Printf.sprintf "Run faster by caching writes in memory. A failure in the middle could corrupt the file." in
+  Arg.(value & flag & info [ "unsafe-buffering" ] ~doc)
 
 let repair_cmd =
   let doc = "Regenerate the refcount table in an image" in
@@ -151,7 +163,7 @@ let repair_cmd =
     the spec. We normally avoid updating the refcount at runtime as a
     performance optimisation."
   ] @ help in
-  Term.(ret(pure Impl.repair $ filename)),
+  Term.(ret(pure Impl.repair $ unsafe_buffering $ filename)),
   Term.info "repair" ~sdocs:_common_options ~doc ~man
 
 let sector =
@@ -168,7 +180,7 @@ let write_cmd =
     `S "DESCRIPTION";
     `P "Write a string at a given virtual sector offset in the qcow2 image."
   ] @ help in
-  Term.(ret(pure Impl.write $ filename $ sector $ text)),
+  Term.(ret(pure Impl.write $ filename $ sector $ text $ trace)),
   Term.info "write" ~sdocs:_common_options ~doc ~man
 
 let length =
@@ -181,7 +193,7 @@ let read_cmd =
     `S "DESCRIPTION";
     `P "Read a string at a given virtual sector offset in the qcow2 image."
   ] @ help in
-  Term.(ret(pure Impl.read $ filename $ sector $ length)),
+  Term.(ret(pure Impl.read $ filename $ sector $ length $ trace)),
   Term.info "read" ~sdocs:_common_options ~doc ~man
 
 let default_cmd =
@@ -194,6 +206,7 @@ let cmds = [info_cmd; create_cmd; check_cmd; repair_cmd; encode_cmd; decode_cmd;
   write_cmd; read_cmd]
 
 let _ =
+  Logs.set_reporter (Logs_fmt.reporter ());
   match Term.eval_choice default_cmd cmds with
   | `Error _ -> exit 1
   | _ -> exit 0

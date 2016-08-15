@@ -20,9 +20,12 @@ module Header = Qcow_header
 module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
   include V1_LWT.BLOCK
 
-  val create: B.t -> int64 -> [ `Ok of t | `Error of error ] io
-  (** [create block size] initialises a qcow-formatted image on [block]
-      with virtual size [size] in bytes. *)
+  val create: B.t -> size:int64 -> ?lazy_refcounts:bool -> unit
+      -> [ `Ok of t | `Error of error ] io
+  (** [create block ~size ?lazy_refcounts ()] initialises a qcow-formatted
+      image on [block] with virtual size [size] in bytes. By default the file
+      will use lazy refcounts, but this can be overriden by supplying
+      [~lazy_refcounts:false] *)
 
   val connect: B.t -> [ `Ok of t | `Error of error ] io
   (** [connect block] connects to an existing qcow-formatted image on

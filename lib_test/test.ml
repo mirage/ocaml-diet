@@ -38,12 +38,32 @@ let test_dir =
   debug "Creating temporary files in %s" path;
   path
 
+let repair_refcounts path =
+  let module B = Qcow.Make(Block) in
+  let t =
+    let open FromBlock in
+    Block.connect path
+    >>= fun raw ->
+    B.connect raw
+    >>= fun qcow ->
+    B.rebuild_refcount_table qcow
+    >>= fun () ->
+    let open Lwt.Infix in
+    B.disconnect qcow
+    >>= fun () ->
+    Block.disconnect raw
+    >>= fun () ->
+    Lwt.return (`Ok ()) in
+  t >>= function
+  | `Ok () -> Lwt.return ()
+  | `Error (`Msg x) -> failwith x
+
 (* qemu-img will set version = `Three and leave an extra cluster
    presumably for extension headers *)
 
 let read_write_header name size =
   let module B = Qcow.Make(Block) in
-  let path = Filename.concat test_dir (Printf.sprintf "%s.%Ld" name size) in
+  let path = Filename.concat test_dir (Printf.sprintf "read_write_header.%s.%Ld" name size) in
 
   let t =
     truncate path
@@ -51,9 +71,12 @@ let read_write_header name size =
     let open FromBlock in
     Block.connect path
     >>= fun raw ->
-    B.create raw size
+    B.create raw ~size ()
     >>= fun b ->
-
+    let open Lwt.Infix in
+    repair_refcounts path
+    >>= fun () ->
+    let open FromBlock in
     Qemu.Img.check path;
 
     let page = Io_page.(to_cstruct (get 1)) in
@@ -81,7 +104,7 @@ let create_1K () =
     crypt_method = `None; l1_size = 1l; l1_table_offset = 131072L;
     refcount_table_offset = 65536L; refcount_table_clusters = 1l;
     nb_snapshots = 0l; snapshots_offset = 0L; additional;
-    extensions = [];
+    extensions = [ `Feature_name_table Qcow.Header.Feature.understood ];
   } in
   let cmp a b = Qcow.Header.compare a b = 0 in
   let printer = Qcow.Header.to_string in
@@ -95,7 +118,7 @@ let create_1M () =
     crypt_method = `None; l1_size = 1l; l1_table_offset = 131072L;
     refcount_table_offset = 65536L; refcount_table_clusters = 1l;
     nb_snapshots = 0l; snapshots_offset = 0L; additional;
-    extensions = [];
+    extensions = [ `Feature_name_table Qcow.Header.Feature.understood ];
   } in
   let cmp a b = Qcow.Header.compare a b = 0 in
   let printer = Qcow.Header.to_string in
@@ -109,7 +132,7 @@ let create_1P () =
     crypt_method = `None; l1_size = 2097152l; l1_table_offset = 131072L;
     refcount_table_offset = 65536L; refcount_table_clusters = 1l;
     nb_snapshots = 0l; snapshots_offset = 0L; additional;
-    extensions = [];
+    extensions = [ `Feature_name_table Qcow.Header.Feature.understood ];
   } in
   let cmp a b = Qcow.Header.compare a b = 0 in
   let printer = Qcow.Header.to_string in
@@ -183,7 +206,7 @@ let check_file_contents path id sector_size size_sectors (start, length) () =
 let write_read_native sector_size size_sectors (start, length) () =
   let module RawWriter = Block in
   let module Writer = Qcow.Make(RawWriter) in
-  let path = Filename.concat test_dir (Printf.sprintf "%Ld.%Ld.%d" size_sectors start length) in
+  let path = Filename.concat test_dir (Printf.sprintf "write_read_native.%Ld.%Ld.%d" size_sectors start length) in
 
   let t =
     truncate path
@@ -191,7 +214,7 @@ let write_read_native sector_size size_sectors (start, length) () =
     let open FromBlock in
     RawWriter.connect path
     >>= fun raw ->
-    Writer.create raw Int64.(mul size_sectors (of_int sector_size))
+    Writer.create raw ~size:Int64.(mul size_sectors (of_int sector_size)) ()
     >>= fun b ->
 
     let sector = Int64.div start 512L in
@@ -210,6 +233,8 @@ let write_read_native sector_size size_sectors (start, length) () =
     >>= fun () ->
     RawWriter.disconnect raw
     >>= fun () ->
+    repair_refcounts path
+    >>= fun () ->
     Qemu.Img.check path;
     check_file_contents path id sector_size size_sectors (start, length) () in
   or_failwith @@ Lwt_main.run t
@@ -217,7 +242,7 @@ let write_read_native sector_size size_sectors (start, length) () =
 let write_read_qemu sector_size size_sectors (start, length) () =
   let module RawWriter = Block in
   let module Writer = Qemu.Block in
-  let path = Filename.concat test_dir (Printf.sprintf "%Ld.%Ld.%d" size_sectors start length) in
+  let path = Filename.concat test_dir (Printf.sprintf "write_read_qemu.%Ld.%Ld.%d" size_sectors start length) in
 
   let t =
     truncate path
@@ -240,6 +265,8 @@ let write_read_qemu sector_size size_sectors (start, length) () =
     let open Lwt.Infix in
     Writer.disconnect b
     >>= fun () ->
+    repair_refcounts path
+    >>= fun () ->
     Qemu.Img.check path;
     check_file_contents path id sector_size size_sectors (start, length) () in
     or_failwith @@ Lwt_main.run t
@@ -251,7 +278,7 @@ let check_refcount_table_allocation () =
     let open FromBlock in
     Ramdisk.connect "test"
     >>= fun ramdisk ->
-    B.create ramdisk pib
+    B.create ramdisk ~size:pib ()
     >>= fun b ->
 
     let h = B.header b in
@@ -273,7 +300,7 @@ let check_full_disk () =
     let open FromBlock in
     Ramdisk.connect "test"
     >>= fun ramdisk ->
-    B.create ramdisk gib
+    B.create ramdisk ~size:gib ()
     >>= fun b ->
 
     let open Lwt.Infix in
@@ -305,8 +332,10 @@ let virtual_sizes = [
 let check_file path size =
   let info = Qemu.Img.info path in
   assert_equal ~printer:Int64.to_string size info.Qemu.Img.virtual_size;
-  Qemu.Img.check path;
   let module M = Qcow.Make(Block) in
+  repair_refcounts path
+  >>= fun () ->
+  Qemu.Img.check path;
   let open FromBlock in
   Block.connect path
   >>= fun b ->
@@ -314,6 +343,14 @@ let check_file path size =
   >>= fun qcow ->
   let h = M.header qcow in
   assert_equal ~printer:Int64.to_string size h.Qcow.Header.size;
+  let dirty =
+    match h.Qcow.Header.additional with
+    | Some { Qcow.Header.dirty = true } -> true
+    | _ -> false in
+  (* Unfortunately qemu-img info doesn't query the dirty flag:
+     https://github.com/djs55/qemu/commit/9ac8f24fde855c66b1378cee30791a4aef5c33ba
+  assert_equal ~printer:string_of_bool dirty info.Qemu.Img.dirty_flag;
+  *)
   let open Lwt.Infix in
   M.disconnect qcow
   >>= fun () ->
@@ -354,7 +391,7 @@ let qcow_tool size =
     let open FromBlock in
     Block.connect path
     >>= fun block ->
-    B.create block size
+    B.create block ~size ()
     >>= fun qcow ->
     let open Lwt.Infix in
     B.disconnect qcow

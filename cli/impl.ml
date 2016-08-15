@@ -23,6 +23,61 @@ let expect_ok = function
   | Ok x -> x
   | Error (`Msg m) -> failwith m
 
+let (>>*=) m f =
+  let open Lwt in
+  m >>= function
+  | `Error x -> Lwt.return (`Error x)
+  | `Ok x -> f x
+
+let src =
+  let src = Logs.Src.create "qcow" ~doc:"qcow2-formatted BLOCK device" in
+  Logs.Src.set_level src (Some Logs.Info);
+  src
+
+module Log = (val Logs.src_log src : Logs.LOG)
+
+let to_cmdliner_error = function
+  | `Error `Disconnected -> `Error(false, "Disconnected")
+  | `Error `Is_read_only -> `Error(false, "Is_read_only")
+  | `Error `Unimplemented -> `Error(false, "Unimplemented")
+  | `Error (`Unknown x) -> `Error(false, x)
+  | `Ok x -> `Ok x
+
+module TracedBlock = struct
+  include Block
+
+  let length_of bufs = List.fold_left (+) 0 (List.map Cstruct.len bufs)
+
+  let read t sector bufs =
+    Log.info (fun f -> f "BLOCK.read %Ld len = %d" sector (length_of bufs));
+    read t sector bufs
+
+  let write t sector bufs =
+    Log.info (fun f -> f "BLOCK.write %Ld len = %d" sector (length_of bufs));
+    write t sector bufs
+
+  let flush t =
+    Log.info (fun f -> f "BLOCK.flush");
+    flush t
+
+  let resize t new_size =
+    Log.info (fun f -> f "BLOCK.resize %Ld" new_size);
+    resize t new_size
+
+end
+
+module type BLOCK = sig
+
+  include Qcow_s.RESIZABLE_BLOCK
+
+  val connect: string -> [ `Ok of t | `Error of error ] Lwt.t
+end
+
+module UnsafeBlock = struct
+  include Block
+  let flush _ = Lwt.return (`Ok ())
+end
+
 let info filename =
   let t =
     let open Lwt in
@@ -41,11 +96,16 @@ let info filename =
     return (`Ok ()) in
   Lwt_main.run t
 
-let write filename sector data =
-  let module B = Qcow.Make(Block) in
+let write filename sector data trace =
+  let block =
+     if trace
+     then (module TracedBlock: BLOCK)
+     else (module Block: BLOCK) in
+  let module BLOCK = (val block: BLOCK) in
+  let module B = Qcow.Make(BLOCK) in
   let t =
     let open Lwt in
-    Block.connect filename
+    BLOCK.connect filename
     >>= function
     | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
     | `Ok x ->
@@ -63,11 +123,16 @@ let write filename sector data =
         | `Ok () -> return (`Ok ()) in
   Lwt_main.run t
 
-let read filename sector length =
-  let module B = Qcow.Make(Block) in
+let read filename sector length trace =
+  let block =
+     if trace
+     then (module TracedBlock: BLOCK)
+     else (module Block: BLOCK) in
+  let module BLOCK = (val block: BLOCK) in
+  let module B = Qcow.Make(BLOCK) in
   let t =
     let open Lwt in
-    Block.connect filename
+    BLOCK.connect filename
     >>= function
     | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
     | `Ok x ->
@@ -108,24 +173,26 @@ let check filename =
           return (`Ok ()) in
   Lwt_main.run t
 
-let repair filename =
-  let module B = Qcow.Make(Block) in
+
+let repair unsafe_buffering filename =
+  let block =
+     if unsafe_buffering
+     then (module UnsafeBlock: BLOCK)
+     else (module Block: BLOCK) in
+  let module BLOCK = (val block: BLOCK) in
+  let module B = Qcow.Make(BLOCK) in
   let open Lwt in
   let t =
-    Block.connect filename
-    >>= function
-    | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
-    | `Ok x ->
-      B.connect x
-      >>= function
-      | `Error _ -> failwith (Printf.sprintf "Failed to read qcow formatted data on %s" filename)
-      | `Ok x ->
-        B.Debug.check_no_overlaps x
-        >>= function
-        | `Error _ -> failwith "Failed to regenerate refcount table"
-        | `Ok () ->
-          return (`Ok ()) in
-  Lwt_main.run t
+    BLOCK.connect filename
+    >>*= fun x ->
+    B.connect x
+    >>*= fun x ->
+    B.rebuild_refcount_table x
+    >>*= fun () ->
+    B.Debug.check_no_overlaps x
+    >>*= fun () ->
+    return (`Ok ()) in
+  Lwt_main.run (t >>= fun r -> return (to_cmdliner_error r))
 
 let decode filename output =
   let module B = Qcow.Make(Block) in
@@ -177,7 +244,7 @@ let encode filename output =
       >>= function
       | `Error _ -> failwith (Printf.sprintf "Failed to open %s" output)
       | `Ok raw_output ->
-        B.create raw_output total_size
+        B.create raw_output ~size:total_size ()
         >>= function
         | `Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" output)
         | `Ok qcow_output ->
@@ -189,19 +256,24 @@ let encode filename output =
           | `Ok () -> return (`Ok ()) in
   Lwt_main.run t
 
-let create size filename =
-  let module B = Qcow.Make(Block) in
+let create size strict_refcounts trace filename =
+  let block =
+     if trace
+     then (module TracedBlock: BLOCK)
+     else (module Block: BLOCK) in
+  let module BLOCK = (val block: BLOCK) in
+  let module B = Qcow.Make(BLOCK) in
   let open Lwt in
   let t =
     Lwt_unix.openfile filename [ Lwt_unix.O_CREAT ] 0o0644
     >>= fun fd ->
     Lwt_unix.close fd
     >>= fun () ->
-    Block.connect filename
+    BLOCK.connect filename
     >>= function
     | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
     | `Ok x ->
-      B.create x size
+      B.create x ~size ~lazy_refcounts:(not strict_refcounts) ()
       >>= function
       | `Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" filename)
       | `Ok x -> return (`Ok ()) in
