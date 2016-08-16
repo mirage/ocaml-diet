@@ -278,3 +278,34 @@ let create size strict_refcounts trace filename =
       | `Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" filename)
       | `Ok x -> return (`Ok ()) in
   Lwt_main.run t
+
+type output = [
+  | `Text
+  | `Json
+]
+
+let is_zero buf =
+  let rec loop ofs =
+    (ofs >= Cstruct.len buf) || (Cstruct.get_uint8 buf ofs = 0 && (loop (ofs + 1))) in
+  loop 0
+
+let mapped filename format ignore_zeroes =
+  let module B = Qcow.Make(Block) in
+  let open Lwt in
+  let t =
+    Block.connect filename
+    >>*= fun x ->
+    B.connect x
+    >>*= fun x ->
+    B.get_info x
+    >>= fun info ->
+    Printf.printf "# offset (bytes), length (bytes)\n";
+    Mirage_block.fold_mapped_s ~f:(fun acc sector_ofs data ->
+      let sector_bytes = Int64.(mul sector_ofs (of_int info.B.sector_size)) in
+      if not ignore_zeroes || not(is_zero data)
+      then Printf.printf "%Lx %d\n" sector_bytes (Cstruct.len data);
+      Lwt.return (`Ok ())
+    ) () (module B) x
+    >>*= fun () ->
+    return (`Ok ()) in
+  Lwt_main.run (t >>= fun r -> return (to_cmdliner_error r))

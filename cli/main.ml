@@ -91,6 +91,23 @@ let size =
   let doc = Printf.sprintf "Virtual size of the qcow image" in
   Arg.(value & opt size_converter 1024L & info [ "size" ] ~doc)
 
+let output_parser txt = match String.Ascii.lowercase txt with
+  | "text" -> `Ok `Text
+  | "json" -> `Ok `Json
+  | _ -> `Error ("Unknown output format, expected either 'text' or 'json'")
+
+let output_printer ppf v =
+  Format.fprintf ppf "%s" (match v with
+    | `Text -> "text"
+    | `Json -> "json"
+  )
+
+let output_converter = output_parser, output_printer
+
+let output_format =
+  let doc = "Desired output format" in
+  Arg.(value & opt output_converter `Text & info [ "output" ] ~doc)
+
 let strict_refcounts =
   let doc = Printf.sprintf "Use strict (non-lazy) refcounts" in
   Arg.(value & flag & info [ "strict-refcounts" ] ~doc)
@@ -102,6 +119,10 @@ let output =
 let trace =
   let doc = Printf.sprintf "Print block device accesses for debugging" in
   Arg.(value & flag & info [ "trace" ] ~doc)
+
+let ignore_zeroes =
+  let doc = "Scan for and ignore blocks which are full of zeroes" in
+  Arg.(value & flag & info [ "ignore-zeroes" ] ~doc)
 
 let info_cmd =
   let doc = "display general information about a qcow2" in
@@ -193,6 +214,17 @@ let read_cmd =
   Term.(ret(pure Impl.read $ filename $ sector $ length $ trace)),
   Term.info "read" ~sdocs:_common_options ~doc ~man
 
+let mapped_cmd =
+  let doc = "Output a list of allocated extents, which may contain writes" in
+  let man = [
+    `S "DESCRIPTION";
+    `P "When a .qcow2 file is created, it is guaranteed to be full of zeroes. \
+        As data is written to the virtual disk, metadata is updated on the \
+        physical file which allows us to list the regions which have been written to."
+  ] @ help in
+  Term.(ret(pure Impl.mapped $ filename $ output_format $ ignore_zeroes)),
+  Term.info "mapped" ~sdocs:_common_options ~doc ~man
+
 let default_cmd =
   let doc = "manipulate virtual disks stored in qcow2 files" in
   let man = help in
@@ -200,7 +232,7 @@ let default_cmd =
   Term.info "qcow-tool" ~version:"1.0.0" ~sdocs:_common_options ~doc ~man
 
 let cmds = [info_cmd; create_cmd; check_cmd; repair_cmd; encode_cmd; decode_cmd;
-  write_cmd; read_cmd]
+  write_cmd; read_cmd; mapped_cmd]
 
 let _ =
   Logs.set_reporter (Logs_fmt.reporter ());
