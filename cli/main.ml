@@ -16,6 +16,7 @@
  *)
 open Sexplib.Std
 open Result
+open Astring
 
 let project_url = "http://github.com/djs55/ocaml-qcow"
 
@@ -59,18 +60,14 @@ let sizes = List.sort (fun (_, a) (_, b) -> compare a b) [
 ]
 
 let size_parser txt =
-  let endswith suffix txt =
-    let suffix' = String.length suffix in
-    let txt' = String.length txt in
-    txt' >= suffix' && (String.sub txt (txt' - suffix') suffix' = suffix) in
   let prefix suffix txt =
     let suffix' = String.length suffix in
     let txt' = String.length txt in
-    String.sub txt 0 (txt' - suffix') in
+    String.with_range ~len:(txt' - suffix') txt in
   try
     match List.fold_left (fun acc (suffix, multiplier) -> match acc with
       | Some x -> Some x
-      | None when not(endswith suffix txt) -> None
+      | None when not(String.is_suffix ~affix:suffix txt) -> None
       | None -> Some (Int64.(mul multiplier (of_string (prefix suffix txt))))
     ) None sizes with
     | None -> `Ok (Int64.of_string txt)

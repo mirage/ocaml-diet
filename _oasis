@@ -31,7 +31,7 @@ Executable "qcow-tool"
   Custom:             true
   Install:            false
   BuildDepends:       lwt, lwt.unix, qcow, cmdliner, cstruct.lwt, logs.fmt,
-    mirage-block-unix, mirage-block, io-page.unix
+    mirage-block-unix, mirage-block, io-page.unix, astring
 
 Executable test
   Build$:             flag(tests)
