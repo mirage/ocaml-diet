@@ -1,6 +1,6 @@
 OASISFormat: 0.3
 Name:        qcow
-Version:     0.4
+Version:     0.4.1
 Synopsis:    Qcow2 image format
 Authors:     David Scott
 License:     ISC
@@ -31,7 +31,7 @@ Executable "qcow-tool"
   Custom:             true
   Install:            false
   BuildDepends:       lwt, lwt.unix, qcow, cmdliner, cstruct.lwt, logs.fmt,
-    mirage-block-unix, mirage-block, io-page.unix
+    mirage-block-unix, mirage-block, io-page.unix, astring
 
 Executable test
   Build$:             flag(tests)
