@@ -512,7 +512,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
            read_l1_table t a.Virtual.l1_index
            >>*= fun l2_offset ->
            (* If there is no L2 table entry then allocate L2 and data clusters
-              at the same time to minimise flushing *)
+              at the same time to minimise I/O *)
            ( if Physical.to_bytes l2_offset = 0L then begin
                allocate_clusters t 2L
                >>*= fun l2_cluster ->
@@ -527,8 +527,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
                >>*= fun () ->
                write_l1_table t a.Virtual.l1_index l2_offset
                >>*= fun () ->
-               B.flush t.base
-               >>*= fun () ->
                Lwt.return (`Ok data_offset)
              end else begin
                read_l2_table t l2_offset a.Virtual.l2_index
@@ -540,8 +538,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
                  >>*= fun () ->
                  let data_offset = Physical.make (data_cluster <| t.cluster_bits) in
                  write_l2_table t l2_offset a.Virtual.l2_index data_offset
-                 >>*= fun () ->
-                 B.flush t.base
                  >>*= fun () ->
                  Lwt.return (`Ok data_offset)
                end else begin
