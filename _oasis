@@ -1,6 +1,6 @@
 OASISFormat: 0.3
 Name:        qcow
-Version:     0.4
+Version:     0.4.1
 Synopsis:    Qcow2 image format
 Authors:     David Scott
 License:     ISC

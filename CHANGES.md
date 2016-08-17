@@ -1,3 +1,7 @@
+0.4.1 (2016-08-17)
+- Remove one necessary source of `flush` calls
+- CLI: add `mapped` command to list the mapped regions of a file
+
 0.4 (2016-08-03)
 - For buffered block devices, call `flush` to guarantee metadata correctness
 - In lazy_refcounts mode (the default), do not compute any refcounts
