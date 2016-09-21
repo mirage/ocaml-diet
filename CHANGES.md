@@ -1,3 +1,6 @@
+0.4.2 (2016-09-21)
+- Don't break the build if `Block.connect` has optional arguments
+
 0.4.1 (2016-08-17)
 - Remove one necessary source of `flush` calls
 - CLI: add `mapped` command to list the mapped regions of a file
