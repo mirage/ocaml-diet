@@ -43,6 +43,13 @@ let to_cmdliner_error = function
   | `Error (`Unknown x) -> `Error(false, x)
   | `Ok x -> `Ok x
 
+module Block = struct
+  include Block
+  (* We're not interested in any optional arguments [connect] may or may not
+     have *)
+  let connect path = connect path
+end
+
 module TracedBlock = struct
   include Block
 
