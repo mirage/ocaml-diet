@@ -76,7 +76,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
       | e -> `Error (`Msg (Printexc.to_string e))
   end
 
-  type id = B.id
   type page_aligned_buffer = B.page_aligned_buffer
 
   let (>>*=) m f =
