@@ -7,6 +7,7 @@ sudo: required
 dist: trusty
 env:
   global:
+    - EXTRA_REMOTES="https://github.com/mirage/mirage-dev.git"
     - PACKAGE="qcow-format" OCAML_VERSION=4.02
     - PINS="nbd"
     - COV_CONF="export TESTS=--enable-tests"
