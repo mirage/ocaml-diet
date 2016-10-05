@@ -137,7 +137,7 @@ module Block = struct
     let sector_size = 512 in
     let size_sectors = Int64.(div size (of_int sector_size)) in
     let info = { read_write; sector_size; size_sectors } in
-    Lwt.return (`Ok { server; client; s; info })
+    Lwt.return ({ server; client; s; info })
 
   let create file size =
     Img.create file size;

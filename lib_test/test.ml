@@ -27,11 +27,11 @@ module Block = UnsafeBlock
 let repair_refcounts path =
   let module B = Qcow.Make(Block)(Time) in
   let t =
-    let open FromBlock in
     Block.connect path
     >>= fun raw ->
     B.connect raw
     >>= fun qcow ->
+    let open FromBlock in
     B.rebuild_refcount_table qcow
     >>= fun () ->
     let open Lwt.Infix in
@@ -54,9 +54,9 @@ let read_write_header name size =
   let t =
     truncate path
     >>= fun () ->
-    let open FromBlock in
     Block.connect path
     >>= fun raw ->
+    let open FromBlock in
     B.create raw ~size ()
     >>= fun _b ->
     let open Lwt.Infix in
@@ -144,12 +144,13 @@ let check_file_contents path id _sector_size _size_sectors (start, length) () =
   let module Reader = Qcow.Make(RawReader)(Time) in
   let sector = Int64.div start 512L in
   (* This is the range that we expect to see written *)
-  let open FromBlock in
   RawReader.connect path
   >>= fun raw ->
   Reader.connect raw
   >>= fun b ->
   let expected = { Extent.start = sector; length = Int64.(div (of_int length) 512L) } in
+  let ofs' = Int64.(mul sector (of_int sector_size)) in
+  let open FromBlock in
   Mirage_block.fold_mapped_s
     ~f:(fun bytes_seen ofs data ->
         let actual = { Extent.start = ofs; length = Int64.of_int (Cstruct.len data / 512) } in
@@ -192,9 +193,9 @@ let write_read_native sector_size size_sectors (start, length) () =
   let t =
     truncate path
     >>= fun () ->
-    let open FromBlock in
     RawWriter.connect path
     >>= fun raw ->
+    let open FromBlock in
     Writer.create raw ~size:Int64.(mul size_sectors (of_int sector_size)) ()
     >>= fun b ->
 
@@ -270,10 +271,10 @@ let write_read_qemu sector_size size_sectors (start, length) () =
   let t =
     truncate path
     >>= fun () ->
-    let open FromBlock in
     Writer.create path Int64.(mul size_sectors (of_int sector_size))
     >>= fun b ->
 
+    let open FromBlock in
     let sector = Int64.div start 512L in
     let id = get_id () in
     let buf = malloc length in
@@ -298,9 +299,9 @@ let check_refcount_table_allocation () =
   let module B = Qcow.Make(Ramdisk)(Time) in
   let t =
     Ramdisk.destroy ~name:"test";
-    let open FromBlock in
     Ramdisk.connect ~name:"test"
     >>= fun ramdisk ->
+    let open FromBlock in
     B.create ramdisk ~size:pib ()
     >>= fun b ->
 
@@ -320,9 +321,9 @@ let check_full_disk () =
   let module B = Qcow.Make(Ramdisk)(Time) in
   let t =
     Ramdisk.destroy ~name:"test";
-    let open FromBlock in
     Ramdisk.connect ~name:"test"
     >>= fun ramdisk ->
+    let open FromBlock in
     B.create ramdisk ~size:gib ()
     >>= fun b ->
 
@@ -359,11 +360,11 @@ let check_file path size =
   repair_refcounts path
   >>= fun () ->
   Qemu.Img.check path;
-  let open FromBlock in
   Block.connect path
   >>= fun b ->
   M.connect b
   >>= fun qcow ->
+  let open FromBlock in
   let h = M.header qcow in
   assert_equal ~printer:Int64.to_string size h.Qcow.Header.size;
   (* Unfortunately qemu-img info doesn't query the dirty flag:
@@ -375,11 +376,9 @@ let check_file path size =
   >>= fun () ->
   Block.disconnect b
   >>= fun () ->
-  let open FromBlock in
   (* Check the qemu-nbd wrapper works *)
   Qemu.Block.connect path
   >>= fun block ->
-  let open Lwt.Infix in
   Qemu.Block.get_info block
   >>= fun info ->
   let size = Int64.(mul info.Qemu.Block.size_sectors (of_int info.Qemu.Block.sector_size)) in
@@ -407,9 +406,9 @@ let qcow_tool size =
   let t =
     truncate path
     >>= fun () ->
-    let open FromBlock in
     Block.connect path
     >>= fun block ->
+    let open FromBlock in
     B.create block ~size ()
     >>= fun qcow ->
     let open Lwt.Infix in

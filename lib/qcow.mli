@@ -57,7 +57,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) : sig
       will use lazy refcounts, but this can be overriden by supplying
       [~lazy_refcounts:false] *)
 
-  val connect: ?config:Config.t -> B.t -> [ `Ok of t | `Error of error ] io
+  val connect: ?config:Config.t -> B.t -> t io
   (** [connect ?config block] connects to an existing qcow-formatted image on
       [block]. *)
 

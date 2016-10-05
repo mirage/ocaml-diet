@@ -85,6 +85,15 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     | `Error x -> Lwt.return (`Error x)
     | `Ok x -> f x
 
+  let or_fail_with m =
+    let open Lwt in
+    m >>= function
+    | `Error (`Unknown s) -> Lwt.fail_with s
+    | `Error `Unimplemented -> Lwt.fail_with "unimplemented"
+    | `Error `Is_read_only -> Lwt.fail_with "is read only"
+    | `Error `Disconnected -> Lwt.fail_with "disconnected"
+    | `Ok x -> Lwt.return x
+
   (* Run all threads in parallel, wait for all to complete, then iterate through
      the results and return the first failure we discover. *)
   let iter_p f xs =
@@ -1167,8 +1176,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     let t' = { h; base; info = info'; config; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock; background_compact_timer } in
     ( if config.Config.discard && not(lazy_refcounts) then begin
         Log.info (fun f -> f "discard requested and lazy_refcounts is disabled: erasing refcount table and enabling lazy_refcounts");
-        Cluster.Refcount.zero_all t'
-        >>*= fun () ->
+        or_fail_with @@ Cluster.Refcount.zero_all t'
+        >>= fun () ->
         let additional = match h.Header.additional with
           | Some h -> { h with Header.lazy_refcounts = true }
           | None -> {
@@ -1182,37 +1191,35 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
           `Feature_name_table Header.Feature.understood
         ] in
         let h = { h with Header.additional = Some additional; extensions } in
-        update_header t' h
-        >>*= fun () ->
+        or_fail_with @@ update_header t' h
+        >>= fun () ->
         t'.lazy_refcounts <- true;
-        Lwt.return (`Ok ())
-      end else Lwt.return (`Ok ()) )
-    >>*= fun () ->
+        Lwt.return_unit
+      end else Lwt.return_unit )
+    >>= fun () ->
     t := Some t';
-    Lwt.return (`Ok t')
+    Lwt.return t'
 
   let connect ?(config=Config.default) base =
     let open Lwt in
     B.get_info base
     >>= fun base_info ->
     let sector = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 base_info.B.sector_size in
-    read_base base 0L sector
-    >>= function
-    | `Error x -> Lwt.return (`Error x)
-    | `Ok () ->
+    or_fail_with @@ read_base base 0L sector
+    >>= fun () ->
       match Header.read sector with
-      | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
+      | Error (`Msg m) -> Lwt.fail_with m
       | Ok (h, _) ->
         make config base h
-        >>*= fun t ->
+        >>= fun t ->
         ( if config.Config.check_on_connect then begin
-            check t
-            >>*= fun { free; used } ->
+            or_fail_with @@ check t
+            >>= fun { free; used } ->
             Log.info (fun f -> f "image has %Ld free sectors and %Ld used sectors" free used);
-            Lwt.return (`Ok ())
-          end else Lwt.return (`Ok ()) )
-        >>*= fun () ->
-        Lwt.return (`Ok t)
+            Lwt.return_unit
+          end else Lwt.return_unit )
+        >>= fun () ->
+        Lwt.return t
 
   let resize t ~new_size:requested_size_bytes ?(ignore_data_loss=false) () =
     Qcow_rwlock.with_write_lock t.metadata_lock
@@ -1352,7 +1359,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     resize_base base base_info.B.sector_size (Physical.make next_free_byte)
     >>*= fun () ->
     make config base h
-    >>*= fun t ->
+    >>= fun t ->
     update_header t h
     >>*= fun () ->
     (* Write an initial empty refcount table *)
