@@ -738,7 +738,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let new_max_entries = Int64.round_up l2_tables_required l2_entries_per_cluster in
       if new_max_entries > old_max_entries
       then Lwt.return (`Error (`Unknown "I don't know how to resize in the case where the L1 table needs new clusters:"))
-      else update_header t { t.h with Header.l1_size = Int64.to_int32 l2_tables_required }
+      else update_header t { t.h with
+        Header.l1_size = Int64.to_int32 l2_tables_required;
+        size
+      }
     end
 
   let create base ~size ?(lazy_refcounts=true) () =
