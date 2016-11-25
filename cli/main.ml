@@ -128,13 +128,23 @@ let ignore_zeroes =
   let doc = "Scan for and ignore blocks which are full of zeroes" in
   Arg.(value & flag & info [ "ignore-zeroes" ] ~doc)
 
+let filter =
+  let doc = "Path within the structure" in
+  Arg.(value & opt (some string) None & info [ "filter" ] ~doc)
+
 let info_cmd =
   let doc = "display general information about a qcow2" in
   let man = [
     `S "DESCRIPTION";
     `P "Display the contents of a qcow2 file header.";
+    `P "By default the full header is printed as an s-expression. To print only some fields provide a --filter argument.";
+    `S "EXAMPLES";
+    `P "To print the file size:";
+    `P "$(mname) info <filename> --filter .size";
+    `P "To print the dirty flag:";
+    `P "$(mname) info <filename> --filter .additional.[0].dirty";
   ] @ help in
-  Term.(ret(pure Impl.info $ filename)),
+  Term.(ret(pure Impl.info $ filename $ filter)),
   Term.info "info" ~sdocs:_common_options ~doc ~man
 
 let check_cmd =
