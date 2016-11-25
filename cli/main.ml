@@ -18,7 +18,7 @@ open Sexplib.Std
 open Result
 open Astring
 
-let project_url = "http://github.com/djs55/ocaml-qcow"
+let project_url = "http://github.com/mirage/ocaml-qcow"
 
 open Cmdliner
 
