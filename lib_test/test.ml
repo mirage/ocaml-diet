@@ -488,7 +488,7 @@ let _ =
       "create 1K" >:: create_1K;
       "create 1M" >:: create_1M;
       "create 1P" >:: create_1P;
-    ] @ interesting_native_reads @ interesting_qemu_reads @ qemu_img_suite in
+    ] @ interesting_native_reads @ interesting_qemu_reads @ qemu_img_suite @ qcow_tool_suite in
   OUnit2.run_test_tt_main (ounit2_of_ounit1 suite);
   (* If no error, delete the directory *)
   ignore(run "rm" [ "-rf"; test_dir ])
