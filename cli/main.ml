@@ -120,6 +120,10 @@ let trace =
   let doc = Printf.sprintf "Print block device accesses for debugging" in
   Arg.(value & flag & info [ "trace" ] ~doc)
 
+let ignore_data_loss =
+  let doc = Printf.sprintf "Ignore potential data loss and proceed anyway. Use with extreme caution!" in
+  Arg.(value & flag & info [ "ignore-data-loss" ] ~doc)
+
 let ignore_zeroes =
   let doc = "Scan for and ignore blocks which are full of zeroes" in
   Arg.(value & flag & info [ "ignore-zeroes" ] ~doc)
@@ -168,6 +172,19 @@ let create_cmd =
   ] @ help in
   Term.(ret(pure Impl.create $ size $ strict_refcounts $ trace $ output)),
   Term.info "create" ~sdocs:_common_options ~doc ~man
+
+let resize_cmd =
+  let doc = "Change the maximum virtual size of the disk." in
+  let man = [
+    `S "DESCRIPTION";
+    `P "When a .qcow2 file is created, the physical file on disk is small but
+       the disk has a (usually much larger) 'virtual' size as seen from the
+       perspective of the client. A disk can usually be safely increased in size
+       without harming the contents. It's up to the client whether it is able
+       to use the new space or not."
+  ] @ help in
+  Term.(ret(pure Impl.resize $ trace $ filename $ size $ ignore_data_loss)),
+  Term.info "resize" ~sdocs:_common_options ~doc ~man
 
 let unsafe_buffering =
   let doc = Printf.sprintf "Run faster by caching writes in memory. A failure in the middle could corrupt the file." in
@@ -232,7 +249,7 @@ let default_cmd =
   Term.info "qcow-tool" ~version:"1.0.0" ~sdocs:_common_options ~doc ~man
 
 let cmds = [info_cmd; create_cmd; check_cmd; repair_cmd; encode_cmd; decode_cmd;
-  write_cmd; read_cmd; mapped_cmd]
+  write_cmd; read_cmd; mapped_cmd; resize_cmd]
 
 let _ =
   Logs.set_reporter (Logs_fmt.reporter ());
