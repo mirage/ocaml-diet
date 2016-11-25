@@ -85,7 +85,7 @@ module UnsafeBlock = struct
   let flush _ = Lwt.return (`Ok ())
 end
 
-let info filename =
+let info filename filter =
   let t =
     let open Lwt in
     Lwt_unix.openfile filename [ Lwt_unix.O_RDONLY ] 0
@@ -94,12 +94,11 @@ let info filename =
     Lwt_cstruct.complete (Lwt_cstruct.read fd) buffer
     >>= fun () ->
     let h, _ = expect_ok (Header.read buffer) in
-    Printf.printf "%s\n" (Sexplib.Sexp.to_string_hum (Header.sexp_of_t h));
-    Printf.printf "Max clusters: %Ld\n" (Int64.shift_right h.Header.size (Int32.to_int h.Header.cluster_bits));
-
-    Printf.printf "Refcounts per cluster: %Ld\n" (Header.refcounts_per_cluster h);
-    Printf.printf "Max refcount table size: %Ld\n" (Header.max_refcount_table_size h);
-
+    let original_sexp = Header.sexp_of_t h in
+    let sexp = match filter with
+      | None -> original_sexp
+      | Some str -> Sexplib.Path.get ~str original_sexp in
+    Printf.printf "%s\n" (Sexplib.Sexp.to_string_hum sexp);
     return (`Ok ()) in
   Lwt_main.run t
 
