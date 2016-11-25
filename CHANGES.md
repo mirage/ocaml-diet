@@ -1,3 +1,7 @@
+trunk (unreleased)
+- `resize` now takes a new size in bytes (rather than sectors) and uses a
+  labelled argument
+
 0.4.2 (2016-09-21)
 - Don't break the build if `Block.connect` has optional arguments
 
