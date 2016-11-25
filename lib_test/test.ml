@@ -449,6 +449,42 @@ let qcow_tool_bad_resize size_from size_to =
     | `Error _ -> Lwt.return (`Ok ()) in
   or_failwith @@ Lwt_main.run t
 
+let create_resize_equals_create size_from size_to =
+  let open Lwt.Infix in
+  let module B = Qcow.Make(Block) in
+  let path1 = Filename.concat test_dir (Int64.to_string size_from) in
+  let path2 = path1 ^ ".resized" in
+  let t =
+    truncate path2
+    >>= fun () ->
+    let open FromBlock in
+    Block.connect path2
+    >>= fun block ->
+    B.create block ~size:size_from ()
+    >>= fun qcow ->
+    B.resize qcow ~new_size:size_to ()
+    >>= fun () ->
+    let open Lwt.Infix in
+    B.disconnect qcow
+    >>= fun () ->
+    Block.disconnect block
+    >>= fun () ->
+    truncate path1
+    >>= fun () ->
+    let open FromBlock in
+    Block.connect path1
+    >>= fun block ->
+    B.create block ~size:size_to ()
+    >>= fun qcow ->
+    let open Lwt.Infix in
+    B.disconnect qcow
+    >>= fun () ->
+    Block.disconnect block
+    >>= fun () ->
+    ignore(Utils.run "diff" [ path1; path2 ]);
+    Lwt.return (`Ok ()) in
+  or_failwith @@ Lwt_main.run t
+
 let qcow_tool_suite =
   let create =
     List.map (fun size ->
@@ -469,7 +505,12 @@ let qcow_tool_suite =
     List.map (fun (size_from, size_to) ->
       Printf.sprintf "check that qcow-tool can be forced to make files smaller and we can read the metadata, from = %Ld bytes to = %Ld bytes" size_from size_to >:: (fun () -> qcow_tool_resize ~ignore_data_loss:true size_from size_to)
     ) bad in
-  create @ ok_resize @ bad_resize @ ignore_data_loss_resize
+  let create_resize_equals_create =
+    let good = List.filter (fun (a, b) -> a < b) (cross virtual_sizes virtual_sizes) in
+    List.map (fun (size_from, size_to) ->
+      Printf.sprintf "check that create then resize creates the same result as create, from = %Ld bytes to = %Ld bytes" size_from size_to >:: (fun () -> create_resize_equals_create size_from size_to)
+    ) good in
+  create @ ok_resize @ bad_resize @ ignore_data_loss_resize @ create_resize_equals_create
 
 let _ =
   let sector_size = 512 in
