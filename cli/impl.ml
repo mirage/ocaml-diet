@@ -99,11 +99,6 @@ let info filename filter =
       | None -> original_sexp
       | Some str -> Sexplib.Path.get ~str original_sexp in
     Printf.printf "%s\n" (Sexplib.Sexp.to_string_hum sexp);
-    Printf.printf "Max clusters: %Ld\n" (Int64.shift_right h.Header.size (Int32.to_int h.Header.cluster_bits));
-
-    Printf.printf "Refcounts per cluster: %Ld\n" (Header.refcounts_per_cluster h);
-    Printf.printf "Max refcount table size: %Ld\n" (Header.max_refcount_table_size h);
-
     return (`Ok ()) in
   Lwt_main.run t
 
