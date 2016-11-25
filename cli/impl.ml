@@ -286,6 +286,38 @@ let create size strict_refcounts trace filename =
       | `Ok x -> return (`Ok ()) in
   Lwt_main.run t
 
+let resize trace filename new_size ignore_data_loss =
+  let block =
+     if trace
+     then (module TracedBlock: BLOCK)
+     else (module Block: BLOCK) in
+  let module BLOCK = (val block: BLOCK) in
+  let module B = Qcow.Make(BLOCK) in
+  let open Lwt in
+  let t =
+    BLOCK.connect filename
+    >>= function
+    | `Error _ -> failwith (Printf.sprintf "Failed to open %s" filename)
+    | `Ok block ->
+    B.connect block
+    >>= function
+    | `Error _ -> failwith (Printf.sprintf "Failed to read qcow-formatted metadata on %s" filename)
+    | `Ok qcow ->
+    B.get_info qcow
+    >>= fun info ->
+    let data_loss =
+      let existing_size = Int64.(mul info.B.size_sectors (of_int info.B.sector_size)) in
+      existing_size > new_size in
+    if not ignore_data_loss && data_loss
+    then return (`Error(false, "Making a disk smaller results in data loss:\ndisk is currently %Ld bytes which is larger than requested %Ld\n.Please see the --ignore-data-loss option."))
+    else begin
+      B.resize qcow ~new_size ~ignore_data_loss ()
+      >>= function
+      | `Error _ -> failwith (Printf.sprintf "Failed to resize qcow formatted data on %s" filename)
+      | `Ok x -> return (`Ok ())
+    end in
+  Lwt_main.run t
+
 type output = [
   | `Text
   | `Json

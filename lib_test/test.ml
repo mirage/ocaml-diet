@@ -401,10 +401,75 @@ let qcow_tool size =
     check_file path size in
   or_failwith @@ Lwt_main.run t
 
+let qcow_tool_resize ?ignore_data_loss size_from size_to =
+  let open Lwt.Infix in
+  let module B = Qcow.Make(Block) in
+  let path = Filename.concat test_dir (Int64.to_string size_from) in
+
+  let t =
+    truncate path
+    >>= fun () ->
+    let open FromBlock in
+    Block.connect path
+    >>= fun block ->
+    B.create block ~size:size_from ()
+    >>= fun qcow ->
+    B.resize qcow ~new_size:size_to ?ignore_data_loss ()
+    >>= fun () ->
+    let open Lwt.Infix in
+    B.disconnect qcow
+    >>= fun () ->
+    Block.disconnect block
+    >>= fun () ->
+    check_file path size_to in
+  or_failwith @@ Lwt_main.run t
+
+let qcow_tool_bad_resize size_from size_to =
+  let open Lwt.Infix in
+  let module B = Qcow.Make(Block) in
+  let path = Filename.concat test_dir (Int64.to_string size_from) in
+
+  let t =
+    truncate path
+    >>= fun () ->
+    let open FromBlock in
+    Block.connect path
+    >>= fun block ->
+    B.create block ~size:size_from ()
+    >>= fun qcow ->
+    let open Lwt.Infix in
+    B.resize qcow ~new_size:size_to ()
+    >>= fun result ->
+    B.disconnect qcow
+    >>= fun () ->
+    Block.disconnect block
+    >>= fun () ->
+    match result with
+    | `Ok () -> failwith (Printf.sprintf "Resize succeeded when it shouldn't: size_from = %Ld; size_to = %Ld" size_from size_to)
+    | `Error _ -> Lwt.return (`Ok ()) in
+  or_failwith @@ Lwt_main.run t
+
 let qcow_tool_suite =
-  List.map (fun size ->
-      Printf.sprintf "check that qcow-tool creates files and we can read the metadata, size = %Ld bytes" size >:: (fun () -> qcow_tool size)
-    ) virtual_sizes
+  let create =
+    List.map (fun size ->
+        Printf.sprintf "check that qcow-tool creates files and we can read the metadata, size = %Ld bytes" size >:: (fun () -> qcow_tool size)
+      ) virtual_sizes in
+  let ok_resize =
+    let ok = List.filter (fun (a, b) -> a < b) (cross virtual_sizes virtual_sizes) in
+    List.map (fun (size_from, size_to) ->
+      Printf.sprintf "check that qcow-tool can make files bigger and we can read the metadata, from = %Ld bytes to = %Ld bytes" size_from size_to >:: (fun () -> qcow_tool_resize size_from size_to)
+    ) ok in
+  let bad_resize =
+    let bad = List.filter (fun (a, b) -> a > b) (cross virtual_sizes virtual_sizes) in
+    List.map (fun (size_from, size_to) ->
+      Printf.sprintf "check that qcow-tool refuses to make files smaller and we can read the metadata, from = %Ld bytes to = %Ld bytes" size_from size_to >:: (fun () -> qcow_tool_bad_resize size_from size_to)
+    ) bad in
+  let ignore_data_loss_resize =
+    let bad = List.filter (fun (a, b) -> a > b) (cross virtual_sizes virtual_sizes) in
+    List.map (fun (size_from, size_to) ->
+      Printf.sprintf "check that qcow-tool can be forced to make files smaller and we can read the metadata, from = %Ld bytes to = %Ld bytes" size_from size_to >:: (fun () -> qcow_tool_resize ~ignore_data_loss:true size_from size_to)
+    ) bad in
+  create @ ok_resize @ bad_resize @ ignore_data_loss_resize
 
 let _ =
   let sector_size = 512 in
@@ -423,7 +488,7 @@ let _ =
       "create 1K" >:: create_1K;
       "create 1M" >:: create_1M;
       "create 1P" >:: create_1P;
-    ] @ interesting_native_reads @ interesting_qemu_reads @ qemu_img_suite @ qcow_tool_suite in
+    ] @ interesting_native_reads @ interesting_qemu_reads @ qemu_img_suite in
   OUnit2.run_test_tt_main (ounit2_of_ounit1 suite);
   (* If no error, delete the directory *)
   ignore(run "rm" [ "-rf"; test_dir ])

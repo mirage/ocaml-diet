@@ -31,9 +31,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
   (** [connect block] connects to an existing qcow-formatted image on
       [block]. *)
 
-  val resize: t -> int64 -> [ `Ok of unit | `Error of error ] io
-  (** [resize block new_size_sectors] changes the size of the qcow-formatted
-      image to be [new_size_sectors] 512-byte sectors. *)
+  val resize: t -> new_size:int64 -> ?ignore_data_loss:bool -> unit -> [ `Ok of unit | `Error of error ] io
+  (** [resize block new_size_bytes ?ignore_data_loss] changes the size of the
+      qcow-formatted image to [new_size_bytes], rounded up to the next allocation
+      unit. This function will fail with an error if the new size would be
+      smaller than the old size as this would cause data loss, unless the argument
+      [?ignore_data_loss] is set to true. *)
 
   val seek_unmapped: t -> int64 -> [ `Ok of int64 | `Error of error ] io
   (** [seek_unmapped t start] returns the offset of the next "hole": a region

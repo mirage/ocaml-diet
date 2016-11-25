@@ -724,17 +724,25 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
       | Ok (h, _) -> make base h
 
-  let resize t new_size_sectors =
-    let size = Int64.mul new_size_sectors 512L in
-    let l2_tables_required = Header.l2_tables_required ~cluster_bits:t.cluster_bits size in
-    (* Keep it simple for now by refusing resizes which would require us to
-       reallocate the L1 table. *)
-    let l2_entries_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
-    let old_max_entries = Int64.round_up (Int64.of_int32 t.h.Header.l1_size) l2_entries_per_cluster in
-    let new_max_entries = Int64.round_up l2_tables_required l2_entries_per_cluster in
-    if new_max_entries > old_max_entries
-    then Lwt.return (`Error (`Unknown "I don't know how to resize in the case where the L1 table needs new clusters:"))
-    else update_header t { t.h with Header.l1_size = Int64.to_int32 l2_tables_required }
+  let resize t ~new_size:requested_size_bytes ?(ignore_data_loss=false) () =
+    let existing_size = t.h.Header.size in
+    if existing_size > requested_size_bytes && not ignore_data_loss
+    then Lwt.return (`Error(`Unknown (Printf.sprintf "Requested resize would result in data loss: requested size = %Ld but current size = %Ld" requested_size_bytes existing_size)))
+    else begin
+      let size = Int64.round_up requested_size_bytes 512L in
+      let l2_tables_required = Header.l2_tables_required ~cluster_bits:t.cluster_bits size in
+      (* Keep it simple for now by refusing resizes which would require us to
+         reallocate the L1 table. *)
+      let l2_entries_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
+      let old_max_entries = Int64.round_up (Int64.of_int32 t.h.Header.l1_size) l2_entries_per_cluster in
+      let new_max_entries = Int64.round_up l2_tables_required l2_entries_per_cluster in
+      if new_max_entries > old_max_entries
+      then Lwt.return (`Error (`Unknown "I don't know how to resize in the case where the L1 table needs new clusters:"))
+      else update_header t { t.h with
+        Header.l1_size = Int64.to_int32 l2_tables_required;
+        size
+      }
+    end
 
   let create base ~size ?(lazy_refcounts=true) () =
     let version = `Three in
