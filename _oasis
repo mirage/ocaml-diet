@@ -12,7 +12,8 @@ Library qcow
   CompiledObject:     best
   Path:               lib
   Findlibname:        qcow
-  Modules:            Qcow_s, Qcow_header, Qcow_error, Qcow_types, Qcow_virtual, Qcow_physical, Qcow
+  Modules:            Qcow_s, Qcow_header, Qcow_error, Qcow_types, Qcow_virtual,
+    Qcow_physical, Qcow_diet, Qcow
   BuildDepends:       result, cstruct, sexplib, ppx_sexp_conv, mirage-types.lwt,
     lwt, io-page, logs, astring
 

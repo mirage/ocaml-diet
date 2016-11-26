@@ -524,6 +524,7 @@ let _ =
       (fun (label, start, length) -> label >:: write_read_native sector_size size_sectors (start, Int64.to_int length))
       (interesting_ranges sector_size size_sectors cluster_bits) in
   let suite = "qcow2" >::: [
+      "DIETs" >:: Qcow_diet.Test.all;
       "check we can fill the disk" >:: check_full_disk;
       "check we can reallocate the refcount table" >:: check_refcount_table_allocation;
       "create 1K" >:: create_1K;
