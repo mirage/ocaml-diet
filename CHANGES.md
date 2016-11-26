@@ -1,6 +1,8 @@
-trunk (unreleased)
+0.5.0 (2016-11-26)
 - `resize` now takes a new size in bytes (rather than sectors) and uses a
   labelled argument
+- `qcow-tool info` now takes a `--filter <expression>` for example
+  `qcow-tool info ... --filter .size` to view the virtual size
 
 0.4.2 (2016-09-21)
 - Don't break the build if `Block.connect` has optional arguments
