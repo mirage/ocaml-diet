@@ -744,6 +744,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       }
     end
 
+  let discard t ~sector ~n () =
+    Log.debug (fun f -> f "Qcow.discard %Ld, %Ld: not currently implemented" sector n);
+    (* discard is a hint, it does not have to have any effect. Therefore it is
+       not an error that it is unimplemented. *)
+    Lwt.return (`Ok ())
+
   let create base ~size ?(lazy_refcounts=true) () =
     let version = `Three in
     let backing_file_offset = 0L in

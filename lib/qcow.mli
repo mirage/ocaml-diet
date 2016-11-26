@@ -38,6 +38,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
       smaller than the old size as this would cause data loss, unless the argument
       [?ignore_data_loss] is set to true. *)
 
+  val discard: t -> sector:int64 -> n:int64 -> unit -> [ `Ok of unit | `Error of error ] io
+  (** [discard sector n] signals that the [n] sectors starting at [sector]
+      are no longer needed and the contents may be discarded. Note the contents
+      may not actually be deleted: this is not a "secure erase". *)
+
   val seek_unmapped: t -> int64 -> [ `Ok of int64 | `Error of error ] io
   (** [seek_unmapped t start] returns the offset of the next "hole": a region
       of the device which is guaranteed to be full of zeroes (typically
