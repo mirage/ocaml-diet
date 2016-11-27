@@ -1,0 +1,8 @@
+description = "Qcow2 image format"
+version = "0.4.2"
+requires="astring cmdliner cstruct fmt logs lwt mirage-block mirage-block-unix result sexplib"
+archive(byte) = "qcow.cma"
+plugin(byte) = "qcow.cma"
+archive(native) = "qcow.cmxa"
+plugin(native) = "qcow.cmxs"
+exists_if = "qcow.cma"

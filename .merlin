@@ -1,0 +1,6 @@
+PKG astring cmdliner cstruct logs lwt mirage-block mirage-block-unix ppx_sexp_conv ppx_tools ppx_type_conv
+PKG io-page io-page.unix logs.fmt result sexplib
+PKG ezjsonm mirage-block-ramdisk nbd ounit
+S lib
+S lib_test
+B _build/**

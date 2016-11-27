@@ -6,16 +6,13 @@ license: "ISC"
 homepage: "https://github.com/mirage/ocaml-qcow"
 dev-repo: "https://github.com/mirage/ocaml-qcow.git"
 bug-reports: "https://github.com/mirage/ocaml-qcow/issues"
-tags: ["org:mirage"]
-build: [
-  [make "PREFIX=%{prefix}%"]
+tags: [
+  "org:mirage"
 ]
-install: [make "PREFIX=%{prefix}%" "install"]
-remove: [
-  [make "PREFIX=%{prefix}%" "uninstall"]
-]
+
 depends: [
-  "base-bytes"
+  "astring"
+  "cmdliner"
   "cstruct"
   "result"
   "mirage-types-lwt" {< "3.0.0"}
@@ -27,8 +24,8 @@ depends: [
   "logs"
   "fmt"
   "astring"
+  "io-page"
   "ocamlfind" {build}
-  "oasis" {build}
   "ppx_tools" {build}
   "ppx_sexp_conv" {build}
   "ppx_type_conv" {build}
@@ -37,10 +34,10 @@ depends: [
   "ezjsonm" {test}
   "nbd" {test & >= "2.0.1"}
 ]
-build-doc: ["ocaml" "setup.ml" "-doc"]
+
+build: [ "ocaml" "pkg/pkg.ml" "build" "--pinned" "%{pinned}%" "--tests" "false" ]
 build-test: [
-  ["ocaml" "setup.ml" "-configure" "--enable-tests"]
-  ["ocaml" "setup.ml" "-build"]
-  ["ocaml" "setup.ml" "-test"]
+  [ "ocaml" "pkg/pkg.ml" "build" "--pinned" "%{pinned}%" "--tests" "true" ]
+  [ "ocaml" "pkg/pkg.ml" "test" ]
 ]
 available: [ocaml-version >= "4.02.0"]
