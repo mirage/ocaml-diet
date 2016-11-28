@@ -202,10 +202,10 @@ module Make(Elt: ELT) = struct
     | Node n when n.y < x -> Node { n with r = remove (x, y) n.r }
     (* overlap on the left only *)
     | Node n when x < n.x && y < n.y ->
-      remove (x, n.x) (Node { n with x = y })
+      remove (x, pred n.x) (Node { n with x = succ y })
     (* overlap on the right only *)
     | Node n when y > n.y && x > n.x ->
-      remove (n.y, x) (Node { n with y = x })
+      remove (succ n.y, y) (Node { n with y = pred x })
     (* overlap on both sides *)
     | Node n when x <= n.x && y >= n.y ->
       let l = remove (x, n.x) n.l in
