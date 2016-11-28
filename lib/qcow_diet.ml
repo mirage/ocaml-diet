@@ -279,6 +279,30 @@ module Test = struct
       check_equals set diet;
     done
 
-  let all () = test_adds ()
+  let test_operator set_op diet_op () =
+    for i = 1 to 1000 do
+      let set1, diet1 = make_random 1000 1000 in
+      let set2, diet2 = make_random 1000 1000 in
+      check_equals set1 diet1;
+      check_equals set2 diet2;
+      let set3 = set_op set1 set2 in
+      let diet3 = diet_op diet1 diet2 in
+      (*
+      Printf.fprintf stderr "diet1 = %s\n" (IntDiet.to_string_internal diet1);
+      Printf.fprintf stderr "diet3 = %s\n" (IntDiet.to_string_internal diet2);
+      Printf.fprintf stderr "diet2 = %s\n" (IntDiet.to_string_internal diet3);
+      *)
+      check_equals set3 diet3
+    done
+
+  let test_add_1 () =
+    let open IntDiet in
+    assert (elements @@ add (3, 4) @@ add (3, 3) empty = [ 3; 4 ])
+
+  let all = [
+    "adding an element to the right", test_add_1;
+    "adding and removing elements acts like a Set", test_adds;
+    "union", test_operator IntSet.union IntDiet.union;
+  ]
 
 end

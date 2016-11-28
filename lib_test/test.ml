@@ -523,14 +523,14 @@ let _ =
   let interesting_native_reads = List.map
       (fun (label, start, length) -> label >:: write_read_native sector_size size_sectors (start, Int64.to_int length))
       (interesting_ranges sector_size size_sectors cluster_bits) in
-  let suite = "qcow2" >::: [
-      "DIETs" >:: Qcow_diet.Test.all;
+  let diet_tests = List.map (fun (name, fn) -> name >:: fn) Qcow_diet.Test.all in
+  let suite = "qcow2" >::: (diet_tests @ [
       "check we can fill the disk" >:: check_full_disk;
       "check we can reallocate the refcount table" >:: check_refcount_table_allocation;
       "create 1K" >:: create_1K;
       "create 1M" >:: create_1M;
       "create 1P" >:: create_1P;
-    ] @ interesting_native_reads @ interesting_qemu_reads @ qemu_img_suite @ qcow_tool_suite in
+    ] @ interesting_native_reads @ interesting_qemu_reads @ qemu_img_suite @ qcow_tool_suite) in
   OUnit2.run_test_tt_main (ounit2_of_ounit1 suite);
   (* If no error, delete the directory *)
   ignore(run "rm" [ "-rf"; test_dir ])

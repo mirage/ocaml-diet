@@ -77,5 +77,5 @@ module Make(Elt: ELT): sig
 end
 
 module Test: sig
-  val all: unit -> unit
+  val all: (string * (unit -> unit)) list
 end
