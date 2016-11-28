@@ -221,7 +221,7 @@ module Make(Elt: ELT) = struct
 
   let diff a b = fold remove b a
 
-  let inter a b = union (diff a b) (diff b a)
+  let inter a b = diff a (diff a b)
 
 end
 
