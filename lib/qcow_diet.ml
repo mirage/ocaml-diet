@@ -299,10 +299,21 @@ module Test = struct
     let open IntDiet in
     assert (elements @@ add (3, 4) @@ add (3, 3) empty = [ 3; 4 ])
 
+  let test_remove_1 () =
+    let open IntDiet in
+    assert (elements @@ remove (6, 7) @@ add (7, 8) empty = [ 8 ])
+
+  let test_remove_2 () =
+    let open IntDiet in
+    assert (elements @@ diff (add (9, 9) @@ add (5, 7) empty) (add (7, 9) empty) = [5; 6])
+
   let all = [
     "adding an element to the right", test_add_1;
+    "removing an element on the left", test_remove_1;
+    "removing an elements from two intervals", test_remove_2;
     "adding and removing elements acts like a Set", test_adds;
     "union", test_operator IntSet.union IntDiet.union;
+    "diff", test_operator IntSet.diff IntDiet.diff;
   ]
 
 end
