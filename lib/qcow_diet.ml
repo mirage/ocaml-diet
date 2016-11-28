@@ -170,11 +170,11 @@ module Make(Elt: ELT) = struct
       let r = add (x, y) n.r in
       Node (addR { n with r })
     (* overlap on the left only *)
-    | Node n when x < n.x && y < n.y ->
+    | Node n when x < n.x && y <= n.y ->
       let l = add (x, pred n.x) n.l in
       Node (addL { n with l })
     (* overlap on the right only *)
-    | Node n when y > n.y && x > n.x ->
+    | Node n when y > n.y && x >= n.x ->
       let r = add (succ n.y, y) n.r in
       Node (addR { n with r })
     (* overlap on both sides *)
