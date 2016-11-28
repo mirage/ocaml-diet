@@ -314,6 +314,7 @@ module Test = struct
     "adding and removing elements acts like a Set", test_adds;
     "union", test_operator IntSet.union IntDiet.union;
     "diff", test_operator IntSet.diff IntDiet.diff;
+    "intersection", test_operator IntSet.inter IntDiet.inter;
   ]
 
 end
