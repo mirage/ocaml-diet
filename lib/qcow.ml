@@ -769,20 +769,43 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       }
     end
 
+  let zero =
+    let page = Io_page.(to_cstruct (get 1)) in
+    Cstruct.memset page 0;
+    page
+
+  let rec erase t ~sector ~n () =
+    if n <= 0L
+    then Lwt.return (`Ok ())
+    else begin
+      write t sector [ Cstruct.sub zero 0 t.info.sector_size ]
+      >>*= fun () ->
+      erase t ~sector:(Int64.succ sector) ~n:(Int64.pred n) ()
+    end
+
   let discard t ~sector ~n () =
+    (* we can only discard whole clusters. We will explicitly zero non-cluster
+       aligned discards in order to satisfy RZAT *)
+
     (* round sector, n up to a cluster boundary *)
     let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
     let sector' = Int64.round_up sector sectors_per_cluster in
+
+    (* we can only discard whole clusters. We will explicitly zero non-cluster
+       aligned discards in order to satisfy RZAT *)
+    erase t ~sector ~n:(Int64.sub sector' sector) ()
+    >>*= fun () ->
     let n' = Int64.sub n (Int64.sub sector' sector) in
-    let rec loop start remaining =
-      if remaining < sectors_per_cluster
-      then Lwt.return (`Ok ())
+
+    let rec loop sector n =
+      if n < sectors_per_cluster
+      then erase t ~sector ~n ()
       else begin
-        let byte = Int64.(mul start (of_int t.info.sector_size)) in
+        let byte = Int64.(mul sector (of_int t.info.sector_size)) in
         let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
         Cluster.walk_and_deallocate t vaddr
         >>*= fun () ->
-        loop (Int64.add start sectors_per_cluster) (Int64.sub remaining sectors_per_cluster)
+        loop (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
       end in
     loop sector' n'
 
