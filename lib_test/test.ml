@@ -23,6 +23,13 @@ open OUnit
 open Utils
 open Sizes
 
+(* No need for data integrity during tests *)
+module UnsafeBlock = struct
+  include Block
+  let flush _ = Lwt.return (`Ok ())
+end
+module Block = UnsafeBlock
+
 let truncate path =
   Lwt_unix.openfile path [ Unix.O_CREAT; Unix.O_TRUNC ] 0o0644
   >>= fun fd ->
