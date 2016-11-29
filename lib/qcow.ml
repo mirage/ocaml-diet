@@ -404,6 +404,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         then Lwt.return (`Ok ())
         else really_incr t cluster
 
+      let decr t cluster =
+        if t.lazy_refcounts
+        then Lwt.return (`Ok ())
+        else Lwt.return (`Error `Unimplemented)
+
     end
 
 
@@ -548,6 +553,26 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
            ) >>*= fun data_offset ->
            Lwt.return (`Ok (Physical.shift data_offset a.Virtual.cluster))
         )
+
+      let walk_and_deallocate t a =
+        read_l1_table t a.Virtual.l1_index
+        >>*= fun l2_offset ->
+        if Physical.to_bytes l2_offset = 0L
+        then Lwt.return (`Ok ())
+        else begin
+          read_l2_table t l2_offset a.Virtual.l2_index
+          >>*= fun data_offset ->
+          if Physical.to_bytes data_offset = 0L
+          then Lwt.return (`Ok ())
+          else begin
+            (* The data at [data_offset] is about to become an unreferenced
+               hole in the file *)
+            let data_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits data_offset in
+            write_l2_table t l2_offset a.Virtual.l2_index (Physical.make 0L)
+            >>*= fun () ->
+            Refcount.decr t data_cluster
+          end
+        end
 
   end
 
@@ -745,10 +770,21 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     end
 
   let discard t ~sector ~n () =
-    Log.debug (fun f -> f "Qcow.discard %Ld, %Ld: not currently implemented" sector n);
-    (* discard is a hint, it does not have to have any effect. Therefore it is
-       not an error that it is unimplemented. *)
-    Lwt.return (`Ok ())
+    (* round sector, n up to a cluster boundary *)
+    let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
+    let sector' = Int64.round_up sector sectors_per_cluster in
+    let n' = Int64.sub n (Int64.sub sector' sector) in
+    let rec loop start remaining =
+      if remaining < sectors_per_cluster
+      then Lwt.return (`Ok ())
+      else begin
+        let byte = Int64.(mul start (of_int t.info.sector_size)) in
+        let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
+        Cluster.walk_and_deallocate t vaddr
+        >>*= fun () ->
+        loop (Int64.add start sectors_per_cluster) (Int64.sub remaining sectors_per_cluster)
+      end in
+    loop sector' n'
 
   let create base ~size ?(lazy_refcounts=true) () =
     let version = `Three in
