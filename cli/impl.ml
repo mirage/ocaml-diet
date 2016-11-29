@@ -239,6 +239,26 @@ let discard unsafe_buffering filename =
     return (`Ok ()) in
   Lwt_main.run (t >>= fun r -> return (to_cmdliner_error r))
 
+let compact unsafe_buffering filename =
+  let block =
+     if unsafe_buffering
+     then (module UnsafeBlock: BLOCK)
+     else (module Block: BLOCK) in
+  let module BLOCK = (val block: BLOCK) in
+  let module B = Qcow.Make(BLOCK) in
+  let open Lwt in
+  let t =
+    BLOCK.connect filename
+    >>*= fun x ->
+    B.connect x
+    >>*= fun x ->
+    B.compact x
+    >>*= fun () ->
+    B.Debug.check_no_overlaps x
+    >>*= fun () ->
+    return (`Ok ()) in
+  Lwt_main.run (t >>= fun r -> return (to_cmdliner_error r))
+
 let repair unsafe_buffering filename =
   let block =
      if unsafe_buffering

@@ -211,6 +211,16 @@ let discard_cmd =
   Term.(ret(pure Impl.discard $ unsafe_buffering $ filename)),
   Term.info "discard" ~sdocs:_common_options ~doc ~man
 
+let compact_cmd =
+  let doc = "Compact the file" in
+  let man = [
+    `S "DESCRIPTION";
+    `P "Iterate over all the unallocated blocks ('holes') in the file created
+        by discard and move live data into them to shrink the file.";
+  ] @ help in
+  Term.(ret(pure Impl.compact $ unsafe_buffering $ filename)),
+  Term.info "compact" ~sdocs:_common_options ~doc ~man
+
 let repair_cmd =
   let doc = "Regenerate the refcount table in an image" in
   let man = [
@@ -270,7 +280,7 @@ let default_cmd =
   Term.info "qcow-tool" ~version:"1.0.0" ~sdocs:_common_options ~doc ~man
 
 let cmds = [info_cmd; create_cmd; check_cmd; repair_cmd; encode_cmd; decode_cmd;
-  write_cmd; read_cmd; mapped_cmd; resize_cmd; discard_cmd]
+  write_cmd; read_cmd; mapped_cmd; resize_cmd; discard_cmd; compact_cmd]
 
 let _ =
   Logs.set_reporter (Logs_fmt.reporter ());
