@@ -179,6 +179,65 @@ let check filename =
           return (`Ok ()) in
   Lwt_main.run t
 
+exception Non_zero
+
+(* slow but performance is not a concern *)
+let is_zero buffer =
+  try
+    for i = 0 to Cstruct.len buffer - 1 do
+      if Cstruct.get_uint8 buffer i <> 0 then raise Non_zero
+    done;
+    true
+  with Non_zero -> false
+
+let discard unsafe_buffering filename =
+  let block =
+     if unsafe_buffering
+     then (module UnsafeBlock: BLOCK)
+     else (module Block: BLOCK) in
+  let module BLOCK = (val block: BLOCK) in
+  let module B = Qcow.Make(BLOCK) in
+  let open Lwt in
+  let t =
+    BLOCK.connect filename
+    >>*= fun x ->
+    BLOCK.get_info x
+    >>= fun info ->
+    B.connect x
+    >>*= fun x ->
+    Mirage_block.fold_mapped_s
+      (fun acc sector buffer ->
+        if is_zero buffer then begin
+          let len = Cstruct.len buffer in
+          assert (len mod info.BLOCK.sector_size = 0);
+          let n = Int64.of_int @@ len / info.BLOCK.sector_size in
+          if Int64.add sector n = info.BLOCK.size_sectors then begin
+            (* The last block in the file: this is our last chance to discard *)
+            let sector = match acc with None -> sector | Some x -> x in
+            let n = Int64.sub info.BLOCK.size_sectors sector in
+            B.discard x ~sector ~n ()
+            >>*= fun () ->
+            Lwt.return (`Ok None)
+          end else begin
+            (* start/extend the current zero region *)
+            let acc = match acc with None -> Some sector | Some x -> Some x in
+            Lwt.return (`Ok acc)
+          end
+        end else begin
+          match acc with
+          | Some start ->
+            (* we accumulated zeros: discard them now *)
+            let n = Int64.sub sector start in
+            B.discard x ~sector:start ~n ()
+            >>*= fun () ->
+            Lwt.return (`Ok None)
+          | None ->
+            Lwt.return (`Ok None)
+        end
+      ) None (module B) x
+    >>*= fun _ ->
+    return (`Ok ()) in
+  Lwt_main.run (t >>= fun r -> return (to_cmdliner_error r))
 
 let repair unsafe_buffering filename =
   let block =

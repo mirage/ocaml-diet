@@ -200,6 +200,17 @@ let unsafe_buffering =
   let doc = Printf.sprintf "Run faster by caching writes in memory. A failure in the middle could corrupt the file." in
   Arg.(value & flag & info [ "unsafe-buffering" ] ~doc)
 
+let discard_cmd =
+  let doc = "Scan for zeroes and discard them" in
+  let man = [
+    `S "DESCRIPTION";
+    `P "Iterate over all allocated blocks in the image, and if a block only
+        contains zeroes, then invoke discard (aka TRIM or UNMAP) on it. This
+        helps shrink the blocks in the file.";
+  ] @ help in
+  Term.(ret(pure Impl.discard $ unsafe_buffering $ filename)),
+  Term.info "discard" ~sdocs:_common_options ~doc ~man
+
 let repair_cmd =
   let doc = "Regenerate the refcount table in an image" in
   let man = [
@@ -259,7 +270,7 @@ let default_cmd =
   Term.info "qcow-tool" ~version:"1.0.0" ~sdocs:_common_options ~doc ~man
 
 let cmds = [info_cmd; create_cmd; check_cmd; repair_cmd; encode_cmd; decode_cmd;
-  write_cmd; read_cmd; mapped_cmd; resize_cmd]
+  write_cmd; read_cmd; mapped_cmd; resize_cmd; discard_cmd]
 
 let _ =
   Logs.set_reporter (Logs_fmt.reporter ());
