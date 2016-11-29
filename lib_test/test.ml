@@ -246,6 +246,47 @@ let write_read_native sector_size size_sectors (start, length) () =
     check_file_contents path id sector_size size_sectors (start, length) () in
   or_failwith @@ Lwt_main.run t
 
+let write_discard_read_native sector_size size_sectors (start, length) () =
+  let module RawWriter = Block in
+  let module Writer = Qcow.Make(RawWriter) in
+  let path = Filename.concat test_dir (Printf.sprintf "write_discard_read_native.%Ld.%Ld.%d" size_sectors start length) in
+  let t =
+    truncate path
+    >>= fun () ->
+    let open FromBlock in
+    RawWriter.connect path
+    >>= fun raw ->
+    Writer.create raw ~size:Int64.(mul size_sectors (of_int sector_size)) ()
+    >>= fun b ->
+
+    let sector = Int64.div start 512L in
+    let id = get_id () in
+    let buf = malloc length in
+    Cstruct.memset buf (id mod 256);
+    Writer.write b sector (fragment 4096 buf)
+    >>= fun () ->
+    Writer.discard b ~sector ~n:(Int64.of_int (length / 512)) ()
+    >>= fun () ->
+    let buf' = malloc length in
+    Writer.read b sector (fragment 4096 buf')
+    >>= fun () ->
+    (* Data has been discarded, so assume the implementation now guarantees
+       zero (cf ATA RZAT) *)
+    for i = 0 to Cstruct.len buf' - 1 do
+      if Cstruct.get_uint8 buf' i <> 0 then failwith "I did not Read Zero After TRIM"
+    done;
+    let open Lwt.Infix in
+    Writer.disconnect b
+    >>= fun () ->
+    RawWriter.disconnect raw
+    >>= fun () ->
+    repair_refcounts path
+    >>= fun () ->
+    Qemu.Img.check path;
+    check_file_contents path id sector_size size_sectors (0L, 0) () in
+
+  or_failwith @@ Lwt_main.run t
+
 let write_read_qemu sector_size size_sectors (start, length) () =
   let module RawWriter = Block in
   let module Writer = Qemu.Block in
@@ -530,6 +571,9 @@ let _ =
   let interesting_native_reads = List.map
       (fun (label, start, length) -> label >:: write_read_native sector_size size_sectors (start, Int64.to_int length))
       (interesting_ranges sector_size size_sectors cluster_bits) in
+  let interesting_native_discards = List.map
+      (fun (label, start, length) -> label >:: write_discard_read_native sector_size size_sectors (start, Int64.to_int length))
+      (interesting_ranges sector_size size_sectors cluster_bits) in
   let diet_tests = List.map (fun (name, fn) -> name >:: fn) Qcow_diet.Test.all in
   let suite = "qcow2" >::: (diet_tests @ [
       "check we can fill the disk" >:: check_full_disk;
@@ -537,7 +581,7 @@ let _ =
       "create 1K" >:: create_1K;
       "create 1M" >:: create_1M;
       "create 1P" >:: create_1P;
-    ] @ interesting_native_reads @ interesting_qemu_reads @ qemu_img_suite @ qcow_tool_suite) in
+    ] @ interesting_native_reads @ interesting_native_discards @ interesting_qemu_reads @ qemu_img_suite @ qcow_tool_suite) in
   OUnit2.run_test_tt_main (ounit2_of_ounit1 suite);
   (* If no error, delete the directory *)
   ignore(run "rm" [ "-rf"; test_dir ])
