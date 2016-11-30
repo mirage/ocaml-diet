@@ -655,6 +655,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         { free; refs }
       end
 
+    (* Fold over all free blocks *)
+    let fold_over_free f t acc =
+      let range (from, upto) acc =
+        let rec loop acc x =
+          if x = (Int64.succ upto) then acc else loop (f x acc) (Int64.succ x) in
+        loop acc from in
+      Int64Set.fold range t.free acc
+
     let make t =
       (* Iterate over the all clusters referenced from all the tables in the file
          and (a) construct a set of free clusters; and (b) construct a map of
@@ -756,7 +764,57 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
   let compact t =
     Block_map.make t
-    >>*= fun _block_map ->
+    >>*= fun block_map ->
+    Printf.fprintf stderr "Physical blocks discovered: %d\n" (Int64Map.cardinal block_map.refs);
+    let total_free = Block_map.Int64Set.fold (fun (x, y) acc -> Int64.(add acc (succ (sub y x)))) block_map.Block_map.free 0L in
+    Printf.fprintf stderr "Total free blocks discovered: %Ld\n" total_free;
+
+    let start_last_block, _ = Int64Map.max_binding block_map.Block_map.refs in
+    assert (start_last_block = Int64.pred t.next_cluster);
+    let ops, _, refs =
+      Block_map.fold_over_free
+        (fun cluster (ops, max_cluster, refs) ->
+          if cluster >= max_cluster then (ops, max_cluster, refs) else begin
+            (* find the last physical block *)
+            let last_block, rf = Int64Map.max_binding refs in
+            (* Printf.fprintf stderr "Highest binding in the map is %Ld\n" (fst (Int64Map.max_binding refs)); *)
+
+            if cluster >= last_block then (ops, last_block, refs) else begin
+              (* copy last_block into cluster and update rf *)
+              let op = last_block, cluster, rf in
+              let refs = Int64Map.remove last_block refs in
+              op :: ops, last_block, refs
+            end
+          end
+        ) block_map ([], start_last_block, block_map.Block_map.refs) in
+    (* Copy the blocks and build up a substitution map so we know where the referring
+       block has been copied to. (Otherwise we may go to adjust the referring block
+       only to find it has also been moved) *)
+    let free, refs, substitutions =
+      List.fold_left
+        (fun (free, refs, substitutions) (src, dst, rf) ->
+          Printf.fprintf stderr "Copy cluster %Ld to %Ld\n" src dst;
+          let free = Block_map.Int64Set.remove (src, src) @@ Block_map.Int64Set.add (dst, dst) free in
+          let refs = Int64Map.remove src @@ Int64Map.add dst rf refs in
+          let substitutions = Int64Map.add src dst substitutions in
+          free, refs, substitutions
+        ) (block_map.Block_map.free, block_map.Block_map.refs, Int64Map.empty) ops in
+    (* Rewrite the block references, taking care to follow the substitutions map *)
+    List.iter
+      (fun (src, dst, (ref_cluster, ref_cluster_within)) ->
+        if Int64Map.mem ref_cluster substitutions then begin
+          let ref_cluster' = Int64Map.find ref_cluster substitutions in
+          Printf.fprintf stderr "Rewrite reference in %Ld (was %Ld) :%d from %Ld to %Ld\n" ref_cluster' ref_cluster ref_cluster_within src dst;
+        end else begin
+          Printf.fprintf stderr "Rewrite reference in %Ld :%d from %Ld to %Ld\n" ref_cluster ref_cluster_within src dst;
+        end
+      ) ops;
+    let last_block = fst (Int64Map.max_binding refs) in
+    Printf.fprintf stderr "Shrink file so that last cluster was %Ld, now %Ld\n" start_last_block last_block;
+    Printf.fprintf stderr "Physical blocks remaining: %d\n" (Int64Map.cardinal refs);
+    let total_free = Block_map.Int64Set.fold (fun (x, y) acc -> Int64.(add acc (succ (sub y x)))) free 0L in
+    Printf.fprintf stderr "Total free blocks remaining: %Ld\n" total_free;
+
     Lwt.return (`Ok ())
 
   let seek_mapped t from =
