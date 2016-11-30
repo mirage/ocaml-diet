@@ -634,104 +634,128 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         Lwt.return (`Ok ())
       ) (chop_into_aligned cluster_size byte bufs)
 
-  let compact t =
-    (* Iterate over the all clusters referenced from all the tables in the file
-       and (a) construct a set of free clusters; and (b) construct a map of
-       physical cluster back to virtual. The free set will show us the holes,
-       and the map will tell us where to get the data from to fill the holes in
-       with. *)
-    let module Int64Set = Qcow_diet.Make(Int64) in
-    let refcount_start_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
-    let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
-    let l1_table_start_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.l1_table_offset) in
-    let l1_table_clusters = Int64.(div (round_up (of_int32 t.h.Header.l1_size) int64s_per_cluster) int64s_per_cluster) in
-    (* Subtract the fixed structures at the beginning of the file *)
-    let whole_file = Int64Set.(add (0L, Int64.pred t.next_cluster) empty) in
-    let free = Int64Set.(
-      remove (l1_table_start_cluster, Int64.add l1_table_start_cluster l1_table_clusters)
-      @@ remove (refcount_start_cluster, Int64.add refcount_start_cluster (Int64.of_int32 t.h.Header.refcount_table_clusters))
-      @@ remove (0L, 0L)
-      whole_file
-    ) in
 
-    let parse x =
-      if x = 0L then 0L else begin
-        let addr = Physical.make x in
-        let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
-        cluster
-      end in
+  module Block_map = struct
+    module Int64Set = Qcow_diet.Make(Int64)
+    module Int64Map = Map.Make(Int64)
+
+    type t = {
+      (* unused blocks in the file. These can be safely overwritten with new data *)
+      free: Int64Set.t;
+      (* map from physical cluster to the physical cluster + offset of the reference.
+         When a block is moved, this reference must be updated. *)
+      refs: (int64 * int) Int64Map.t;
+    }
 
     (* mark a virtual -> physical mapping as in use *)
-    let mark free _virt cluster =
-      if cluster = 0L
-      then free
-      else Int64Set.remove (cluster, cluster) free in
+    let mark t rf cluster =
+      if cluster = 0L then t else begin
+        let free = Int64Set.remove (cluster, cluster) t.free in
+        let refs = Int64Map.add cluster rf t.refs in
+        { free; refs }
+      end
 
-    (* scan the refcount table *)
-    let rec loop free i =
-      if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
-      then Lwt.return (`Ok free)
-      else begin
-        ClusterCache.read t.cache Int64.(add refcount_start_cluster i)
-          (fun buf ->
-            let rec loop free i =
-              if i >= (Cstruct.len buf)
-              then Lwt.return (`Ok free)
-              else begin
-                let cluster = parse (Cstruct.BE.get_uint64 buf i) in
-                let free = mark free None cluster in
-                loop free (8 + i)
-              end in
-            loop free 0
-          )
-        >>*= fun free ->
-        loop free (Int64.succ i)
-      end in
-    loop free 0L
-    >>*= fun free ->
+    let make t =
+      (* Iterate over the all clusters referenced from all the tables in the file
+         and (a) construct a set of free clusters; and (b) construct a map of
+         physical cluster back to virtual. The free set will show us the holes,
+         and the map will tell us where to get the data from to fill the holes in
+         with. *)
+      let module Int64Set = Qcow_diet.Make(Int64) in
+      let refcount_start_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
+      let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
+      let l1_table_start_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.l1_table_offset) in
+      let l1_table_clusters = Int64.(div (round_up (of_int32 t.h.Header.l1_size) int64s_per_cluster) int64s_per_cluster) in
+      (* Subtract the fixed structures at the beginning of the file *)
+      let whole_file = Int64Set.(add (0L, Int64.pred t.next_cluster) empty) in
+      let free = Int64Set.(
+        remove (l1_table_start_cluster, Int64.add l1_table_start_cluster l1_table_clusters)
+        @@ remove (refcount_start_cluster, Int64.add refcount_start_cluster (Int64.of_int32 t.h.Header.refcount_table_clusters))
+        @@ remove (0L, 0L)
+        whole_file
+      ) in
+      let module Int64Map = Map.Make(Int64) in
 
-    (* scan the L1 and L2 tables, marking the L2 and data clusters *)
-    let rec l1_iter free i =
-      if i >= l1_table_clusters
-      then Lwt.return (`Ok free)
-      else begin
-        ClusterCache.read t.cache Int64.(add l1_table_start_cluster i)
-          (fun l1 ->
-            Lwt.return (`Ok l1)
-          )
-        >>*= fun l1 ->
-        let rec l2_iter free i =
-          if i >= (Cstruct.len l1)
-          then Lwt.return (`Ok free)
-          else begin
-            let cluster = parse (Cstruct.BE.get_uint64 l1 i) in
-            let free = mark free None cluster in
-            ClusterCache.read t.cache cluster
-              (fun l2 ->
-                Lwt.return (`Ok l2)
-              )
-            >>*= fun l2 ->
-            let rec data_iter free i =
-              if i >= (Cstruct.len l2)
-              then Lwt.return (`Ok free)
-              else begin
-                let cluster = parse (Cstruct.BE.get_uint64 l2 i) in
-                let free = mark free None cluster in
-                data_iter free (8 + i)
-              end in
-            data_iter free 0
-            >>*= fun free ->
-            l2_iter free (8 + i)
-          end in
-        l2_iter free 0
-        >>*= fun free ->
-        l1_iter free (Int64.succ i)
-      end in
-    l1_iter free 0L
-    >>*= fun _free ->
+      let parse x =
+        if x = 0L then 0L else begin
+          let addr = Physical.make x in
+          let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
+          cluster
+        end in
 
+      let acc = { free; refs = Int64Map.empty } in
+      (* scan the refcount table *)
+      let rec loop acc i =
+        if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
+        then Lwt.return (`Ok acc)
+        else begin
+          let refcount_cluster = Int64.(add refcount_start_cluster i) in
+          ClusterCache.read t.cache refcount_cluster
+            (fun buf ->
+              let rec loop acc i =
+                if i >= (Cstruct.len buf)
+                then Lwt.return (`Ok acc)
+                else begin
+                  let cluster = parse (Cstruct.BE.get_uint64 buf i) in
+                  let acc = mark acc (refcount_cluster, i) cluster in
+                  loop acc (8 + i)
+                end in
+              loop acc 0
+            )
+          >>*= fun acc ->
+          loop acc (Int64.succ i)
+        end in
+      loop acc 0L
+      >>*= fun acc ->
+
+      (* scan the L1 and L2 tables, marking the L2 and data clusters *)
+      let rec l1_iter acc i =
+        let l1_table_cluster = Int64.(add l1_table_start_cluster i) in
+        if i >= l1_table_clusters
+        then Lwt.return (`Ok acc)
+        else begin
+          ClusterCache.read t.cache l1_table_cluster
+            (fun l1 ->
+              Lwt.return (`Ok l1)
+            )
+          >>*= fun l1 ->
+          let rec l2_iter acc i =
+            if i >= (Cstruct.len l1)
+            then Lwt.return (`Ok acc)
+            else begin
+              let l2_table_cluster = parse (Cstruct.BE.get_uint64 l1 i) in
+              let acc = mark acc (l1_table_cluster, i) l2_table_cluster in
+              ClusterCache.read t.cache l2_table_cluster
+                (fun l2 ->
+                  Lwt.return (`Ok l2)
+                )
+              >>*= fun l2 ->
+              let rec data_iter acc i =
+                if i >= (Cstruct.len l2)
+                then Lwt.return (`Ok acc)
+                else begin
+                  let cluster = parse (Cstruct.BE.get_uint64 l2 i) in
+                  let acc = mark acc (l2_table_cluster, i) cluster in
+                  data_iter acc (8 + i)
+                end in
+              data_iter acc 0
+              >>*= fun acc ->
+              l2_iter acc (8 + i)
+            end in
+          l2_iter acc 0
+          >>*= fun acc ->
+          l1_iter acc (Int64.succ i)
+        end in
+      l1_iter acc 0L
+      >>*= fun acc ->
+
+      Lwt.return (`Ok acc)
+  end
+
+  let compact t =
+    Block_map.make t
+    >>*= fun _block_map ->
     Lwt.return (`Ok ())
-
 
   let seek_mapped t from =
     let bytes = Int64.(mul from (of_int t.sector_size)) in
