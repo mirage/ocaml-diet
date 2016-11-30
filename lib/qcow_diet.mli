@@ -66,6 +66,10 @@ module Make(Elt: ELT): sig
   val remove: interval -> t -> t
   (** [remove interval t] returns the set consisting of [t] minus [interval] *)
 
+  val min_elt: t -> interval
+  (** [min_elt t] returns the smallest (in terms of the ordering) interval in
+      [t], or raises [Not_found] if the set is empty. *)
+
   val max_elt: t -> interval
   (** [max_elt t] returns the largest (in terms of the ordering) interval in
       [t], or raises [Not_found] if the set is empty. *)

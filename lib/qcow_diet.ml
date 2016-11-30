@@ -109,6 +109,11 @@ module Make(Elt: ELT) = struct
       (* or search left or search right *)
       (if elt < n.x then mem elt n.l else mem elt n.r)
 
+  let rec min_elt = function
+    | Empty  -> raise Not_found
+    | Node { x; y; l = Empty; _ } -> x, y
+    | Node { l; _ } -> min_elt l
+
   let rec max_elt = function
     | Empty -> raise Not_found
     | Node { x; y; r = Empty; _ } -> x, y
