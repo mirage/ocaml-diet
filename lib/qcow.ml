@@ -654,10 +654,16 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       whole_file
     ) in
 
+    let parse x =
+      if x = 0L then 0L else begin
+        let addr = Physical.make x in
+        let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
+        cluster
+      end in
+
     (* mark a virtual -> physical mapping as in use *)
-    let mark free _virt phys =
-      let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits phys in
-      if Physical.to_bytes phys = 0L
+    let mark free _virt cluster =
+      if cluster = 0L
       then free
       else Int64Set.remove (cluster, cluster) free in
 
@@ -672,8 +678,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
               if i >= (Cstruct.len buf)
               then Lwt.return (`Ok free)
               else begin
-                let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
-                let free = mark free None addr in
+                let cluster = parse (Cstruct.BE.get_uint64 buf i) in
+                let free = mark free None cluster in
                 loop free (8 + i)
               end in
             loop free 0
@@ -698,9 +704,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
           if i >= (Cstruct.len l1)
           then Lwt.return (`Ok free)
           else begin
-            let addr = Physical.make (Cstruct.BE.get_uint64 l1 i) in
-            let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
-            let free = mark free None addr in
+            let cluster = parse (Cstruct.BE.get_uint64 l1 i) in
+            let free = mark free None cluster in
             ClusterCache.read t.cache cluster
               (fun l2 ->
                 Lwt.return (`Ok l2)
@@ -710,9 +715,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
               if i >= (Cstruct.len l2)
               then Lwt.return (`Ok free)
               else begin
-                let addr = Physical.make (Cstruct.BE.get_uint64 l2 i) in
-                let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
-                let free = mark free None addr in
+                let cluster = parse (Cstruct.BE.get_uint64 l2 i) in
+                let free = mark free None cluster in
                 data_iter free (8 + i)
               end in
             data_iter free 0
