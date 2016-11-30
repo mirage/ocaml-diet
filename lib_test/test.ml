@@ -533,6 +533,133 @@ let create_resize_equals_create size_from size_to =
     Lwt.return (`Ok ()) in
   or_failwith @@ Lwt_main.run t
 
+let create_write_discard_compact () =
+  (* create a large disk *)
+  let open Lwt.Infix in
+  let module B = Qcow.Make(Block) in
+  let size = gib in
+  let path = Filename.concat test_dir (Int64.to_string size) ^ ".compact" in
+  let t =
+    truncate path
+    >>= fun () ->
+    let open FromBlock in
+    Block.connect path
+    >>= fun block ->
+    B.create block ~size ()
+    >>= fun qcow ->
+    (* write a bunch of clusters at the beginning *)
+    let h = B.header qcow in
+    let cluster_size = 1 lsl (Int32.to_int h.Qcow.Header.cluster_bits) in
+    let open Lwt.Infix in
+    B.get_info qcow
+    >>= fun info ->
+    let sectors_per_cluster = cluster_size / info.B.sector_size in
+    let make_cluster idx =
+      let cluster = malloc cluster_size in
+      for i = 0 to cluster_size / 8 - 1 do
+        Cstruct.BE.set_uint64 cluster (i * 8) idx
+      done;
+      cluster in
+    let write_cluster idx =
+      let cluster = make_cluster idx in
+      B.write qcow Int64.(mul idx (of_int sectors_per_cluster)) [ cluster ]
+      >>= function
+      | `Error _ -> failwith "write"
+      | `Ok () ->
+        Lwt.return_unit in
+    let discard_cluster idx =
+      B.discard qcow ~sector:Int64.(mul idx (of_int sectors_per_cluster)) ~n:(Int64.of_int sectors_per_cluster) ()
+      >>= function
+      | `Error _ -> failwith "discard"
+      | `Ok () ->
+        Lwt.return_unit in
+    let read_cluster idx =
+      let cluster = malloc cluster_size in
+      B.read qcow Int64.(mul idx (of_int sectors_per_cluster)) [ cluster ]
+      >>= function
+      | `Error _ -> failwith "read"
+      | `Ok () ->
+        Lwt.return cluster in
+    let check_contents cluster expected =
+      for i = 0 to cluster_size / 8 - 1 do
+        let actual = Cstruct.BE.get_uint64 cluster (i * 8) in
+        assert (actual = expected)
+      done in
+    (* write a bunch of clusters at the beginning *)
+    let first = [ 0L; 1L; 2L; 3L; 4L; 5L; 6L; 7L ] in
+    Lwt_list.iter_s write_cluster first
+    >>= fun () ->
+    Lwt_list.iter_s
+      (fun idx ->
+        read_cluster idx
+        >>= fun data ->
+        check_contents data idx;
+        Lwt.return_unit
+      ) first
+    >>= fun () ->
+    (* write a bunch of clusters near the end. Note we write one fewer cluster
+    than we discard because we expect one of the block allocations to be a
+    metadata block and we want to test the rewriting. *)
+    let second = List.tl @@ List.map Int64.(add (div (div gib (of_int cluster_size)) 2L)) first in
+    Lwt_list.iter_s write_cluster second
+    >>= fun () ->
+    Lwt_list.iter_s
+      (fun idx ->
+        read_cluster idx
+        >>= fun data ->
+        check_contents data idx;
+        Lwt.return_unit
+      ) second
+    >>= fun () ->
+    (* discard the clusters at the beginning *)
+    Lwt_list.iter_s discard_cluster first
+    >>= fun () ->
+    (* check all the values are as expected *)
+    Lwt_list.iter_s
+      (fun idx ->
+        read_cluster idx
+        >>= fun data ->
+        check_contents data 0L;
+        Lwt.return_unit
+      ) first
+    >>= fun () ->
+    Lwt_list.iter_s
+      (fun idx ->
+        read_cluster idx
+        >>= fun data ->
+        check_contents data idx;
+        Lwt.return_unit
+      ) second
+    >>= fun () ->
+    (* compact *)
+    let open FromBlock in
+    B.compact qcow ()
+    >>= fun () ->
+    let open Lwt.Infix in
+    (* check all the values are as expected *)
+    Lwt_list.iter_s
+      (fun idx ->
+        read_cluster idx
+        >>= fun data ->
+        check_contents data 0L;
+        Lwt.return_unit
+      ) first
+    >>= fun () ->
+    Lwt_list.iter_s
+      (fun idx ->
+        read_cluster idx
+        >>= fun data ->
+        check_contents data idx;
+        Lwt.return_unit
+      ) second
+    >>= fun () ->
+    B.disconnect qcow
+    >>= fun () ->
+    Block.disconnect block
+    >>= fun () ->
+    Lwt.return (`Ok ()) in
+  or_failwith @@ Lwt_main.run t
+
 let qcow_tool_suite =
   let create =
     List.map (fun size ->
@@ -581,6 +708,7 @@ let _ =
       "create 1K" >:: create_1K;
       "create 1M" >:: create_1M;
       "create 1P" >:: create_1P;
+      "compact" >:: create_write_discard_compact;
     ] @ interesting_native_reads @ interesting_native_discards @ interesting_qemu_reads @ qemu_img_suite @ qcow_tool_suite) in
   OUnit2.run_test_tt_main (ounit2_of_ounit1 suite);
   (* If no error, delete the directory *)
