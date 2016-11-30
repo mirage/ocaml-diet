@@ -724,23 +724,25 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
             then Lwt.return (`Ok acc)
             else begin
               let l2_table_cluster = parse (Cstruct.BE.get_uint64 l1 i) in
-              let acc = mark acc (l1_table_cluster, i) l2_table_cluster in
-              ClusterCache.read t.cache l2_table_cluster
-                (fun l2 ->
-                  Lwt.return (`Ok l2)
-                )
-              >>*= fun l2 ->
-              let rec data_iter acc i =
-                if i >= (Cstruct.len l2)
-                then Lwt.return (`Ok acc)
-                else begin
-                  let cluster = parse (Cstruct.BE.get_uint64 l2 i) in
-                  let acc = mark acc (l2_table_cluster, i) cluster in
-                  data_iter acc (8 + i)
-                end in
-              data_iter acc 0
-              >>*= fun acc ->
-              l2_iter acc (8 + i)
+              if l2_table_cluster <> 0L then begin
+                let acc = mark acc (l1_table_cluster, i) l2_table_cluster in
+                ClusterCache.read t.cache l2_table_cluster
+                  (fun l2 ->
+                    Lwt.return (`Ok l2)
+                  )
+                >>*= fun l2 ->
+                let rec data_iter acc i =
+                  if i >= (Cstruct.len l2)
+                  then Lwt.return (`Ok acc)
+                  else begin
+                    let cluster = parse (Cstruct.BE.get_uint64 l2 i) in
+                    let acc = mark acc (l2_table_cluster, i) cluster in
+                    data_iter acc (8 + i)
+                  end in
+                data_iter acc 0
+                >>*= fun acc ->
+                l2_iter acc (8 + i)
+              end else l2_iter acc (8 + i)
             end in
           l2_iter acc 0
           >>*= fun acc ->
