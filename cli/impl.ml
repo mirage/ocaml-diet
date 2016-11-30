@@ -85,6 +85,15 @@ module UnsafeBlock = struct
   let flush _ = Lwt.return (`Ok ())
 end
 
+let handle_common common_options_t =
+  if common_options_t then begin
+    List.iter
+      (fun src ->
+        if Logs.Src.name src = "qcow"
+        then Logs.Src.set_level src (Some Logs.Debug)
+      ) (Logs.Src.list ())
+  end
+
 let info filename filter =
   let t =
     let open Lwt in
@@ -239,7 +248,8 @@ let discard unsafe_buffering filename =
     return (`Ok ()) in
   Lwt_main.run (t >>= fun r -> return (to_cmdliner_error r))
 
-let compact unsafe_buffering filename =
+let compact common_options_t unsafe_buffering filename =
+  handle_common common_options_t;
   let block =
      if unsafe_buffering
      then (module UnsafeBlock: BLOCK)

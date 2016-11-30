@@ -765,9 +765,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   let compact t =
     Block_map.make t
     >>*= fun block_map ->
-    Printf.fprintf stderr "Physical blocks discovered: %d\n" (Int64Map.cardinal block_map.refs);
+    Log.debug (fun f -> f "Physical blocks discovered: %d" (Int64Map.cardinal block_map.refs));
     let total_free = Block_map.Int64Set.fold (fun (x, y) acc -> Int64.(add acc (succ (sub y x)))) block_map.Block_map.free 0L in
-    Printf.fprintf stderr "Total free blocks discovered: %Ld\n" total_free;
+    Log.debug (fun f -> f "Total free blocks discovered: %Ld" total_free);
 
     let start_last_block, _ = Int64Map.max_binding block_map.Block_map.refs in
     assert (start_last_block = Int64.pred t.next_cluster);
@@ -793,7 +793,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let free, refs, substitutions =
       List.fold_left
         (fun (free, refs, substitutions) (src, dst, rf) ->
-          Printf.fprintf stderr "Copy cluster %Ld to %Ld\n" src dst;
+          Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
           let free = Block_map.Int64Set.remove (src, src) @@ Block_map.Int64Set.add (dst, dst) free in
           let refs = Int64Map.remove src @@ Int64Map.add dst rf refs in
           let substitutions = Int64Map.add src dst substitutions in
@@ -804,16 +804,16 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       (fun (src, dst, (ref_cluster, ref_cluster_within)) ->
         if Int64Map.mem ref_cluster substitutions then begin
           let ref_cluster' = Int64Map.find ref_cluster substitutions in
-          Printf.fprintf stderr "Rewrite reference in %Ld (was %Ld) :%d from %Ld to %Ld\n" ref_cluster' ref_cluster ref_cluster_within src dst;
+          Log.debug (fun f -> f "Rewrite reference in %Ld (was %Ld) :%d from %Ld to %Ld" ref_cluster' ref_cluster ref_cluster_within src dst);
         end else begin
-          Printf.fprintf stderr "Rewrite reference in %Ld :%d from %Ld to %Ld\n" ref_cluster ref_cluster_within src dst;
+          Log.debug (fun f -> f "Rewrite reference in %Ld :%d from %Ld to %Ld" ref_cluster ref_cluster_within src dst);
         end
       ) ops;
     let last_block = fst (Int64Map.max_binding refs) in
-    Printf.fprintf stderr "Shrink file so that last cluster was %Ld, now %Ld\n" start_last_block last_block;
-    Printf.fprintf stderr "Physical blocks remaining: %d\n" (Int64Map.cardinal refs);
+    Log.debug (fun f -> f "Shrink file so that last cluster was %Ld, now %Ld" start_last_block last_block);
+    Log.debug (fun f -> f "Physical blocks remaining: %d" (Int64Map.cardinal refs));
     let total_free = Block_map.Int64Set.fold (fun (x, y) acc -> Int64.(add acc (succ (sub y x)))) free 0L in
-    Printf.fprintf stderr "Total free blocks remaining: %Ld\n" total_free;
+    Log.debug (fun f -> f "Total free blocks remaining: %Ld" total_free);
 
     Lwt.return (`Ok ())
 

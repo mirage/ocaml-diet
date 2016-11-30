@@ -218,7 +218,7 @@ let compact_cmd =
     `P "Iterate over all the unallocated blocks ('holes') in the file created
         by discard and move live data into them to shrink the file.";
   ] @ help in
-  Term.(ret(pure Impl.compact $ unsafe_buffering $ filename)),
+  Term.(ret(pure Impl.compact $ common_options_t $ unsafe_buffering $ filename)),
   Term.info "compact" ~sdocs:_common_options ~doc ~man
 
 let repair_cmd =
