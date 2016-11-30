@@ -38,7 +38,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
       smaller than the old size as this would cause data loss, unless the argument
       [?ignore_data_loss] is set to true. *)
 
-  val compact: t -> [ `Ok of unit | `Error of error ] io
+  val compact: t -> ?progress_cb:(percent:int -> unit) -> unit -> [ `Ok of unit | `Error of error ] io
   (** [compact t ()] scans the disk for unused space and attempts to fill it
       and shrink the file. This is useful if the underlying block device doesn't
       support discard and we must emulate it. *)

@@ -86,13 +86,32 @@ module UnsafeBlock = struct
 end
 
 let handle_common common_options_t =
-  if common_options_t then begin
+  if common_options_t.Common.debug then begin
     List.iter
       (fun src ->
         if Logs.Src.name src = "qcow"
         then Logs.Src.set_level src (Some Logs.Debug)
       ) (Logs.Src.list ())
   end
+
+let spinner = [| '-'; '\\'; '|'; '/' |]
+let spinner_idx = ref 0
+let progress_bar_width = 70
+let progress_cb ~percent =
+  let line = Bytes.make (progress_bar_width + 8) '\000' in
+
+  let len = (progress_bar_width * percent) / 100 in
+  for i = 0 to len - 1 do
+    line.[4 + i] <- (if i = len - 1 then '>' else '#')
+  done;
+  line.[0] <- '[';
+  line.[1] <- spinner.(!spinner_idx);
+  line.[2] <- ']';
+  line.[3] <- ' ';
+  spinner_idx := (!spinner_idx + 1) mod (Array.length spinner);
+  let percent = Printf.sprintf "%3d%%" percent in
+  String.blit percent 0 line (progress_bar_width + 4) 4;
+  Printf.printf "\r%s%!" line
 
 let info filename filter =
   let t =
@@ -262,7 +281,7 @@ let compact common_options_t unsafe_buffering filename =
     >>*= fun x ->
     B.connect x
     >>*= fun x ->
-    B.compact x
+    B.compact x ~progress_cb ()
     >>*= fun () ->
     B.Debug.check_no_overlaps x
     >>*= fun () ->

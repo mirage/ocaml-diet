@@ -39,7 +39,10 @@ let common_options_t =
   let debug =
     let doc = "Give only debug output." in
     Arg.(value & flag & info ["debug"] ~docs ~doc) in
-  Term.(pure Common.make $ debug)
+  let progress =
+    let doc = "Display a progress bar." in
+    Arg.(value & flag & info ["progress"] ~docs ~doc) in
+  Term.(pure Common.make $ debug $ progress)
 
 let filename =
   let doc = Printf.sprintf "Path to the qcow2 file." in
