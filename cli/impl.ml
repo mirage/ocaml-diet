@@ -109,9 +109,12 @@ let progress_cb ~percent =
   line.[2] <- ']';
   line.[3] <- ' ';
   spinner_idx := (!spinner_idx + 1) mod (Array.length spinner);
-  let percent = Printf.sprintf "%3d%%" percent in
-  String.blit percent 0 line (progress_bar_width + 4) 4;
-  Printf.printf "\r%s%!" line
+  let percent' = Printf.sprintf "%3d%%" percent in
+  String.blit percent' 0 line (progress_bar_width + 4) 4;
+  Printf.printf "\r%s%!" line;
+  if percent = 100 then Printf.printf "\n"
+
+let mib = Int64.mul 1024L 1024L
 
 let info filename filter =
   let t =
@@ -281,8 +284,18 @@ let compact common_options_t unsafe_buffering filename =
     >>*= fun x ->
     B.connect x
     >>*= fun x ->
+    B.get_info x
+    >>= fun info ->
     B.compact x ~progress_cb ()
-    >>*= fun () ->
+    >>*= fun report ->
+    if report.B.old_size = report.B.new_size
+    then Printf.printf "I couldn't make the file any smaller. Consider running `discard`.\n"
+    else begin
+      let smaller_sectors = Int64.sub report.B.old_size report.B.new_size in
+      let sector_size = Int64.of_int info.B.sector_size in
+      let smaller_mib = Int64.(div (mul smaller_sectors sector_size) mib) in
+      Printf.printf "The file is now %Ld MiB smaller.\n" smaller_mib
+    end;
     B.Debug.check_no_overlaps x
     >>*= fun () ->
     return (`Ok ()) in

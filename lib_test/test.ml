@@ -634,7 +634,7 @@ let create_write_discard_compact () =
     (* compact *)
     let open FromBlock in
     B.compact qcow ()
-    >>= fun () ->
+    >>= fun _report ->
     let open Lwt.Infix in
     (* check all the values are as expected *)
     Lwt_list.iter_s

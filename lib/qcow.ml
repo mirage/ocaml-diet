@@ -768,6 +768,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       Lwt.return (`Ok acc)
   end
 
+  type compact_result = {
+      copied:       int64;
+      refs_updated: int64;
+      old_size:     int64;
+      new_size:     int64;
+  }
+
   let compact t ?(progress_cb = fun ~percent -> ()) () =
     Block_map.make t
     >>*= fun block_map ->
@@ -824,11 +831,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let one_cluster = malloc t.h in
     let sector_size = Int64.of_int t.base_info.B.sector_size in
     let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
+    let sectors_per_cluster = Int64.div (1L <| cluster_bits) sector_size in
     fold_left_s
       (fun (free, refs, substitutions) (src, dst, rf) ->
         Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
-        let src_sector = Int64.div (src <| cluster_bits) sector_size in
-        let dst_sector = Int64.div (dst <| cluster_bits) sector_size in
+        let src_sector = Int64.mul src sectors_per_cluster in
+        let dst_sector = Int64.mul dst sectors_per_cluster in
         read_base t.base src_sector one_cluster
         >>*= fun () ->
         B.write t.base dst_sector [ one_cluster ]
@@ -894,7 +902,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let total_free = Block_map.Int64Set.fold (fun (x, y) acc -> Int64.(add acc (succ (sub y x)))) free 0L in
     Log.debug (fun f -> f "Total free blocks remaining: %Ld" total_free);
     progress_cb ~percent:100;
-    Lwt.return (`Ok ())
+
+    let refs_updated = Int64.of_int (List.length ops) in
+    let copied = Int64.mul refs_updated sectors_per_cluster in (* one ref per block *)
+    let old_size = Int64.mul start_last_block sectors_per_cluster in
+    let new_size = Int64.mul last_block sectors_per_cluster in
+    let report = { refs_updated; copied; old_size; new_size } in
+    Lwt.return (`Ok report)
 
   let seek_mapped t from =
     let bytes = Int64.(mul from (of_int t.sector_size)) in
