@@ -150,6 +150,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
            t.clusters <- Int64Map.add cluster buf t.clusters;
            t.write_cluster cluster buf
         )
+    let remove t cluster =
+      with_lock t cluster
+        (fun () ->
+          t.clusters <- Int64Map.remove cluster t.clusters;
+          Lwt.return (`Ok ())
+        )
   end
 
 
@@ -802,32 +808,88 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
           last_percent := percent
         end in
 
+    (* fold_left_s over Block.error Lwt.t values *)
+    let rec fold_left_s f acc =
+      let open Lwt.Infix in function
+      | [] -> Lwt.return (`Ok acc)
+      | x :: xs ->
+        begin f acc x >>= function
+        | `Ok acc -> fold_left_s f acc xs
+        | `Error e -> Lwt.return (`Error e)
+        end in
+
     (* Copy the blocks and build up a substitution map so we know where the referring
        block has been copied to. (Otherwise we may go to adjust the referring block
        only to find it has also been moved) *)
-    let free, refs, substitutions =
-      List.fold_left
-        (fun (free, refs, substitutions) (src, dst, rf) ->
-          Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
-          update_progress ();
-          let free = Block_map.Int64Set.remove (src, src) @@ Block_map.Int64Set.add (dst, dst) free in
-          let refs = Int64Map.remove src @@ Int64Map.add dst rf refs in
-          let substitutions = Int64Map.add src dst substitutions in
-          free, refs, substitutions
-        ) (block_map.Block_map.free, block_map.Block_map.refs, Int64Map.empty) ops in
-    (* Rewrite the block references, taking care to follow the substitutions map *)
-    List.iter
-      (fun (src, dst, (ref_cluster, ref_cluster_within)) ->
+    let one_cluster = malloc t.h in
+    let sector_size = Int64.of_int t.base_info.B.sector_size in
+    let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
+    fold_left_s
+      (fun (free, refs, substitutions) (src, dst, rf) ->
+        Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
+        let src_sector = Int64.div (src <| cluster_bits) sector_size in
+        let dst_sector = Int64.div (dst <| cluster_bits) sector_size in
+        read_base t.base src_sector one_cluster
+        >>*= fun () ->
+        B.write t.base dst_sector [ one_cluster ]
+        >>*= fun () ->
+        (* If these were metadata blocks (e.g. L2 table entries) then they might
+           be cached. Remove the overwritten block's cache entry just in case. *)
+        ClusterCache.remove t.cache dst
+        >>*= fun () ->
         update_progress ();
-        if Int64Map.mem ref_cluster substitutions then begin
-          let ref_cluster' = Int64Map.find ref_cluster substitutions in
-          Log.debug (fun f -> f "Rewrite reference in %Ld (was %Ld) :%d from %Ld to %Ld" ref_cluster' ref_cluster ref_cluster_within src dst);
-        end else begin
-          Log.debug (fun f -> f "Rewrite reference in %Ld :%d from %Ld to %Ld" ref_cluster ref_cluster_within src dst);
-        end
-      ) ops;
+        let free = Block_map.Int64Set.remove (src, src) @@ Block_map.Int64Set.add (dst, dst) free in
+        let refs = Int64Map.remove src @@ Int64Map.add dst rf refs in
+        let substitutions = Int64Map.add src dst substitutions in
+        Lwt.return (`Ok (free, refs, substitutions))
+      ) (block_map.Block_map.free, block_map.Block_map.refs, Int64Map.empty) ops
+    >>*= fun (free, refs, substitutions) ->
+
+    (* Flush now so that if we crash after updating some of the references, the
+       destination blocks will contain the correct data. *)
+    B.flush t.base
+    >>*= fun () ->
+
+    (* Rewrite the block references, taking care to follow the substitutions map *)
+    fold_left_s
+      (fun () (src, dst, (ref_cluster, ref_cluster_within)) ->
+        update_progress ();
+        let ref_cluster' =
+          if Int64Map.mem ref_cluster substitutions
+          then Int64Map.find ref_cluster substitutions
+          else ref_cluster in
+        ClusterCache.update t.cache ref_cluster'
+          (fun buf ->
+            (* Read the current value in the referencing cluster as a sanity check *)
+            ( match Physical.read (Cstruct.shift buf ref_cluster_within) with
+              | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
+              | Ok (old_reference, _) -> Lwt.return (`Ok old_reference) )
+            >>*= fun old_reference ->
+            let old_cluster, _ = Physical.to_cluster ~cluster_bits old_reference in
+            ( if old_cluster <> src then begin
+                Log.err (fun f -> f "Rewriting reference in %Ld (was %Ld) :%d from %Ld to %Ld, old reference actually pointing to %Ld" ref_cluster' ref_cluster ref_cluster_within src dst old_cluster);
+                Lwt.return (`Error (`Unknown "Failed to rewrite cluster reference"))
+              end else Lwt.return (`Ok ()) )
+            >>*= fun () ->
+            (* Preserve any flags but update the pointer *)
+            let new_reference = Physical.make ~is_mutable:(Physical.is_mutable old_reference) ~is_compressed:(Physical.is_compressed old_reference) (dst <| cluster_bits) in
+            match Physical.write new_reference (Cstruct.shift buf ref_cluster_within) with
+            | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
+            | Ok _ -> Lwt.return (`Ok ())
+          )
+      ) () ops
+    >>*= fun () ->
+
+    (* Flush now so that the pointers are persisted before we truncate the file *)
+    B.flush t.base
+    >>*= fun () ->
+
     let last_block = fst (Int64Map.max_binding refs) in
     Log.debug (fun f -> f "Shrink file so that last cluster was %Ld, now %Ld" start_last_block last_block);
+    t.next_cluster <- Int64.succ last_block;
+    Cluster.allocate_clusters t 0L (* takes care of the file size *)
+    >>*= fun _ ->
+
     Log.debug (fun f -> f "Physical blocks remaining: %d" (Int64Map.cardinal refs));
     let total_free = Block_map.Int64Set.fold (fun (x, y) acc -> Int64.(add acc (succ (sub y x)))) free 0L in
     Log.debug (fun f -> f "Total free blocks remaining: %Ld" total_free);
