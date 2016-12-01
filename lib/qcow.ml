@@ -646,11 +646,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     module Int64Map = Map.Make(Int64)
 
     type t = {
-      (* unused blocks in the file. These can be safely overwritten with new data *)
+      (* unused clusters in the file. These can be safely overwritten with new data *)
       free: Int64Set.t;
       (* map from physical cluster to the physical cluster + offset of the reference.
          When a block is moved, this reference must be updated. *)
       refs: (int64 * int) Int64Map.t;
+      first_movable_cluster: int64;
     }
 
     (* mark a virtual -> physical mapping as in use *)
@@ -658,7 +659,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       if cluster = 0L then t else begin
         let free = Int64Set.remove (cluster, cluster) t.free in
         let refs = Int64Map.add cluster rf t.refs in
-        { free; refs }
+        { t with free; refs }
       end
 
     (* Fold over all free blocks *)
@@ -688,6 +689,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         @@ remove (0L, 0L)
         whole_file
       ) in
+      let first_movable_cluster =
+        try
+          fst @@ Int64Set.min_elt free
+        with
+        | Not_found -> t.next_cluster in
+
       let module Int64Map = Map.Make(Int64) in
 
       let parse x =
@@ -697,7 +704,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
           cluster
         end in
 
-      let acc = { free; refs = Int64Map.empty } in
+      let acc = { free; refs = Int64Map.empty; first_movable_cluster } in
       (* scan the refcount table *)
       let rec loop acc i =
         if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
@@ -778,19 +785,29 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   let compact t ?(progress_cb = fun ~percent -> ()) () =
     Block_map.make t
     >>*= fun block_map ->
+
     Log.debug (fun f -> f "Physical blocks discovered: %d" (Int64Map.cardinal block_map.refs));
     let total_free = Block_map.Int64Set.fold (fun (x, y) acc -> Int64.(add acc (succ (sub y x)))) block_map.Block_map.free 0L in
     Log.debug (fun f -> f "Total free blocks discovered: %Ld" total_free);
 
-    let start_last_block, _ = Int64Map.max_binding block_map.Block_map.refs in
+    (* The last allocated block. Note if there are no data blocks this will
+       point to the last header block even though it is immovable. *)
+    let start_last_block =
+      try
+        fst @@ Int64Map.max_binding block_map.Block_map.refs
+      with Not_found ->
+        Int64.pred block_map.Block_map.first_movable_cluster in
     assert (start_last_block = Int64.pred t.next_cluster);
+
     let ops, _, refs =
       Block_map.fold_over_free
         (fun cluster (ops, max_cluster, refs) ->
+          (* A free block after the last allocated block will not be filled.
+             It will be erased from existence when the file is truncated at the
+             end. *)
           if cluster >= max_cluster then (ops, max_cluster, refs) else begin
             (* find the last physical block *)
             let last_block, rf = Int64Map.max_binding refs in
-            (* Printf.fprintf stderr "Highest binding in the map is %Ld\n" (fst (Int64Map.max_binding refs)); *)
 
             if cluster >= last_block then (ops, last_block, refs) else begin
               (* copy last_block into cluster and update rf *)
@@ -892,7 +909,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     B.flush t.base
     >>*= fun () ->
 
-    let last_block = fst (Int64Map.max_binding refs) in
+    let last_block =
+      try
+        fst @@ Int64Map.max_binding refs
+      with Not_found -> start_last_block in
     Log.debug (fun f -> f "Shrink file so that last cluster was %Ld, now %Ld" start_last_block last_block);
     t.next_cluster <- Int64.succ last_block;
     Cluster.allocate_clusters t 0L (* takes care of the file size *)
