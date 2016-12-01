@@ -38,6 +38,25 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
       smaller than the old size as this would cause data loss, unless the argument
       [?ignore_data_loss] is set to true. *)
 
+  type compact_result = {
+      copied:       int64; (** number of sectors copied *)
+      refs_updated: int64; (** number of cluster references updated *)
+      old_size:     int64; (** previous size in sectors *)
+      new_size:     int64; (** new size in sectors *)
+  }
+  (** Summary of the compaction run *)
+
+  val compact: t -> ?progress_cb:(percent:int -> unit) -> unit ->
+    [ `Ok of compact_result | `Error of error ] io
+  (** [compact t ()] scans the disk for unused space and attempts to fill it
+      and shrink the file. This is useful if the underlying block device doesn't
+      support discard and we must emulate it. *)
+
+  val discard: t -> sector:int64 -> n:int64 -> unit -> [ `Ok of unit | `Error of error ] io
+  (** [discard sector n] signals that the [n] sectors starting at [sector]
+      are no longer needed and the contents may be discarded. Note the contents
+      may not actually be deleted: this is not a "secure erase". *)
+
   val seek_unmapped: t -> int64 -> [ `Ok of int64 | `Error of error ] io
   (** [seek_unmapped t start] returns the offset of the next "hole": a region
       of the device which is guaranteed to be full of zeroes (typically

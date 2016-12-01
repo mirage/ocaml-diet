@@ -15,6 +15,9 @@
  *
  *)
 
-type t = bool
+type t = {
+  debug: bool;
+  progress: bool;
+}
 
-let make t = t
+let make debug progress = { debug; progress }

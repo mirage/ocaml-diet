@@ -82,3 +82,29 @@ let run cmd args =
   match wait' (pid, (oc, ic, ec), cmdline) with
   | `Ok _ -> out, err
   | `Error (`Msg m) -> failwith (m ^ "\n" ^ (String.concat "\n" out) ^ "\n" ^ (String.concat "\n" err))
+
+(* No need for data integrity during tests *)
+module UnsafeBlock = struct
+  include Block
+  let flush _ = Lwt.return (`Ok ())
+end
+
+let truncate path =
+  let open Lwt.Infix in
+  Lwt_unix.openfile path [ Unix.O_CREAT; Unix.O_TRUNC ] 0o0644
+  >>= fun fd ->
+  Lwt_unix.close fd
+
+(* Create a temporary directory for our images. We want these to be
+   manually examinable afterwards, so we give images human-readable names *)
+let test_dir =
+  (* a bit racy but if we lose, the test will simply fail *)
+  let path = Filename.temp_file "ocaml-qcow" "" in
+  Unix.unlink path;
+  Unix.mkdir path 0o0755;
+  debug "Creating temporary files in %s" path;
+  path
+
+let malloc (length: int) =
+  let npages = (length + 4095)/4096 in
+  Cstruct.sub Io_page.(to_cstruct (get npages)) 0 length

@@ -21,50 +21,66 @@ open Result
 let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right_logical
 
-(* XXX: change to a record rather than a variant: maintain precision by
-   remembering the byte value and force implementations to round on demand *)
-
-type t = {
-  bytes: int64;
-  is_mutable: bool;
-  is_compressed: bool;
-} [@@deriving sexp]
-
-let to_string t = Sexplib.Sexp.to_string (sexp_of_t t)
+type t = int64 (* the encoded form on the disk *)
 
 let sizeof _ = 8
 
-let shift t bytes = { t with bytes = Int64.add t.bytes bytes }
-
 let make ?(is_mutable = true) ?(is_compressed = false) x =
   let bytes = (x <| 2) |> 2 in
-  { bytes; is_mutable; is_compressed}
+  let is_mutable = if is_mutable then 1L <| 63 else 0L in
+  let is_compressed = if is_compressed then 1L <| 62 else 0L in
+  Int64.(logor (logor bytes is_mutable) is_compressed)
 
-let is_mutable t = t.is_mutable
-let is_compressed t = t.is_compressed
+let is_mutable t = t |> 63 = 1L
+
+let is_compressed t = (t <| 1) |> 63 = 1L
+
+let shift t bytes =
+  let bytes' = (t <| 2) |> 2 in
+  let is_mutable = is_mutable t in
+  let is_compressed = is_compressed t in
+  make ~is_mutable ~is_compressed (Int64.add bytes' bytes)
 
 (* Take an offset and round it down to the nearest physical sector, returning
    the sector number and an offset within the sector *)
-let rec to_sector ~sector_size { bytes = x } =
+let rec to_sector ~sector_size t =
+  let x = (t <| 2) |> 2 in
   Int64.(div x (of_int sector_size)),
   Int64.(to_int (rem x (of_int sector_size)))
 
-let to_bytes { bytes = x } = x
+let to_bytes t = (t <| 2) |> 2
 
-let rec to_cluster ~cluster_bits { bytes = x } =
+let rec to_cluster ~cluster_bits t =
+  let x = (t <| 2) |> 2 in
   Int64.(div x (1L <| cluster_bits)),
   Int64.(to_int (rem x (1L <| cluster_bits)))
 
 let read rest =
   let x = Cstruct.BE.get_uint64 rest 0 in
-  let is_mutable = x |> 63 = 1L in
-  let is_compressed = (x <| 1) |> 63 = 1L in
-  let bytes = (x <| 2) |> 2 in
-  Ok({bytes; is_mutable; is_compressed}, Cstruct.shift rest 8)
+  Ok(x, Cstruct.shift rest 8)
 
 let write t rest =
-  let is_mutable = if t.is_mutable then 1L <| 63 else 0L in
-  let is_compressed = if t.is_compressed then 1L <| 62 else 0L in
-  let raw = Int64.(logor (logor t.bytes is_mutable) is_compressed) in
-  Cstruct.BE.set_uint64 rest 0 raw;
+  Cstruct.BE.set_uint64 rest 0 t;
   Ok(Cstruct.shift rest 8)
+
+type _t = {
+  bytes: int64;
+  is_mutable: bool;
+  is_compressed: bool;
+} [@@deriving sexp]
+
+let sexp_of_t t =
+  let bytes = (t <| 2) |> 2 in
+  let is_mutable = is_mutable t in
+  let is_compressed = is_compressed t in
+  let _t = { bytes; is_mutable; is_compressed } in
+  sexp_of__t _t
+
+let t_of_sexp s =
+  let _t = _t_of_sexp s in
+  let bytes = (_t.bytes <| 2) |> 2 in
+  let is_mutable = if _t.is_mutable then 1L <| 63 else 0L in
+  let is_compressed = if _t.is_compressed then 1L <| 62 else 0L in
+  Int64.(logor (logor _t.bytes is_mutable) is_compressed)
+
+let to_string t = Sexplib.Sexp.to_string (sexp_of_t t)
