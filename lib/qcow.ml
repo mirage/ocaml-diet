@@ -797,8 +797,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         fst @@ Int64Map.max_binding block_map.Block_map.refs
       with Not_found ->
         Int64.pred block_map.Block_map.first_movable_cluster in
-    assert (start_last_block = Int64.pred t.next_cluster);
-
+    (* Note the next_cluster can be greater than this if the last cluster(s)
+       have been discarded *)
     let ops, _, refs =
       Block_map.fold_over_free
         (fun cluster (ops, max_cluster, refs) ->
