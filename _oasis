@@ -47,3 +47,12 @@ Test test
   Run$:               flag(tests)
   Command:            $test -runner sequential
   WorkingDirectory:   lib_test
+
+Executable test_random
+  Build$:             flag(tests)
+  CompiledObject:     best
+  Path:               lib_test
+  MainIs:             compact_random.ml
+  Custom:             true
+  Install:            false
+  BuildDepends:       lwt, lwt.unix, qcow, mirage-block, mirage-block-ramdisk, mirage-block-unix, cstruct, oUnit, io-page.unix, io-page, ezjsonm, nbd, nbd.lwt, ppx_sexp_conv

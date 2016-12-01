@@ -23,27 +23,7 @@ open OUnit
 open Utils
 open Sizes
 
-(* No need for data integrity during tests *)
-module UnsafeBlock = struct
-  include Block
-  let flush _ = Lwt.return (`Ok ())
-end
 module Block = UnsafeBlock
-
-let truncate path =
-  Lwt_unix.openfile path [ Unix.O_CREAT; Unix.O_TRUNC ] 0o0644
-  >>= fun fd ->
-  Lwt_unix.close fd
-
-(* Create a temporary directory for our images. We want these to be
-   manually examinable afterwards, so we give images human-readable names *)
-let test_dir =
-  (* a bit racy but if we lose, the test will simply fail *)
-  let path = Filename.temp_file "ocaml-qcow" "" in
-  Unix.unlink path;
-  Unix.mkdir path 0o0755;
-  debug "Creating temporary files in %s" path;
-  path
 
 let repair_refcounts path =
   let module B = Qcow.Make(Block) in
@@ -151,10 +131,6 @@ let get_id =
     let this = !next in
     incr next;
     this
-
-let malloc (length: int) =
-  let npages = (length + 4095)/4096 in
-  Cstruct.sub Io_page.(to_cstruct (get npages)) 0 length
 
 let rec fragment into remaining =
   if into >= Cstruct.len remaining
