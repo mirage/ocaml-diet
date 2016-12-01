@@ -279,6 +279,7 @@ let compact common_options_t unsafe_buffering filename =
   let module BLOCK = (val block: BLOCK) in
   let module B = Qcow.Make(BLOCK) in
   let open Lwt in
+  let progress_cb = if common_options_t.progress then Some progress_cb else None in
   let t =
     BLOCK.connect filename
     >>*= fun x ->
@@ -286,7 +287,7 @@ let compact common_options_t unsafe_buffering filename =
     >>*= fun x ->
     B.get_info x
     >>= fun info ->
-    B.compact x ~progress_cb ()
+    B.compact x ?progress_cb ()
     >>*= fun report ->
     if report.B.old_size = report.B.new_size
     then Printf.printf "I couldn't make the file any smaller. Consider running `discard`.\n"
