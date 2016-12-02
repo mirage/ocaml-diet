@@ -56,6 +56,7 @@ let random_write_discard_compact nr_clusters =
     (* add to this set on write, remove on discard *)
     let module SectorSet = Qcow_diet.Make(Qcow_types.Int64) in
     let written = ref SectorSet.empty in
+    let empty = ref SectorSet.(add (0L, info.B.size_sectors) empty) in
     let nr_iterations = ref 0 in
 
     let make_cluster idx =
@@ -74,6 +75,7 @@ let random_write_discard_compact nr_clusters =
       | `Error _ -> failwith "write"
       | `Ok () ->
         written := SectorSet.add (x, y) !written;
+        empty := SectorSet.remove (x, y) !empty;
         Lwt.return_unit in
     let discard_cluster idx =
       let n = Int64.of_int sectors_per_cluster in
@@ -84,6 +86,7 @@ let random_write_discard_compact nr_clusters =
       | `Error _ -> failwith "discard"
       | `Ok () ->
         written := SectorSet.remove (x, y) !written;
+        empty := SectorSet.add (x, y) !empty;
         Lwt.return_unit in
     let read_cluster idx =
       let cluster = malloc cluster_size in
@@ -93,23 +96,37 @@ let random_write_discard_compact nr_clusters =
       | `Error _ -> failwith "read"
       | `Ok () ->
         Lwt.return cluster in
-    let check_contents cluster expected =
-      for i = 0 to cluster_size / 8 - 1 do
-        let actual = Cstruct.BE.get_uint64 cluster (i * 8) in
+    let check_contents buf expected =
+      for i = 0 to (Cstruct.len buf) / 8 - 1 do
+        let actual = Cstruct.BE.get_uint64 buf (i * 8) in
         if actual <> expected
         then failwith (Printf.sprintf "contents of cluster incorrect: expected %Ld but actual %Ld" expected actual)
       done in
     let check_all_clusters () =
-      let rec loop idx =
-        if idx = nr_clusters then Lwt.return_unit else begin
-          read_cluster idx
-          >>= fun buf ->
-          let x = Int64.(mul idx (of_int sectors_per_cluster)) in
-          let expected = if SectorSet.mem x !written then idx else 0L in
-          check_contents buf expected;
-          loop (Int64.succ idx)
-        end in
-      loop 0L in
+      let rec check p set = match SectorSet.choose set with
+        | x, y ->
+          begin
+            let n = Int64.(succ (sub y x)) in
+            let buf = malloc ((Int64.to_int n) * info.B.sector_size) in
+            B.read qcow x [ buf ]
+            >>= function
+            | `Error _ -> failwith "read"
+            | `Ok () ->
+              let rec for_each_sector x remaining =
+                if Cstruct.len remaining = 0 then () else begin
+                  let cluster = Int64.(div x (of_int sectors_per_cluster)) in
+                  let expected = p cluster in
+                  let sector = Cstruct.sub remaining 0 512 in
+                  check_contents sector expected;
+                  for_each_sector (Int64.succ x) (Cstruct.shift remaining 512)
+                end in
+              for_each_sector x buf;
+              check p (SectorSet.remove (x, y) set)
+          end
+        | exception Not_found ->
+          Lwt.return_unit in
+      check (fun _ -> 0L) !empty;
+      check (fun x -> x) !written in
     Random.init 0;
     let rec loop () =
       incr nr_iterations;
