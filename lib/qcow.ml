@@ -46,10 +46,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   module Config = struct
     type t = {
       discard: bool;
+      compact_after_unmaps: int64 option;
     }
-    let create ?(discard=false) () = { discard }
-    let to_string t = Printf.sprintf "discard=%b" t.discard
-    let default = { discard = false }
+    let create ?(discard=false) ?compact_after_unmaps () = { discard; compact_after_unmaps }
+    let to_string t = Printf.sprintf "discard=%b;compact_after_unmaps=%s"
+      t.discard (match t.compact_after_unmaps with None -> "0" | Some x -> Int64.to_string x)
+    let default = { discard = false; compact_after_unmaps = None }
     let of_string txt =
       let open Astring in
       try
@@ -59,7 +61,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
           | None -> t
           | Some (k, v) ->
             begin match String.Ascii.lowercase k with
-            | "discard" -> { discard = bool_of_string v }
+            | "discard" -> { t with discard = bool_of_string v }
+            | "compact_after_unmaps" ->
+              let compact_after_unmaps = if v = "0" then None else Some (Int64.of_string v) in
+              { t with compact_after_unmaps }
             | x -> failwith ("Unknown qcow configuration key: " ^ x)
             end
         ) default strings)
@@ -182,6 +187,77 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         )
   end
 
+  module RWLock = struct
+    type t = {
+      mutable nr_readers: int;
+      mutable writer: bool;
+      m: Lwt_mutex.t;
+      c: unit Lwt_condition.t;
+    }
+    let make () =
+      let nr_readers = 0 in
+      let writer = false in
+      let m = Lwt_mutex.create () in
+      let c = Lwt_condition.create () in
+      { nr_readers; writer; m; c }
+    let with_read_lock t f =
+      let open Lwt.Infix in
+      Lwt_mutex.with_lock t.m
+        (fun () ->
+          let rec wait () =
+            if t.writer then begin
+              Lwt_condition.wait t.c ~mutex:t.m
+              >>= fun () ->
+              wait ()
+            end else begin
+              t.nr_readers <- t.nr_readers + 1;
+              Lwt.return_unit
+            end in
+          wait ()
+        )
+      >>= fun () ->
+      Lwt.finalize f
+        (fun () ->
+          t.nr_readers <- t.nr_readers - 1;
+          Lwt_condition.signal t.c ();
+          Lwt.return_unit
+        )
+    let with_write_lock t f =
+      let open Lwt.Infix in
+      Lwt_mutex.with_lock t.m
+        (fun () ->
+          let rec wait () =
+            if t.nr_readers > 0 || t.writer then begin
+              Lwt_condition.wait t.c ~mutex:t.m
+              >>= fun () ->
+              wait ()
+            end else begin
+              t.writer <- true;
+              Lwt.return_unit
+            end in
+          wait ()
+        )
+      >>= fun () ->
+      Lwt.finalize f
+        (fun () ->
+          t.writer <- false;
+          Lwt_condition.broadcast t.c ();
+          Lwt.return_unit
+        )
+
+  end
+
+  module Stats = struct
+
+    type t = {
+      mutable nr_erased: int64;
+      mutable nr_unmapped: int64;
+    }
+    let zero = {
+      nr_erased = 0L;
+      nr_unmapped = 0L;
+    }
+  end
 
   type t = {
     mutable h: Header.t;
@@ -196,11 +272,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     cluster_bits: int;
     sector_size: int;
     mutable lazy_refcounts: bool; (* true if we are omitting refcounts right now *)
+    mutable stats: Stats.t;
+    metadata_lock: RWLock.t; (* held to stop the world during compacts and resizes *)
   }
 
   let get_info t = Lwt.return t.info
   let to_config t = t.config
-  
+  let get_stats t = t.stats
+
   (* Another way to achieve this would be to create a virtual block device
      with a little bit of padding on the end *)
   let read_base base base_sector buf =
@@ -589,16 +668,18 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let walk_and_deallocate t a =
         read_l1_table t a.Virtual.l1_index
         >>*= fun l2_offset ->
-        if Physical.to_bytes l2_offset = 0L
-        then Lwt.return (`Ok ())
-        else begin
+        if Physical.to_bytes l2_offset = 0L then begin
+          Lwt.return (`Ok ())
+        end else begin
           read_l2_table t l2_offset a.Virtual.l2_index
           >>*= fun data_offset ->
-          if Physical.to_bytes data_offset = 0L
-          then Lwt.return (`Ok ())
-          else begin
+          if Physical.to_bytes data_offset = 0L then begin
+            Lwt.return (`Ok ())
+          end else begin
             (* The data at [data_offset] is about to become an unreferenced
                hole in the file *)
+            let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
+            t.stats.nr_unmapped <- Int64.add t.stats.nr_unmapped sectors_per_cluster;
             let data_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits data_offset in
             write_l2_table t l2_offset a.Virtual.l2_index (Physical.make 0L)
             >>*= fun () ->
@@ -627,45 +708,50 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       end
 
   let read t sector bufs =
-    let cluster_size = 1L <| t.cluster_bits in
-    let byte = Int64.(mul sector (of_int t.info.sector_size)) in
-    iter_p (fun (byte, buf) ->
-        let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
-        Cluster.walk_readonly t vaddr
-        >>*= function
-        | None ->
-          Cstruct.memset buf 0;
-          Lwt.return (`Ok ())
-        | Some offset' ->
-          (* Qemu-img will 'allocate' the last cluster by writing only the last sector.
-             Cope with this by assuming all later sectors are full of zeroes *)
-          let buf_len = Int64.of_int (Cstruct.len buf) in
-          let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
-          read_base t.base base_sector buf
-      ) (chop_into_aligned cluster_size byte bufs)
+    RWLock.with_read_lock t.metadata_lock
+      (fun () ->
+        let cluster_size = 1L <| t.cluster_bits in
+        let byte = Int64.(mul sector (of_int t.info.sector_size)) in
+        iter_p (fun (byte, buf) ->
+            let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
+            Cluster.walk_readonly t vaddr
+            >>*= function
+            | None ->
+              Cstruct.memset buf 0;
+              Lwt.return (`Ok ())
+            | Some offset' ->
+              (* Qemu-img will 'allocate' the last cluster by writing only the last sector.
+                 Cope with this by assuming all later sectors are full of zeroes *)
+              let buf_len = Int64.of_int (Cstruct.len buf) in
+              let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
+              read_base t.base base_sector buf
+          ) (chop_into_aligned cluster_size byte bufs)
+      )
 
   let write t sector bufs =
-    let cluster_size = 1L <| t.cluster_bits in
-    let byte = Int64.(mul sector (of_int t.info.sector_size)) in
-    iter_p (fun (byte, buf) ->
+    RWLock.with_read_lock t.metadata_lock
+      (fun () ->
+        let cluster_size = 1L <| t.cluster_bits in
+        let byte = Int64.(mul sector (of_int t.info.sector_size)) in
+        iter_p (fun (byte, buf) ->
 
-        let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
-        ( Cluster.walk_readonly t vaddr
-          >>*= function
-          | None ->
-            (* Only the first write to this area needs to allocate, so it's ok
-               to make this a little slower *)
-            Cluster.walk_and_allocate t vaddr
-          | Some offset' ->
-            Lwt.return (`Ok offset') )
-        >>*= fun offset' ->
-        let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
-        B.write t.base base_sector [ buf ]
-        >>*= fun () ->
-        Log.debug (fun f -> f "Written user data to cluster %Ld" (fst (Physical.to_cluster ~cluster_bits:t.cluster_bits offset')));
-        Lwt.return (`Ok ())
-      ) (chop_into_aligned cluster_size byte bufs)
-
+            let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
+            ( Cluster.walk_readonly t vaddr
+              >>*= function
+              | None ->
+                (* Only the first write to this area needs to allocate, so it's ok
+                   to make this a little slower *)
+                Cluster.walk_and_allocate t vaddr
+              | Some offset' ->
+                Lwt.return (`Ok offset') )
+            >>*= fun offset' ->
+            let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
+            B.write t.base base_sector [ buf ]
+            >>*= fun () ->
+            Log.debug (fun f -> f "Written user data to cluster %Ld" (fst (Physical.to_cluster ~cluster_bits:t.cluster_bits offset')));
+            Lwt.return (`Ok ())
+          ) (chop_into_aligned cluster_size byte bufs)
+      )
 
   module Block_map = struct
     module Int64Set = Qcow_diet.Make(Int64)
@@ -809,154 +895,157 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   }
 
   let compact t ?(progress_cb = fun ~percent -> ()) () =
-    Block_map.make t
-    >>*= fun block_map ->
+    RWLock.with_write_lock t.metadata_lock
+      (fun () ->
+        Block_map.make t
+        >>*= fun block_map ->
 
-    Log.debug (fun f -> f "Physical blocks discovered: %d" (Int64Map.cardinal block_map.refs));
-    let total_free = Block_map.Int64Set.fold (fun (x, y) acc -> Int64.(add acc (succ (sub y x)))) block_map.Block_map.free 0L in
-    Log.debug (fun f -> f "Total free blocks discovered: %Ld" total_free);
+        Log.debug (fun f -> f "Physical blocks discovered: %d" (Int64Map.cardinal block_map.refs));
+        let total_free = Block_map.Int64Set.fold (fun (x, y) acc -> Int64.(add acc (succ (sub y x)))) block_map.Block_map.free 0L in
+        Log.debug (fun f -> f "Total free blocks discovered: %Ld" total_free);
 
-    (* The last allocated block. Note if there are no data blocks this will
-       point to the last header block even though it is immovable. *)
-    let start_last_block =
-      try
-        fst @@ Int64Map.max_binding block_map.Block_map.refs
-      with Not_found ->
-        Int64.pred block_map.Block_map.first_movable_cluster in
-    (* Note the next_cluster can be greater than this if the last cluster(s)
-       have been discarded *)
-    let ops, _, refs =
-      Block_map.fold_over_free
-        (fun cluster (ops, max_cluster, refs) ->
-          (* A free block after the last allocated block will not be filled.
-             It will be erased from existence when the file is truncated at the
-             end. *)
-          if cluster >= max_cluster then (ops, max_cluster, refs) else begin
-            (* find the last physical block *)
-            let last_block, rf = Int64Map.max_binding refs in
+        (* The last allocated block. Note if there are no data blocks this will
+           point to the last header block even though it is immovable. *)
+        let start_last_block =
+          try
+            fst @@ Int64Map.max_binding block_map.Block_map.refs
+          with Not_found ->
+            Int64.pred block_map.Block_map.first_movable_cluster in
+        (* Note the next_cluster can be greater than this if the last cluster(s)
+           have been discarded *)
+        let ops, _, refs =
+          Block_map.fold_over_free
+            (fun cluster (ops, max_cluster, refs) ->
+              (* A free block after the last allocated block will not be filled.
+                 It will be erased from existence when the file is truncated at the
+                 end. *)
+              if cluster >= max_cluster then (ops, max_cluster, refs) else begin
+                (* find the last physical block *)
+                let last_block, rf = Int64Map.max_binding refs in
 
-            if cluster >= last_block then (ops, last_block, refs) else begin
-              (* copy last_block into cluster and update rf *)
-              let op = last_block, cluster, rf in
-              let refs = Int64Map.remove last_block refs in
-              op :: ops, last_block, refs
-            end
-          end
-        ) block_map ([], start_last_block, block_map.Block_map.refs) in
+                if cluster >= last_block then (ops, last_block, refs) else begin
+                  (* copy last_block into cluster and update rf *)
+                  let op = last_block, cluster, rf in
+                  let refs = Int64Map.remove last_block refs in
+                  op :: ops, last_block, refs
+                end
+              end
+            ) block_map ([], start_last_block, block_map.Block_map.refs) in
 
-    (* We shall treat a block copy and a reference rewrite as a single unit of
-       work even though a block copy is probably bigger. *)
-    let update_progress =
-      let total_work = 2 * (List.length ops) in
-      let progress_so_far = ref 0 in
-      let last_percent = ref (-1) in
-      fun () ->
-        incr progress_so_far;
-        let percent = (100 * !progress_so_far) / total_work in
-        if !last_percent <> percent then begin
-          progress_cb ~percent;
-          last_percent := percent
-        end in
+        (* We shall treat a block copy and a reference rewrite as a single unit of
+           work even though a block copy is probably bigger. *)
+        let update_progress =
+          let total_work = 2 * (List.length ops) in
+          let progress_so_far = ref 0 in
+          let last_percent = ref (-1) in
+          fun () ->
+            incr progress_so_far;
+            let percent = (100 * !progress_so_far) / total_work in
+            if !last_percent <> percent then begin
+              progress_cb ~percent;
+              last_percent := percent
+            end in
 
-    (* fold_left_s over Block.error Lwt.t values *)
-    let rec fold_left_s f acc =
-      let open Lwt.Infix in function
-      | [] -> Lwt.return (`Ok acc)
-      | x :: xs ->
-        begin f acc x >>= function
-        | `Ok acc -> fold_left_s f acc xs
-        | `Error e -> Lwt.return (`Error e)
-        end in
+        (* fold_left_s over Block.error Lwt.t values *)
+        let rec fold_left_s f acc =
+          let open Lwt.Infix in function
+          | [] -> Lwt.return (`Ok acc)
+          | x :: xs ->
+            begin f acc x >>= function
+            | `Ok acc -> fold_left_s f acc xs
+            | `Error e -> Lwt.return (`Error e)
+            end in
 
-    (* Copy the blocks and build up a substitution map so we know where the referring
-       block has been copied to. (Otherwise we may go to adjust the referring block
-       only to find it has also been moved) *)
-    let one_cluster = malloc t.h in
-    let sector_size = Int64.of_int t.base_info.B.sector_size in
-    let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
-    let sectors_per_cluster = Int64.div (1L <| cluster_bits) sector_size in
-    fold_left_s
-      (fun (free, refs, substitutions) (src, dst, rf) ->
-        Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
-        let src_sector = Int64.mul src sectors_per_cluster in
-        let dst_sector = Int64.mul dst sectors_per_cluster in
-        read_base t.base src_sector one_cluster
-        >>*= fun () ->
-        B.write t.base dst_sector [ one_cluster ]
-        >>*= fun () ->
-        (* If these were metadata blocks (e.g. L2 table entries) then they might
-           be cached. Remove the overwritten block's cache entry just in case. *)
-        ClusterCache.remove t.cache dst
-        >>*= fun () ->
-        update_progress ();
-        let free = Block_map.Int64Set.remove (src, src) @@ Block_map.Int64Set.add (dst, dst) free in
-        let refs = Int64Map.remove src @@ Int64Map.add dst rf refs in
-        let substitutions = Int64Map.add src dst substitutions in
-        Lwt.return (`Ok (free, refs, substitutions))
-      ) (block_map.Block_map.free, block_map.Block_map.refs, Int64Map.empty) ops
-    >>*= fun (free, refs, substitutions) ->
-
-    (* Flush now so that if we crash after updating some of the references, the
-       destination blocks will contain the correct data. *)
-    B.flush t.base
-    >>*= fun () ->
-
-    (* Rewrite the block references, taking care to follow the substitutions map *)
-    fold_left_s
-      (fun () (src, dst, (ref_cluster, ref_cluster_within)) ->
-        update_progress ();
-        let ref_cluster' =
-          if Int64Map.mem ref_cluster substitutions
-          then Int64Map.find ref_cluster substitutions
-          else ref_cluster in
-        ClusterCache.update t.cache ref_cluster'
-          (fun buf ->
-            (* Read the current value in the referencing cluster as a sanity check *)
-            ( match Physical.read (Cstruct.shift buf ref_cluster_within) with
-              | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
-              | Ok (old_reference, _) -> Lwt.return (`Ok old_reference) )
-            >>*= fun old_reference ->
-            let old_cluster, _ = Physical.to_cluster ~cluster_bits old_reference in
-            ( if old_cluster <> src then begin
-                Log.err (fun f -> f "Rewriting reference in %Ld (was %Ld) :%d from %Ld to %Ld, old reference actually pointing to %Ld" ref_cluster' ref_cluster ref_cluster_within src dst old_cluster);
-                Lwt.return (`Error (`Unknown "Failed to rewrite cluster reference"))
-              end else Lwt.return (`Ok ()) )
+        (* Copy the blocks and build up a substitution map so we know where the referring
+           block has been copied to. (Otherwise we may go to adjust the referring block
+           only to find it has also been moved) *)
+        let one_cluster = malloc t.h in
+        let sector_size = Int64.of_int t.base_info.B.sector_size in
+        let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
+        let sectors_per_cluster = Int64.div (1L <| cluster_bits) sector_size in
+        fold_left_s
+          (fun (free, refs, substitutions) (src, dst, rf) ->
+            Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
+            let src_sector = Int64.mul src sectors_per_cluster in
+            let dst_sector = Int64.mul dst sectors_per_cluster in
+            read_base t.base src_sector one_cluster
             >>*= fun () ->
-            (* Preserve any flags but update the pointer *)
-            let new_reference = Physical.make ~is_mutable:(Physical.is_mutable old_reference) ~is_compressed:(Physical.is_compressed old_reference) (dst <| cluster_bits) in
-            match Physical.write new_reference (Cstruct.shift buf ref_cluster_within) with
-            | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
-            | Ok _ -> Lwt.return (`Ok ())
-          )
-      ) () ops
-    >>*= fun () ->
+            B.write t.base dst_sector [ one_cluster ]
+            >>*= fun () ->
+            (* If these were metadata blocks (e.g. L2 table entries) then they might
+               be cached. Remove the overwritten block's cache entry just in case. *)
+            ClusterCache.remove t.cache dst
+            >>*= fun () ->
+            update_progress ();
+            let free = Block_map.Int64Set.remove (src, src) @@ Block_map.Int64Set.add (dst, dst) free in
+            let refs = Int64Map.remove src @@ Int64Map.add dst rf refs in
+            let substitutions = Int64Map.add src dst substitutions in
+            Lwt.return (`Ok (free, refs, substitutions))
+          ) (block_map.Block_map.free, block_map.Block_map.refs, Int64Map.empty) ops
+        >>*= fun (free, refs, substitutions) ->
 
-    (* Flush now so that the pointers are persisted before we truncate the file *)
-    B.flush t.base
-    >>*= fun () ->
+        (* Flush now so that if we crash after updating some of the references, the
+           destination blocks will contain the correct data. *)
+        B.flush t.base
+        >>*= fun () ->
 
-    let last_block =
-      try
-        fst @@ Int64Map.max_binding refs
-      with Not_found -> start_last_block in
-    Log.debug (fun f -> f "Shrink file so that last cluster was %Ld, now %Ld" start_last_block last_block);
-    t.next_cluster <- Int64.succ last_block;
-    Cluster.allocate_clusters t 0L (* takes care of the file size *)
-    >>*= fun _ ->
+        (* Rewrite the block references, taking care to follow the substitutions map *)
+        fold_left_s
+          (fun () (src, dst, (ref_cluster, ref_cluster_within)) ->
+            update_progress ();
+            let ref_cluster' =
+              if Int64Map.mem ref_cluster substitutions
+              then Int64Map.find ref_cluster substitutions
+              else ref_cluster in
+            ClusterCache.update t.cache ref_cluster'
+              (fun buf ->
+                (* Read the current value in the referencing cluster as a sanity check *)
+                ( match Physical.read (Cstruct.shift buf ref_cluster_within) with
+                  | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
+                  | Ok (old_reference, _) -> Lwt.return (`Ok old_reference) )
+                >>*= fun old_reference ->
+                let old_cluster, _ = Physical.to_cluster ~cluster_bits old_reference in
+                ( if old_cluster <> src then begin
+                    Log.err (fun f -> f "Rewriting reference in %Ld (was %Ld) :%d from %Ld to %Ld, old reference actually pointing to %Ld" ref_cluster' ref_cluster ref_cluster_within src dst old_cluster);
+                    Lwt.return (`Error (`Unknown "Failed to rewrite cluster reference"))
+                  end else Lwt.return (`Ok ()) )
+                >>*= fun () ->
+                (* Preserve any flags but update the pointer *)
+                let new_reference = Physical.make ~is_mutable:(Physical.is_mutable old_reference) ~is_compressed:(Physical.is_compressed old_reference) (dst <| cluster_bits) in
+                match Physical.write new_reference (Cstruct.shift buf ref_cluster_within) with
+                | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
+                | Ok _ -> Lwt.return (`Ok ())
+              )
+          ) () ops
+        >>*= fun () ->
 
-    Log.debug (fun f -> f "Physical blocks remaining: %d" (Int64Map.cardinal refs));
-    let total_free = Block_map.Int64Set.fold (fun (x, y) acc -> Int64.(add acc (succ (sub y x)))) free 0L in
-    Log.debug (fun f -> f "Total free blocks remaining: %Ld" total_free);
-    progress_cb ~percent:100;
+        (* Flush now so that the pointers are persisted before we truncate the file *)
+        B.flush t.base
+        >>*= fun () ->
 
-    let refs_updated = Int64.of_int (List.length ops) in
-    let copied = Int64.mul refs_updated sectors_per_cluster in (* one ref per block *)
-    let old_size = Int64.mul start_last_block sectors_per_cluster in
-    let new_size = Int64.mul last_block sectors_per_cluster in
-    let report = { refs_updated; copied; old_size; new_size } in
-    Lwt.return (`Ok report)
+        let last_block =
+          try
+            fst @@ Int64Map.max_binding refs
+          with Not_found -> start_last_block in
+        Log.debug (fun f -> f "Shrink file so that last cluster was %Ld, now %Ld" start_last_block last_block);
+        t.next_cluster <- Int64.succ last_block;
+        Cluster.allocate_clusters t 0L (* takes care of the file size *)
+        >>*= fun _ ->
 
-  let seek_mapped t from =
+        Log.debug (fun f -> f "Physical blocks remaining: %d" (Int64Map.cardinal refs));
+        let total_free = Block_map.Int64Set.fold (fun (x, y) acc -> Int64.(add acc (succ (sub y x)))) free 0L in
+        Log.debug (fun f -> f "Total free blocks remaining: %Ld" total_free);
+        progress_cb ~percent:100;
+
+        let refs_updated = Int64.of_int (List.length ops) in
+        let copied = Int64.mul refs_updated sectors_per_cluster in (* one ref per block *)
+        let old_size = Int64.mul start_last_block sectors_per_cluster in
+        let new_size = Int64.mul last_block sectors_per_cluster in
+        let report = { refs_updated; copied; old_size; new_size } in
+        Lwt.return (`Ok report)
+    )
+
+  let seek_mapped_already_locked t from =
     let bytes = Int64.(mul from (of_int t.sector_size)) in
     let addr = Qcow_virtual.make ~cluster_bits:t.cluster_bits bytes in
     let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
@@ -990,34 +1079,43 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     assert (x >= from);
     Lwt.return (`Ok x)
 
+  let seek_mapped t from =
+    RWLock.with_read_lock t.metadata_lock
+      (fun () ->
+        seek_mapped_already_locked t from
+      )
+
   let seek_unmapped t from =
-    let bytes = Int64.(mul from (of_int t.sector_size)) in
-    let addr = Qcow_virtual.make ~cluster_bits:t.cluster_bits bytes in
-    let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
-    let rec scan_l1 a =
-      if a.Virtual.l1_index >= Int64.of_int32 t.h.Header.l1_size
-      then Lwt.return (`Ok Int64.(mul t.info.size_sectors (of_int t.sector_size)))
-      else
-        Cluster.read_l1_table t a.Virtual.l1_index
-        >>*= fun x ->
-        if Physical.to_bytes x = 0L
-        then Lwt.return (`Ok (Qcow_virtual.to_offset ~cluster_bits:t.cluster_bits a))
-        else
-          let rec scan_l2 a =
-            if a.Virtual.l2_index >= int64s_per_cluster
-            then scan_l1 { a with Virtual.l1_index = Int64.succ a.Virtual.l1_index; l2_index = 0L }
+    RWLock.with_read_lock t.metadata_lock
+      (fun () ->
+        let bytes = Int64.(mul from (of_int t.sector_size)) in
+        let addr = Qcow_virtual.make ~cluster_bits:t.cluster_bits bytes in
+        let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
+        let rec scan_l1 a =
+          if a.Virtual.l1_index >= Int64.of_int32 t.h.Header.l1_size
+          then Lwt.return (`Ok Int64.(mul t.info.size_sectors (of_int t.sector_size)))
+          else
+            Cluster.read_l1_table t a.Virtual.l1_index
+            >>*= fun x ->
+            if Physical.to_bytes x = 0L
+            then Lwt.return (`Ok (Qcow_virtual.to_offset ~cluster_bits:t.cluster_bits a))
             else
-              Cluster.read_l2_table t x a.Virtual.l2_index
-              >>*= fun y ->
-              if Physical.to_bytes y = 0L
-              then Lwt.return (`Ok (Qcow_virtual.to_offset ~cluster_bits:t.cluster_bits a))
-              else scan_l2 { a with Virtual.l2_index = Int64.succ a.Virtual.l2_index} in
-          scan_l2 a in
-    scan_l1 (Virtual.make ~cluster_bits:t.cluster_bits bytes)
-    >>*= fun offset ->
-    let x = Int64.(div offset (of_int t.sector_size)) in
-    assert (x >= from);
-    Lwt.return (`Ok x)
+              let rec scan_l2 a =
+                if a.Virtual.l2_index >= int64s_per_cluster
+                then scan_l1 { a with Virtual.l1_index = Int64.succ a.Virtual.l1_index; l2_index = 0L }
+                else
+                  Cluster.read_l2_table t x a.Virtual.l2_index
+                  >>*= fun y ->
+                  if Physical.to_bytes y = 0L
+                  then Lwt.return (`Ok (Qcow_virtual.to_offset ~cluster_bits:t.cluster_bits a))
+                  else scan_l2 { a with Virtual.l2_index = Int64.succ a.Virtual.l2_index} in
+              scan_l2 a in
+        scan_l1 (Virtual.make ~cluster_bits:t.cluster_bits bytes)
+        >>*= fun offset ->
+        let x = Int64.(div offset (of_int t.sector_size)) in
+        assert (x >= from);
+        Lwt.return (`Ok x)
+      )
 
   let disconnect t = B.disconnect t.base
 
@@ -1056,7 +1154,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let flush () = B.flush base in
     let cache = ClusterCache.make ~read_cluster ~write_cluster ~flush () in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true } -> true | _ -> false in
-    Lwt.return (`Ok { h; base; info = info'; config; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits; lazy_refcounts })
+    let stats = Stats.zero in
+    let metadata_lock = RWLock.make () in
+    Lwt.return (`Ok { h; base; info = info'; config; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock })
 
   let connect ?(config=Config.default) base =
     let open Lwt in
@@ -1072,24 +1172,27 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       | Ok (h, _) -> make config base h
 
   let resize t ~new_size:requested_size_bytes ?(ignore_data_loss=false) () =
-    let existing_size = t.h.Header.size in
-    if existing_size > requested_size_bytes && not ignore_data_loss
-    then Lwt.return (`Error(`Unknown (Printf.sprintf "Requested resize would result in data loss: requested size = %Ld but current size = %Ld" requested_size_bytes existing_size)))
-    else begin
-      let size = Int64.round_up requested_size_bytes 512L in
-      let l2_tables_required = Header.l2_tables_required ~cluster_bits:t.cluster_bits size in
-      (* Keep it simple for now by refusing resizes which would require us to
-         reallocate the L1 table. *)
-      let l2_entries_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
-      let old_max_entries = Int64.round_up (Int64.of_int32 t.h.Header.l1_size) l2_entries_per_cluster in
-      let new_max_entries = Int64.round_up l2_tables_required l2_entries_per_cluster in
-      if new_max_entries > old_max_entries
-      then Lwt.return (`Error (`Unknown "I don't know how to resize in the case where the L1 table needs new clusters:"))
-      else update_header t { t.h with
-        Header.l1_size = Int64.to_int32 l2_tables_required;
-        size
-      }
-    end
+    RWLock.with_write_lock t.metadata_lock
+      (fun () ->
+        let existing_size = t.h.Header.size in
+        if existing_size > requested_size_bytes && not ignore_data_loss
+        then Lwt.return (`Error(`Unknown (Printf.sprintf "Requested resize would result in data loss: requested size = %Ld but current size = %Ld" requested_size_bytes existing_size)))
+        else begin
+          let size = Int64.round_up requested_size_bytes 512L in
+          let l2_tables_required = Header.l2_tables_required ~cluster_bits:t.cluster_bits size in
+          (* Keep it simple for now by refusing resizes which would require us to
+             reallocate the L1 table. *)
+          let l2_entries_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
+          let old_max_entries = Int64.round_up (Int64.of_int32 t.h.Header.l1_size) l2_entries_per_cluster in
+          let new_max_entries = Int64.round_up l2_tables_required l2_entries_per_cluster in
+          if new_max_entries > old_max_entries
+          then Lwt.return (`Error (`Unknown "I don't know how to resize in the case where the L1 table needs new clusters:"))
+          else update_header t { t.h with
+            Header.l1_size = Int64.to_int32 l2_tables_required;
+            size
+          }
+        end
+      )
 
   let zero =
     let page = Io_page.(to_cstruct (get 1)) in
@@ -1100,36 +1203,61 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     if n <= 0L
     then Lwt.return (`Ok ())
     else begin
-      write t sector [ Cstruct.sub zero 0 t.info.sector_size ]
+      (* This could walk one cluster at a time instead of one sector at a time *)
+      let byte = Int64.(mul sector (of_int t.info.sector_size)) in
+      let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
+      ( Cluster.walk_readonly t vaddr
+        >>*= function
+        | None ->
+          (* Already zero, nothing to do *)
+          Lwt.return (`Ok ())
+        | Some offset' ->
+          let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
+          t.stats.nr_erased <- Int64.succ t.stats.nr_erased;
+          B.write t.base base_sector [ Cstruct.sub zero 0 t.info.sector_size ] )
       >>*= fun () ->
       erase t ~sector:(Int64.succ sector) ~n:(Int64.pred n) ()
     end
 
   let discard t ~sector ~n () =
-    (* we can only discard whole clusters. We will explicitly zero non-cluster
-       aligned discards in order to satisfy RZAT *)
+    RWLock.with_read_lock t.metadata_lock
+      (fun () ->
+        (* we can only discard whole clusters. We will explicitly zero non-cluster
+           aligned discards in order to satisfy RZAT *)
 
-    (* round sector, n up to a cluster boundary *)
-    let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
-    let sector' = Int64.round_up sector sectors_per_cluster in
+        (* round sector, n up to a cluster boundary *)
+        let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
+        let sector' = Int64.round_up sector sectors_per_cluster in
 
-    (* we can only discard whole clusters. We will explicitly zero non-cluster
-       aligned discards in order to satisfy RZAT *)
-    erase t ~sector ~n:(Int64.sub sector' sector) ()
-    >>*= fun () ->
-    let n' = Int64.sub n (Int64.sub sector' sector) in
-
-    let rec loop sector n =
-      if n < sectors_per_cluster
-      then erase t ~sector ~n ()
-      else begin
-        let byte = Int64.(mul sector (of_int t.info.sector_size)) in
-        let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
-        Cluster.walk_and_deallocate t vaddr
+        (* we can only discard whole clusters. We will explicitly zero non-cluster
+           aligned discards in order to satisfy RZAT *)
+        let to_erase = Int64.sub sector' sector in
+        erase t ~sector ~n:to_erase ()
         >>*= fun () ->
-        loop (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
-      end in
-    loop sector' n'
+
+        let n' = Int64.sub n (Int64.sub sector' sector) in
+
+        let rec loop sector n =
+          if n < sectors_per_cluster
+          then erase t ~sector ~n ()
+          else begin
+            let byte = Int64.(mul sector (of_int t.info.sector_size)) in
+            let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
+            Cluster.walk_and_deallocate t vaddr
+            >>*= fun () ->
+            loop (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
+          end in
+        loop sector' n'
+      )
+    >>*= fun () ->
+    match t.config.compact_after_unmaps with
+    | Some sectors when t.stats.nr_unmapped > sectors ->
+      Log.info (fun f -> f "Total unmapped sectors %Ld > configured threshold %Ld: compacting now" t.stats.nr_unmapped sectors);
+      t.stats.nr_unmapped <- 0L;
+      compact t ()
+      >>*= fun _report ->
+      Lwt.return (`Ok ())
+    | _ -> Lwt.return (`Ok ())
 
   let create base ~size ?(lazy_refcounts=true) ?(config = Config.default) () =
     let version = `Three in
@@ -1205,148 +1333,151 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     Lwt.return (`Ok t)
 
   let rebuild_refcount_table t =
-    (* Disable lazy refcounts so we actually update the real refcounts *)
-    let lazy_refcounts = t.lazy_refcounts in
-    t.lazy_refcounts <- false;
-    Log.info (fun f -> f "Zeroing existing refcount table");
-    (* Zero all clusters allocated in the refcount table *)
-    let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
-    let rec loop i =
-      if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
-      then Lwt.return (`Ok ())
-      else begin
-        ClusterCache.read t.cache Int64.(add cluster i)
-          (fun buf ->
-             let rec loop i =
-               if i >= (Cstruct.len buf)
-               then Lwt.return (`Ok ())
-               else begin
-                 let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
-                 ( if Physical.to_bytes addr <> 0L then begin
-                       let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
-                       ClusterCache.update t.cache cluster
-                         (fun buf ->
-                            Cstruct.memset buf 0;
-                            Lwt.return (`Ok ())
-                         )
-                        >>*= fun () ->
-                        B.flush t.base
-                     end else Lwt.return (`Ok ()) )
-                 >>*= fun () ->
-                 loop (8 + i)
-               end in
-             loop 0
-          )
-        >>*= fun () ->
-        loop (Int64.succ i)
-      end in
-    loop 0L
-    >>*= fun () ->
-    let rec loop i =
-      if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
-      then Lwt.return (`Ok ())
-      else begin
-        Cluster.Refcount.incr t (Int64.add cluster i)
-        >>*= fun () ->
-        (* If any of the table entries point to a block, increase its refcount too *)
-        ClusterCache.read t.cache Int64.(add cluster i)
-          (fun buf ->
-            Lwt.return (`Ok buf)
-          )
-        >>*= fun buf ->
-        let rec inner i =
-          if i >= (Cstruct.len buf)
+    RWLock.with_write_lock t.metadata_lock
+      (fun () ->
+        (* Disable lazy refcounts so we actually update the real refcounts *)
+        let lazy_refcounts = t.lazy_refcounts in
+        t.lazy_refcounts <- false;
+        Log.info (fun f -> f "Zeroing existing refcount table");
+        (* Zero all clusters allocated in the refcount table *)
+        let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
+        let rec loop i =
+          if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
           then Lwt.return (`Ok ())
           else begin
-            let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
-            ( if Physical.to_bytes addr <> 0L then begin
-                let cluster', _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
-                Log.debug (fun f -> f "Refcount cluster %Ld has reference to cluster %Ld" cluster cluster');
-                (* It might have been incremented already by a previous `incr` *)
-                Cluster.Refcount.read t cluster'
-                >>*= function
-                | 0 ->
-                  Cluster.Refcount.incr t cluster'
-                | _ ->
-                  Lwt.return (`Ok ())
-              end else Lwt.return (`Ok ()) )
+            ClusterCache.read t.cache Int64.(add cluster i)
+              (fun buf ->
+                 let rec loop i =
+                   if i >= (Cstruct.len buf)
+                   then Lwt.return (`Ok ())
+                   else begin
+                     let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
+                     ( if Physical.to_bytes addr <> 0L then begin
+                           let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
+                           ClusterCache.update t.cache cluster
+                             (fun buf ->
+                                Cstruct.memset buf 0;
+                                Lwt.return (`Ok ())
+                             )
+                            >>*= fun () ->
+                            B.flush t.base
+                         end else Lwt.return (`Ok ()) )
+                     >>*= fun () ->
+                     loop (8 + i)
+                   end in
+                 loop 0
+              )
             >>*= fun () ->
-            inner (8 + i)
+            loop (Int64.succ i)
           end in
-        inner 0
+        loop 0L
         >>*= fun () ->
-        loop (Int64.succ i)
-      end in
-    Log.info (fun f -> f "Incrementing refcount of the refcount table clusters");
-    loop 0L
-    >>*= fun () ->
-    (* Increment the refcount of the header and L1 table *)
-    Log.info (fun f -> f "Incrementing refcount of the header");
-    Cluster.Refcount.incr t 0L
-    >>*= fun () ->
-    let l1_table_clusters =
-      let refs_per_cluster = 1L <| (t.cluster_bits - 3) in
-      Int64.(div (round_up (of_int32 t.h.Header.l1_size) refs_per_cluster) refs_per_cluster) in
-    let l1_table_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.l1_table_offset) in
-    let rec loop i =
-      if i >= l1_table_clusters
-      then Lwt.return (`Ok ())
-      else begin
-        Cluster.Refcount.incr t (Int64.add l1_table_cluster i)
-        >>*= fun () ->
-        (* Increment clusters of L1 tables *)
-        ClusterCache.read t.cache Int64.(add l1_table_cluster i)
-          (fun buf ->
-            Lwt.return (`Ok buf)
-          )
-        >>*= fun buf ->
-        let rec inner i =
-          if i >= (Cstruct.len buf)
+        let rec loop i =
+          if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
           then Lwt.return (`Ok ())
           else begin
-            let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
-            ( if Physical.to_bytes addr <> 0L then begin
-                let cluster', _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
-                Log.debug (fun f -> f "L1 cluster %Ld has reference to L2 cluster %Ld" cluster cluster');
-                Cluster.Refcount.incr t cluster'
-              end else Lwt.return (`Ok ()) )
+            Cluster.Refcount.incr t (Int64.add cluster i)
             >>*= fun () ->
-            inner (8 + i)
+            (* If any of the table entries point to a block, increase its refcount too *)
+            ClusterCache.read t.cache Int64.(add cluster i)
+              (fun buf ->
+                Lwt.return (`Ok buf)
+              )
+            >>*= fun buf ->
+            let rec inner i =
+              if i >= (Cstruct.len buf)
+              then Lwt.return (`Ok ())
+              else begin
+                let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
+                ( if Physical.to_bytes addr <> 0L then begin
+                    let cluster', _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
+                    Log.debug (fun f -> f "Refcount cluster %Ld has reference to cluster %Ld" cluster cluster');
+                    (* It might have been incremented already by a previous `incr` *)
+                    Cluster.Refcount.read t cluster'
+                    >>*= function
+                    | 0 ->
+                      Cluster.Refcount.incr t cluster'
+                    | _ ->
+                      Lwt.return (`Ok ())
+                  end else Lwt.return (`Ok ()) )
+                >>*= fun () ->
+                inner (8 + i)
+              end in
+            inner 0
+            >>*= fun () ->
+            loop (Int64.succ i)
           end in
-        inner 0
+        Log.info (fun f -> f "Incrementing refcount of the refcount table clusters");
+        loop 0L
         >>*= fun () ->
-        loop (Int64.succ i)
-      end in
-    Log.info (fun f -> f "Incrementing refcount of the %Ld L1 table clusters starting at %Ld" l1_table_clusters l1_table_cluster);
-    loop 0L
-    >>*= fun () ->
-    (* Fold over the mapped data, incrementing refcounts along the way *)
-    let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
-    let rec loop sector =
-      if sector >= t.info.size_sectors
-      then Lwt.return (`Ok ())
-      else begin
-        seek_mapped t sector
-        >>*= fun mapped_sector ->
-        if mapped_sector <> sector
-        then loop mapped_sector
-        else begin
-          Cluster.walk_readonly t (Virtual.make ~cluster_bits:t.cluster_bits Int64.(mul (of_int t.info.sector_size) mapped_sector))
-          >>*= function
-          | None -> assert false
-          | Some offset' ->
-            let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset' in
-            Cluster.Refcount.incr t cluster
+        (* Increment the refcount of the header and L1 table *)
+        Log.info (fun f -> f "Incrementing refcount of the header");
+        Cluster.Refcount.incr t 0L
+        >>*= fun () ->
+        let l1_table_clusters =
+          let refs_per_cluster = 1L <| (t.cluster_bits - 3) in
+          Int64.(div (round_up (of_int32 t.h.Header.l1_size) refs_per_cluster) refs_per_cluster) in
+        let l1_table_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.l1_table_offset) in
+        let rec loop i =
+          if i >= l1_table_clusters
+          then Lwt.return (`Ok ())
+          else begin
+            Cluster.Refcount.incr t (Int64.add l1_table_cluster i)
             >>*= fun () ->
-            loop (Int64.add mapped_sector sectors_per_cluster)
-        end
-      end in
-    Log.info (fun f -> f "Incrementing refcount of the data clusters");
-    loop 0L
-    >>*= fun () ->
-    (* Restore the original lazy_refcount setting *)
-    t.lazy_refcounts <- lazy_refcounts;
-    Lwt.return (`Ok ())
+            (* Increment clusters of L1 tables *)
+            ClusterCache.read t.cache Int64.(add l1_table_cluster i)
+              (fun buf ->
+                Lwt.return (`Ok buf)
+              )
+            >>*= fun buf ->
+            let rec inner i =
+              if i >= (Cstruct.len buf)
+              then Lwt.return (`Ok ())
+              else begin
+                let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
+                ( if Physical.to_bytes addr <> 0L then begin
+                    let cluster', _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
+                    Log.debug (fun f -> f "L1 cluster %Ld has reference to L2 cluster %Ld" cluster cluster');
+                    Cluster.Refcount.incr t cluster'
+                  end else Lwt.return (`Ok ()) )
+                >>*= fun () ->
+                inner (8 + i)
+              end in
+            inner 0
+            >>*= fun () ->
+            loop (Int64.succ i)
+          end in
+        Log.info (fun f -> f "Incrementing refcount of the %Ld L1 table clusters starting at %Ld" l1_table_clusters l1_table_cluster);
+        loop 0L
+        >>*= fun () ->
+        (* Fold over the mapped data, incrementing refcounts along the way *)
+        let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
+        let rec loop sector =
+          if sector >= t.info.size_sectors
+          then Lwt.return (`Ok ())
+          else begin
+            seek_mapped_already_locked t sector
+            >>*= fun mapped_sector ->
+            if mapped_sector <> sector
+            then loop mapped_sector
+            else begin
+              Cluster.walk_readonly t (Virtual.make ~cluster_bits:t.cluster_bits Int64.(mul (of_int t.info.sector_size) mapped_sector))
+              >>*= function
+              | None -> assert false
+              | Some offset' ->
+                let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset' in
+                Cluster.Refcount.incr t cluster
+                >>*= fun () ->
+                loop (Int64.add mapped_sector sectors_per_cluster)
+            end
+          end in
+        Log.info (fun f -> f "Incrementing refcount of the data clusters");
+        loop 0L
+        >>*= fun () ->
+        (* Restore the original lazy_refcount setting *)
+        t.lazy_refcounts <- lazy_refcounts;
+        Lwt.return (`Ok ())
+    )
 
   let header t = t.h
 
