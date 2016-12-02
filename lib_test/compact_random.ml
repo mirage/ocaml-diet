@@ -52,6 +52,7 @@ let random_write_discard_compact nr_clusters =
     B.get_info qcow
     >>= fun info ->
     let sectors_per_cluster = cluster_size / info.B.sector_size in
+    let nr_sectors = Int64.(div size (of_int info.B.sector_size)) in
 
     (* add to this set on write, remove on discard *)
     let module SectorSet = Qcow_diet.Make(Qcow_types.Int64) in
@@ -77,9 +78,7 @@ let random_write_discard_compact nr_clusters =
         written := SectorSet.add (x, y) !written;
         empty := SectorSet.remove (x, y) !empty;
         Lwt.return_unit in
-    let discard_cluster idx =
-      let n = Int64.of_int sectors_per_cluster in
-      let x = Int64.(mul idx (of_int sectors_per_cluster)) in
+    let discard x n =
       let y = Int64.(add x (pred n)) in
       B.discard qcow ~sector:x ~n ()
       >>= function
@@ -135,13 +134,17 @@ let random_write_discard_compact nr_clusters =
       ( if 0 <= r && r < 10 then begin
           let idx = Random.int64 nr_clusters in
           if !debug then Printf.fprintf stderr "write %Ld\n%!" idx;
+          Printf.printf ".%!";
           write_cluster idx
         end else if 10 <= r && r < 20 then begin
-          let idx = Random.int64 nr_clusters in
-          if !debug then Printf.fprintf stderr "discard %Ld\n%!" idx;
-          discard_cluster idx
+          let sector = Random.int64 nr_sectors in
+          let n = Random.int64 (Int64.sub nr_sectors sector) in
+          if !debug then Printf.fprintf stderr "discard %Ld %Ld\n%!" sector n;
+          Printf.printf "-%!";
+          discard sector n
         end else begin
           if !debug then Printf.fprintf stderr "compact\n%!";
+          Printf.printf "x%!";
           B.compact qcow ()
           >>= function
           | `Error _ -> failwith "compact"
@@ -150,13 +153,12 @@ let random_write_discard_compact nr_clusters =
       >>= fun () ->
       check_all_clusters ()
       >>= fun () ->
-      Printf.printf ".%!";
       loop () in
     Lwt.catch loop
       (fun e ->
         Printf.fprintf stderr "Test failed on iteration # %d\n%!" !nr_iterations;
         Printexc.print_backtrace stderr;
-        exit 1
+        Lwt.fail e
       ) in
   or_failwith @@ Lwt_main.run t
 
