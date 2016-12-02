@@ -1231,11 +1231,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
         (* we can only discard whole clusters. We will explicitly zero non-cluster
            aligned discards in order to satisfy RZAT *)
-        let to_erase = Int64.sub sector' sector in
+        let to_erase = min n (Int64.sub sector' sector) in
         erase t ~sector ~n:to_erase ()
         >>*= fun () ->
 
-        let n' = Int64.sub n (Int64.sub sector' sector) in
+        let n' = Int64.sub n to_erase in
 
         let rec loop sector n =
           if n < sectors_per_cluster
