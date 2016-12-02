@@ -74,6 +74,9 @@ module Make(Elt: ELT): sig
   (** [max_elt t] returns the largest (in terms of the ordering) interval in
       [t], or raises [Not_found] if the set is empty. *)
 
+  val choose: t -> interval
+  (** [choose t] returns one interval, or raises Not_found if the set is empty *)
+
   val union: t -> t -> t
   (** set union *)
 

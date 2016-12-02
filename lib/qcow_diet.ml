@@ -119,6 +119,10 @@ module Make(Elt: ELT) = struct
     | Node { x; y; r = Empty; _ } -> x, y
     | Node { r; _ } -> max_elt r
 
+  let choose = function
+    | Empty -> raise Not_found
+    | Node { x; y; _ } -> x, y
+
   (* fold over the maximal contiguous intervals *)
   let rec fold f t acc = match t with
     | Empty -> acc
