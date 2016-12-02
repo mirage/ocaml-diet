@@ -54,8 +54,8 @@ let random_write_discard_compact nr_clusters =
     let sectors_per_cluster = cluster_size / info.B.sector_size in
 
     (* add to this set on write, remove on discard *)
-    let module ClusterSet = Qcow_diet.Make(Qcow_types.Int64) in
-    let written = ref ClusterSet.empty in
+    let module SectorSet = Qcow_diet.Make(Qcow_types.Int64) in
+    let written = ref SectorSet.empty in
     let nr_iterations = ref 0 in
 
     let make_cluster idx =
@@ -66,22 +66,29 @@ let random_write_discard_compact nr_clusters =
       cluster in
     let write_cluster idx =
       let cluster = make_cluster idx in
-      B.write qcow Int64.(mul idx (of_int sectors_per_cluster)) [ cluster ]
+      let n = Int64.of_int (Cstruct.len cluster / info.B.sector_size) in
+      let x = Int64.(mul idx (of_int sectors_per_cluster)) in
+      let y = Int64.(add x (pred n)) in
+      B.write qcow x [ cluster ]
       >>= function
       | `Error _ -> failwith "write"
       | `Ok () ->
-        written := ClusterSet.add (idx, idx) !written;
+        written := SectorSet.add (x, y) !written;
         Lwt.return_unit in
     let discard_cluster idx =
-      B.discard qcow ~sector:Int64.(mul idx (of_int sectors_per_cluster)) ~n:(Int64.of_int sectors_per_cluster) ()
+      let n = Int64.of_int sectors_per_cluster in
+      let x = Int64.(mul idx (of_int sectors_per_cluster)) in
+      let y = Int64.(add x (pred n)) in
+      B.discard qcow ~sector:x ~n ()
       >>= function
       | `Error _ -> failwith "discard"
       | `Ok () ->
-        written := ClusterSet.remove (idx, idx) !written;
+        written := SectorSet.remove (x, y) !written;
         Lwt.return_unit in
     let read_cluster idx =
       let cluster = malloc cluster_size in
-      B.read qcow Int64.(mul idx (of_int sectors_per_cluster)) [ cluster ]
+      let x = Int64.(mul idx (of_int sectors_per_cluster)) in
+      B.read qcow x [ cluster ]
       >>= function
       | `Error _ -> failwith "read"
       | `Ok () ->
@@ -93,13 +100,14 @@ let random_write_discard_compact nr_clusters =
         then failwith (Printf.sprintf "contents of cluster incorrect: expected %Ld but actual %Ld" expected actual)
       done in
     let check_all_clusters () =
-      let rec loop n =
-        if n = nr_clusters then Lwt.return_unit else begin
-          read_cluster n
+      let rec loop idx =
+        if idx = nr_clusters then Lwt.return_unit else begin
+          read_cluster idx
           >>= fun buf ->
-          let expected = if ClusterSet.mem n !written then n else 0L in
+          let x = Int64.(mul idx (of_int sectors_per_cluster)) in
+          let expected = if SectorSet.mem x !written then idx else 0L in
           check_contents buf expected;
-          loop (Int64.succ n)
+          loop (Int64.succ idx)
         end in
       loop 0L in
     Random.init 0;
