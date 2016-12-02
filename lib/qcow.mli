@@ -23,11 +23,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
   module Config: sig
     type t = {
       discard: bool; (** true if `discard` will be enabled at runtime *)
+      compact_after_unmaps: int64 option; (** automatically compact after n sectors are unmapped *)
     }
     (** Runtime configuration of a device *)
 
-    val create: ?discard:bool -> unit -> t
-    (** [create ?discard ()] constructs a runtime configuration *)
+    val create: ?discard:bool -> ?compact_after_unmaps:int64 -> unit -> t
+    (** [create ?discard ?compact_after_unmaps ()] constructs a runtime configuration *)
 
     val to_string: t -> string
     (** Marshal a config into a string suitable for a command-line argument *)

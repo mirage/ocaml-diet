@@ -46,10 +46,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   module Config = struct
     type t = {
       discard: bool;
+      compact_after_unmaps: int64 option;
     }
-    let create ?(discard=false) () = { discard }
-    let to_string t = Printf.sprintf "discard=%b" t.discard
-    let default = { discard = false }
+    let create ?(discard=false) ?compact_after_unmaps () = { discard; compact_after_unmaps }
+    let to_string t = Printf.sprintf "discard=%b;compact_after_unmaps=%s"
+      t.discard (match t.compact_after_unmaps with None -> "0" | Some x -> Int64.to_string x)
+    let default = { discard = false; compact_after_unmaps = None }
     let of_string txt =
       let open Astring in
       try
@@ -59,7 +61,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
           | None -> t
           | Some (k, v) ->
             begin match String.Ascii.lowercase k with
-            | "discard" -> { discard = bool_of_string v }
+            | "discard" -> { t with discard = bool_of_string v }
+            | "compact_after_unmaps" ->
+              let compact_after_unmaps = if v = "0" then None else Some (Int64.of_string v) in
+              { t with compact_after_unmaps }
             | x -> failwith ("Unknown qcow configuration key: " ^ x)
             end
         ) default strings)
@@ -1244,6 +1249,15 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
           end in
         loop sector' n'
       )
+    >>*= fun () ->
+    match t.config.compact_after_unmaps with
+    | Some sectors when t.stats.nr_unmapped > sectors ->
+      Log.info (fun f -> f "Total unmapped sectors %Ld > configured threshold %Ld: compacting now" t.stats.nr_unmapped sectors);
+      t.stats.nr_unmapped <- 0L;
+      compact t ()
+      >>*= fun _report ->
+      Lwt.return (`Ok ())
+    | _ -> Lwt.return (`Ok ())
 
   let create base ~size ?(lazy_refcounts=true) ?(config = Config.default) () =
     let version = `Three in
