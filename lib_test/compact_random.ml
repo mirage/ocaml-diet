@@ -56,7 +56,7 @@ let random_write_discard_compact nr_clusters =
     (* add to this set on write, remove on discard *)
     let module SectorSet = Qcow_diet.Make(Qcow_types.Int64) in
     let written = ref SectorSet.empty in
-    let empty = ref SectorSet.(add (0L, info.B.size_sectors) empty) in
+    let empty = ref SectorSet.(add (0L, Int64.pred info.B.size_sectors) empty) in
     let nr_iterations = ref 0 in
 
     let make_cluster idx =
@@ -69,6 +69,7 @@ let random_write_discard_compact nr_clusters =
       let cluster = make_cluster idx in
       let n = Int64.of_int (Cstruct.len cluster / info.B.sector_size) in
       let x = Int64.(mul idx (of_int sectors_per_cluster)) in
+      assert (Int64.add x n <= nr_sectors);
       let y = Int64.(add x (pred n)) in
       B.write qcow x [ cluster ]
       >>= function
@@ -78,6 +79,7 @@ let random_write_discard_compact nr_clusters =
         empty := SectorSet.remove (x, y) !empty;
         Lwt.return_unit in
     let discard x n =
+      assert (Int64.add x n <= nr_sectors);
       let y = Int64.(add x (pred n)) in
       B.discard qcow ~sector:x ~n ()
       >>= function
@@ -97,6 +99,7 @@ let random_write_discard_compact nr_clusters =
         | x, y ->
           begin
             let n = Int64.(succ (sub y x)) in
+            assert (Int64.add x n <= nr_sectors);
             let buf = malloc ((Int64.to_int n) * info.B.sector_size) in
             B.read qcow x [ buf ]
             >>= function
@@ -115,9 +118,15 @@ let random_write_discard_compact nr_clusters =
           end
         | exception Not_found ->
           Lwt.return_unit in
-      check (fun _ -> 0L) !empty
+      Lwt.pick [
+        check (fun _ -> 0L) !empty;
+        Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "check empty")
+      ]
       >>= fun () ->
-      check (fun x -> x) !written in
+      Lwt.pick [
+        check (fun x -> x) !written;
+        Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "check written")
+      ] in
     Random.init 0;
     let rec loop () =
       incr nr_iterations;
@@ -152,10 +161,7 @@ let random_write_discard_compact nr_clusters =
           | `Ok _report -> Lwt.return_unit
         end )
       >>= fun () ->
-      Lwt.pick [
-        check_all_clusters ();
-        Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "check timeout")
-      ]
+      check_all_clusters ();
       >>= fun () ->
       loop () in
     Lwt.catch loop
