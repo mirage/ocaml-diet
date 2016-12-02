@@ -47,7 +47,6 @@ let random_write_discard_compact nr_clusters =
     >>= fun block ->
     B.create block ~size ()
     >>= fun qcow ->
-    let h = B.header qcow in
     let open Lwt.Infix in
     B.get_info qcow
     >>= fun info ->
@@ -87,14 +86,6 @@ let random_write_discard_compact nr_clusters =
         written := SectorSet.remove (x, y) !written;
         empty := SectorSet.add (x, y) !empty;
         Lwt.return_unit in
-    let read_cluster idx =
-      let cluster = malloc cluster_size in
-      let x = Int64.(mul idx (of_int sectors_per_cluster)) in
-      B.read qcow x [ cluster ]
-      >>= function
-      | `Error _ -> failwith "read"
-      | `Ok () ->
-        Lwt.return cluster in
     let check_contents sector buf expected =
       for i = 0 to (Cstruct.len buf) / 8 - 1 do
         let actual = Cstruct.BE.get_uint64 buf (i * 8) in
@@ -124,7 +115,8 @@ let random_write_discard_compact nr_clusters =
           end
         | exception Not_found ->
           Lwt.return_unit in
-      check (fun _ -> 0L) !empty;
+      check (fun _ -> 0L) !empty
+      >>= fun () ->
       check (fun x -> x) !written in
     Random.init 0;
     let rec loop () =
@@ -135,29 +127,56 @@ let random_write_discard_compact nr_clusters =
           let idx = Random.int64 nr_clusters in
           if !debug then Printf.fprintf stderr "write %Ld\n%!" idx;
           Printf.printf ".%!";
-          write_cluster idx
+          Lwt.pick [
+            write_cluster idx;
+            Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "write timeout")
+          ]
         end else if 10 <= r && r < 20 then begin
           let sector = Random.int64 nr_sectors in
           let n = Random.int64 (Int64.sub nr_sectors sector) in
           if !debug then Printf.fprintf stderr "discard %Ld %Ld\n%!" sector n;
           Printf.printf "-%!";
-          discard sector n
+          Lwt.pick [
+            discard sector n;
+            Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "discard timeout")
+          ]
         end else begin
           if !debug then Printf.fprintf stderr "compact\n%!";
           Printf.printf "x%!";
-          B.compact qcow ()
+          Lwt.pick [
+            B.compact qcow ();
+            Lwt_unix.sleep 5. >>= fun () -> Lwt.return (`Error (`Unknown "compact timeout"))
+          ]
           >>= function
           | `Error _ -> failwith "compact"
           | `Ok _report -> Lwt.return_unit
         end )
       >>= fun () ->
-      check_all_clusters ()
+      Lwt.pick [
+        check_all_clusters ();
+        Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "check timeout")
+      ]
       >>= fun () ->
       loop () in
     Lwt.catch loop
       (fun e ->
         Printf.fprintf stderr "Test failed on iteration # %d\n%!" !nr_iterations;
         Printexc.print_backtrace stderr;
+        let s = Sexplib.Sexp.to_string_hum (SectorSet.sexp_of_t !written) in
+        Lwt_io.open_file ~flags:[Unix.O_CREAT; Unix.O_TRUNC; Unix.O_WRONLY ] ~perm:0o644 ~mode:Lwt_io.output "/tmp/written.sexp"
+        >>= fun oc ->
+        Lwt_io.write oc s
+        >>= fun () ->
+        Lwt_io.close oc
+        >>= fun () ->
+        let s = Sexplib.Sexp.to_string_hum (SectorSet.sexp_of_t !empty) in
+        Lwt_io.open_file ~flags:[Unix.O_CREAT; Unix.O_TRUNC; Unix.O_WRONLY ] ~perm:0o644 ~mode:Lwt_io.output "/tmp/empty.sexp"
+        >>= fun oc ->
+        Lwt_io.write oc s
+        >>= fun () ->
+        Lwt_io.close oc
+        >>= fun () ->
+        Printf.fprintf stderr ".qcow2 file is at: %s\n" path;
         Lwt.fail e
       ) in
   or_failwith @@ Lwt_main.run t
@@ -168,9 +187,8 @@ let _ =
     "-clusters", Arg.Set_int clusters, Printf.sprintf "Total number of clusters (default %d)" !clusters;
     "-debug", Arg.Set debug, "enable debug"
   ] (fun x ->
-      Printf.fprintf stderr "Unexpected argument: %x\n";
+      Printf.fprintf stderr "Unexpected argument: %s\n" x;
       exit 1
     ) "Perform random read/write/discard/compact operations on a qcow file";
 
-  random_write_discard_compact (Int64.of_int !clusters);
-  ignore(run "rm" [ "-rf"; test_dir ])
+  random_write_discard_compact (Int64.of_int !clusters)
