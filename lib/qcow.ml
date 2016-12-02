@@ -1116,7 +1116,18 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     if n <= 0L
     then Lwt.return (`Ok ())
     else begin
-      write t sector [ Cstruct.sub zero 0 t.info.sector_size ]
+      (* This could walk one cluster at a time instead of one sector at a time *)
+      let byte = Int64.(mul sector (of_int t.info.sector_size)) in
+      let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
+      ( Cluster.walk_readonly t vaddr
+        >>*= function
+        | None ->
+          (* Already zero, nothing to do *)
+          Lwt.return (`Ok ())
+        | Some offset' ->
+          let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
+          t.stats.nr_erased <- Int64.succ t.stats.nr_erased;
+          B.write t.base base_sector [ Cstruct.sub zero 0 t.info.sector_size ] )
       >>*= fun () ->
       erase t ~sector:(Int64.succ sector) ~n:(Int64.pred n) ()
     end
@@ -1134,7 +1145,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let to_erase = Int64.sub sector' sector in
     erase t ~sector ~n:to_erase ()
     >>*= fun () ->
-    t.stats.nr_erased <- Int64.add t.stats.nr_erased to_erase;
 
     let n' = Int64.sub n (Int64.sub sector' sector) in
 
