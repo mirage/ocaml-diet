@@ -95,11 +95,11 @@ let random_write_discard_compact nr_clusters =
       | `Error _ -> failwith "read"
       | `Ok () ->
         Lwt.return cluster in
-    let check_contents buf expected =
+    let check_contents sector buf expected =
       for i = 0 to (Cstruct.len buf) / 8 - 1 do
         let actual = Cstruct.BE.get_uint64 buf (i * 8) in
         if actual <> expected
-        then failwith (Printf.sprintf "contents of cluster incorrect: expected %Ld but actual %Ld" expected actual)
+        then failwith (Printf.sprintf "contents of sector %Ld incorrect: expected %Ld but actual %Ld" sector expected actual)
       done in
     let check_all_clusters () =
       let rec check p set = match SectorSet.choose set with
@@ -116,7 +116,7 @@ let random_write_discard_compact nr_clusters =
                   let cluster = Int64.(div x (of_int sectors_per_cluster)) in
                   let expected = p cluster in
                   let sector = Cstruct.sub remaining 0 512 in
-                  check_contents sector expected;
+                  check_contents x sector expected;
                   for_each_sector (Int64.succ x) (Cstruct.shift remaining 512)
                 end in
               for_each_sector x buf;
