@@ -36,6 +36,15 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
     (** Parse the result of a previous [to_string] invocation *)
   end
 
+  module Stats: sig
+
+    type t = {
+      mutable nr_erased: int64; (** number of sectors erased during discard *)
+      mutable nr_unmapped: int64; (** number of sectors unmapped during discard *)
+    }
+    (** Runtime statistics on a device *)
+  end
+
   val create: B.t -> size:int64 -> ?lazy_refcounts:bool
       -> ?config:Config.t -> unit
       -> [ `Ok of t | `Error of error ] io
@@ -93,6 +102,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
 
   val to_config: t -> Config.t
   (** [to_config t] returns the configuration of a device *)
+
+  val get_stats: t -> Stats.t
+  (** [get_stats t] returns the runtime statistics of a device *)
 
   module Debug: Qcow_s.DEBUG
     with type t = t

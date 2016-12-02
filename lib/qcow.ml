@@ -182,6 +182,17 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         )
   end
 
+  module Stats = struct
+
+    type t = {
+      mutable nr_erased: int64;
+      mutable nr_unmapped: int64;
+    }
+    let zero = {
+      nr_erased = 0L;
+      nr_unmapped = 0L;
+    }
+  end
 
   type t = {
     mutable h: Header.t;
@@ -196,11 +207,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     cluster_bits: int;
     sector_size: int;
     mutable lazy_refcounts: bool; (* true if we are omitting refcounts right now *)
+    mutable stats: Stats.t;
   }
 
   let get_info t = Lwt.return t.info
   let to_config t = t.config
-  
+  let get_stats t = t.stats
+
   (* Another way to achieve this would be to create a virtual block device
      with a little bit of padding on the end *)
   let read_base base base_sector buf =
@@ -589,16 +602,18 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let walk_and_deallocate t a =
         read_l1_table t a.Virtual.l1_index
         >>*= fun l2_offset ->
-        if Physical.to_bytes l2_offset = 0L
-        then Lwt.return (`Ok ())
-        else begin
+        if Physical.to_bytes l2_offset = 0L then begin
+          Lwt.return (`Ok ())
+        end else begin
           read_l2_table t l2_offset a.Virtual.l2_index
           >>*= fun data_offset ->
-          if Physical.to_bytes data_offset = 0L
-          then Lwt.return (`Ok ())
-          else begin
+          if Physical.to_bytes data_offset = 0L then begin
+            Lwt.return (`Ok ())
+          end else begin
             (* The data at [data_offset] is about to become an unreferenced
                hole in the file *)
+            let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
+            t.stats.nr_unmapped <- Int64.add t.stats.nr_unmapped sectors_per_cluster;
             let data_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits data_offset in
             write_l2_table t l2_offset a.Virtual.l2_index (Physical.make 0L)
             >>*= fun () ->
@@ -1056,7 +1071,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let flush () = B.flush base in
     let cache = ClusterCache.make ~read_cluster ~write_cluster ~flush () in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true } -> true | _ -> false in
-    Lwt.return (`Ok { h; base; info = info'; config; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits; lazy_refcounts })
+    let stats = Stats.zero in
+    Lwt.return (`Ok { h; base; info = info'; config; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits; lazy_refcounts; stats })
 
   let connect ?(config=Config.default) base =
     let open Lwt in
@@ -1115,8 +1131,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
     (* we can only discard whole clusters. We will explicitly zero non-cluster
        aligned discards in order to satisfy RZAT *)
-    erase t ~sector ~n:(Int64.sub sector' sector) ()
+    let to_erase = Int64.sub sector' sector in
+    erase t ~sector ~n:to_erase ()
     >>*= fun () ->
+    t.stats.nr_erased <- Int64.add t.stats.nr_erased to_erase;
+
     let n' = Int64.sub n (Int64.sub sector' sector) in
 
     let rec loop sector n =
