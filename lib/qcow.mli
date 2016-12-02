@@ -20,15 +20,32 @@ module Header = Qcow_header
 module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
   include V1_LWT.BLOCK
 
-  val create: B.t -> size:int64 -> ?lazy_refcounts:bool -> unit
+  module Config: sig
+    type t = {
+      discard: bool; (** true if `discard` will be enabled at runtime *)
+    }
+    (** Runtime configuration of a device *)
+
+    val create: ?discard:bool -> unit -> t
+    (** [create ?discard ()] constructs a runtime configuration *)
+
+    val to_string: t -> string
+    (** Marshal a config into a string suitable for a command-line argument *)
+
+    val of_string: string -> [ `Ok of t | `Error of [ `Msg of string ] ]
+    (** Parse the result of a previous [to_string] invocation *)
+  end
+
+  val create: B.t -> size:int64 -> ?lazy_refcounts:bool
+      -> ?config:Config.t -> unit
       -> [ `Ok of t | `Error of error ] io
   (** [create block ~size ?lazy_refcounts ()] initialises a qcow-formatted
       image on [block] with virtual size [size] in bytes. By default the file
       will use lazy refcounts, but this can be overriden by supplying
       [~lazy_refcounts:false] *)
 
-  val connect: B.t -> [ `Ok of t | `Error of error ] io
-  (** [connect block] connects to an existing qcow-formatted image on
+  val connect: ?config:Config.t -> B.t -> [ `Ok of t | `Error of error ] io
+  (** [connect ?config block] connects to an existing qcow-formatted image on
       [block]. *)
 
   val resize: t -> new_size:int64 -> ?ignore_data_loss:bool -> unit -> [ `Ok of unit | `Error of error ] io
@@ -73,6 +90,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
 
   val header: t -> Header.t
   (** Return a snapshot of the current header *)
+
+  val to_config: t -> Config.t
+  (** [to_config t] returns the configuration of a device *)
 
   module Debug: Qcow_s.DEBUG
     with type t = t

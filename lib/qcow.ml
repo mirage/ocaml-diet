@@ -43,6 +43,30 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     size_sectors : int64;
   }
 
+  module Config = struct
+    type t = {
+      discard: bool;
+    }
+    let create ?(discard=false) () = { discard }
+    let to_string t = Printf.sprintf "discard=%b" t.discard
+    let default = { discard = false }
+    let of_string txt =
+      let open Astring in
+      try
+        let strings = String.cuts ~sep:";" txt in
+        `Ok (List.fold_left (fun t line ->
+          match String.cut ~sep:"=" line with
+          | None -> t
+          | Some (k, v) ->
+            begin match String.Ascii.lowercase k with
+            | "discard" -> { discard = bool_of_string v }
+            | x -> failwith ("Unknown qcow configuration key: " ^ x)
+            end
+        ) default strings)
+      with
+      | e -> `Error (`Msg (Printexc.to_string e))
+  end
+
   type id = B.id
   type page_aligned_buffer = B.page_aligned_buffer
 
@@ -163,6 +187,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     mutable h: Header.t;
     base: B.t;
     base_info: B.info;
+    config: Config.t;
     info: info;
     mutable next_cluster: int64;
     next_cluster_m: Lwt_mutex.t;
@@ -174,7 +199,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   }
 
   let get_info t = Lwt.return t.info
-
+  let to_config t = t.config
+  
   (* Another way to achieve this would be to create a virtual block device
      with a little bit of padding on the end *)
   let read_base base base_sector buf =
@@ -995,7 +1021,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
   let disconnect t = B.disconnect t.base
 
-  let make base h =
+  let make config base h =
     let open Lwt in
     B.get_info base
     >>= fun base_info ->
@@ -1030,9 +1056,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let flush () = B.flush base in
     let cache = ClusterCache.make ~read_cluster ~write_cluster ~flush () in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true } -> true | _ -> false in
-    Lwt.return (`Ok { h; base; info = info'; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits; lazy_refcounts })
+    Lwt.return (`Ok { h; base; info = info'; config; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits; lazy_refcounts })
 
-  let connect base =
+  let connect ?(config=Config.default) base =
     let open Lwt in
     B.get_info base
     >>= fun base_info ->
@@ -1043,7 +1069,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     | `Ok () ->
       match Header.read sector with
       | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
-      | Ok (h, _) -> make base h
+      | Ok (h, _) -> make config base h
 
   let resize t ~new_size:requested_size_bytes ?(ignore_data_loss=false) () =
     let existing_size = t.h.Header.size in
@@ -1105,7 +1131,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       end in
     loop sector' n'
 
-  let create base ~size ?(lazy_refcounts=true) () =
+  let create base ~size ?(lazy_refcounts=true) ?(config = Config.default) () =
     let version = `Three in
     let backing_file_offset = 0L in
     let backing_file_size = 0l in
@@ -1152,7 +1178,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
        therefore we must resize the backing device now *)
     resize_base base base_info.B.sector_size (Physical.make next_free_byte)
     >>*= fun () ->
-    make base h
+    make config base h
     >>*= fun t ->
     update_header t h
     >>*= fun () ->
