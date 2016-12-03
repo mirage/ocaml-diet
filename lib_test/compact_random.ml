@@ -59,24 +59,28 @@ let random_write_discard_compact nr_clusters =
     let empty = ref SectorSet.(add (0L, Int64.pred info.B.size_sectors) empty) in
     let nr_iterations = ref 0 in
 
-    let make_cluster idx =
-      let cluster = malloc cluster_size in
-      for i = 0 to cluster_size / 8 - 1 do
-        Cstruct.BE.set_uint64 cluster (i * 8) idx
-      done;
-      cluster in
-    let write_cluster idx =
-      let cluster = make_cluster idx in
-      let n = Int64.of_int (Cstruct.len cluster / info.B.sector_size) in
-      let x = Int64.(mul idx (of_int sectors_per_cluster)) in
+    let write x n =
       assert (Int64.add x n <= nr_sectors);
       let y = Int64.(add x (pred n)) in
-      B.write qcow x [ cluster ]
+      let buf = malloc (info.B.sector_size * (Int64.to_int n)) in
+      let rec for_each_sector x remaining =
+        if Cstruct.len remaining = 0 then () else begin
+          let cluster = Int64.(div x (of_int sectors_per_cluster)) in
+          let sector = Cstruct.sub remaining 0 512 in
+          for i = 0 to Cstruct.len sector / 8 - 1 do
+            Cstruct.BE.set_uint64 sector (i * 8) cluster
+          done;
+          for_each_sector (Int64.succ x) (Cstruct.shift remaining 512)
+        end in
+      for_each_sector x buf;
+      B.write qcow x [ buf ]
       >>= function
       | `Error _ -> failwith "write"
       | `Ok () ->
-        written := SectorSet.add (x, y) !written;
-        empty := SectorSet.remove (x, y) !empty;
+        if n > 0L then begin
+          written := SectorSet.add (x, y) !written;
+          empty := SectorSet.remove (x, y) !empty;
+        end;
         Lwt.return_unit in
     let discard x n =
       assert (Int64.add x n <= nr_sectors);
@@ -85,9 +89,11 @@ let random_write_discard_compact nr_clusters =
       >>= function
       | `Error _ -> failwith "discard"
       | `Ok () ->
+      if n > 0L then begin
         written := SectorSet.remove (x, y) !written;
         empty := SectorSet.add (x, y) !empty;
-        Lwt.return_unit in
+      end;
+      Lwt.return_unit in
     let check_contents sector buf expected =
       for i = 0 to (Cstruct.len buf) / 8 - 1 do
         let actual = Cstruct.BE.get_uint64 buf (i * 8) in
@@ -133,11 +139,12 @@ let random_write_discard_compact nr_clusters =
       let r = Random.int 21 in
       (* A random action: mostly a write or a discard, occasionally a compact *)
       ( if 0 <= r && r < 10 then begin
-          let idx = Random.int64 nr_clusters in
-          if !debug then Printf.fprintf stderr "write %Ld\n%!" idx;
+          let sector = Random.int64 nr_sectors in
+          let n = Random.int64 (Int64.sub nr_sectors sector) in
+          if !debug then Printf.fprintf stderr "write %Ld %Ld\n%!" sector n;
           Printf.printf ".%!";
           Lwt.pick [
-            write_cluster idx;
+            write sector n;
             Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "write timeout")
           ]
         end else if 10 <= r && r < 20 then begin
