@@ -173,7 +173,9 @@ module Make(Elt: ELT) = struct
       let x', y', r' = splitMin r in
       if eq (succ n.y) x' then { n with y = y'; r = r' } else n
 
-  let rec add (x, y) t = match t with
+  let rec add (x, y) t =
+    if y < x then invalid_arg "interval reversed";
+    match t with
     | Empty -> Node { x; y; l = Empty; r = Empty }
     (* completely to the left *)
     | Node n when y < n.x ->
@@ -208,7 +210,9 @@ module Make(Elt: ELT) = struct
       let x, y, l' = splitMax l in
       Node { x; y; l = l'; r }
 
-  let rec remove (x, y) t = match t with
+  let rec remove (x, y) t =
+    if y < x then invalid_arg "interval reversed";
+    match t with
     | Empty -> Empty
     (* completely to the left *)
     | Node n when y < n.x -> Node { n with l = remove (x, y) n.l }
