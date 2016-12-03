@@ -769,14 +769,16 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     (* mark a virtual -> physical mapping as in use *)
     let mark t rf cluster =
       if cluster = 0L then t else begin
-        let free = Int64Set.remove (cluster, cluster) t.free in
+        let free = Int64Set.(remove (Interval.make cluster cluster) t.free) in
         let refs = Int64Map.add cluster rf t.refs in
         { t with free; refs }
       end
 
     (* Fold over all free blocks *)
     let fold_over_free f t acc =
-      let range (from, upto) acc =
+      let range i acc =
+        let from = Int64Set.Interval.x i in
+        let upto = Int64Set.Interval.y i in
         let rec loop acc x =
           if x = (Int64.succ upto) then acc else loop (f x acc) (Int64.succ x) in
         loop acc from in
@@ -794,16 +796,16 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let l1_table_start_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.l1_table_offset) in
       let l1_table_clusters = Int64.(div (round_up (of_int32 t.h.Header.l1_size) int64s_per_cluster) int64s_per_cluster) in
       (* Subtract the fixed structures at the beginning of the file *)
-      let whole_file = Int64Set.(add (0L, Int64.pred t.next_cluster) empty) in
+      let whole_file = Int64Set.(add (Interval.make 0L (Int64.pred t.next_cluster)) empty) in
       let free = Int64Set.(
-        remove (l1_table_start_cluster, Int64.add l1_table_start_cluster l1_table_clusters)
-        @@ remove (refcount_start_cluster, Int64.add refcount_start_cluster (Int64.of_int32 t.h.Header.refcount_table_clusters))
-        @@ remove (0L, 0L)
+        remove (Interval.make l1_table_start_cluster (Int64.add l1_table_start_cluster l1_table_clusters))
+        @@ remove (Interval.make refcount_start_cluster (Int64.add refcount_start_cluster (Int64.of_int32 t.h.Header.refcount_table_clusters)))
+        @@ remove (Interval.make 0L 0L)
         whole_file
       ) in
       let first_movable_cluster =
         try
-          fst @@ Int64Set.min_elt free
+          Int64Set.Interval.x @@ Int64Set.min_elt free
         with
         | Not_found -> t.next_cluster in
 
@@ -901,7 +903,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         >>*= fun block_map ->
 
         Log.debug (fun f -> f "Physical blocks discovered: %d" (Int64Map.cardinal block_map.refs));
-        let total_free = Block_map.Int64Set.fold (fun (x, y) acc -> Int64.(add acc (succ (sub y x)))) block_map.Block_map.free 0L in
+        let total_free = Block_map.Int64Set.fold (fun i acc ->
+          let x = Block_map.Int64Set.Interval.x i in
+          let y = Block_map.Int64Set.Interval.y i in
+          Int64.(add acc (succ (sub y x)))) block_map.Block_map.free 0L in
         Log.debug (fun f -> f "Total free blocks discovered: %Ld" total_free);
 
         (* The last allocated block. Note if there are no data blocks this will
@@ -977,7 +982,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
             ClusterCache.remove t.cache dst
             >>*= fun () ->
             update_progress ();
-            let free = Block_map.Int64Set.remove (src, src) @@ Block_map.Int64Set.add (dst, dst) free in
+            let src_interval = Block_map.Int64Set.Interval.make src src in
+            let dst_interval = Block_map.Int64Set.Interval.make dst dst in
+            let free = Block_map.Int64Set.remove src_interval @@ Block_map.Int64Set.add dst_interval free in
             let refs = Int64Map.remove src @@ Int64Map.add dst rf refs in
             let substitutions = Int64Map.add src dst substitutions in
             Lwt.return (`Ok (free, refs, substitutions))
@@ -1033,7 +1040,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         >>*= fun _ ->
 
         Log.debug (fun f -> f "Physical blocks remaining: %d" (Int64Map.cardinal refs));
-        let total_free = Block_map.Int64Set.fold (fun (x, y) acc -> Int64.(add acc (succ (sub y x)))) free 0L in
+        let total_free = Block_map.Int64Set.fold (fun i acc ->
+          let x = Block_map.Int64Set.Interval.x i in
+          let y = Block_map.Int64Set.Interval.y i in
+          Int64.(add acc (succ (sub y x)))) free 0L in
         Log.debug (fun f -> f "Total free blocks remaining: %Ld" total_free);
         progress_cb ~percent:100;
 

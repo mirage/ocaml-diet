@@ -47,6 +47,8 @@ module Make(Elt: ELT) = struct
     let make x y =
       if x > y then invalid_arg "Interval.make";
       x, y
+    let x = fst
+    let y = snd
   end
 
   let ( >  ) x y = Elt.compare x y > 0

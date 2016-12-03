@@ -56,7 +56,8 @@ let random_write_discard_compact nr_clusters =
     (* add to this set on write, remove on discard *)
     let module SectorSet = Qcow_diet.Make(Qcow_types.Int64) in
     let written = ref SectorSet.empty in
-    let empty = ref SectorSet.(add (0L, Int64.pred info.B.size_sectors) empty) in
+    let i = SectorSet.Interval.make 0L (Int64.pred info.B.size_sectors) in
+    let empty = ref SectorSet.(add i empty) in
     let nr_iterations = ref 0 in
 
     let write x n =
@@ -78,8 +79,9 @@ let random_write_discard_compact nr_clusters =
       | `Error _ -> failwith "write"
       | `Ok () ->
         if n > 0L then begin
-          written := SectorSet.add (x, y) !written;
-          empty := SectorSet.remove (x, y) !empty;
+          let i = SectorSet.Interval.make x y in
+          written := SectorSet.add i !written;
+          empty := SectorSet.remove i !empty;
         end;
         Lwt.return_unit in
     let discard x n =
@@ -90,8 +92,9 @@ let random_write_discard_compact nr_clusters =
       | `Error _ -> failwith "discard"
       | `Ok () ->
       if n > 0L then begin
-        written := SectorSet.remove (x, y) !written;
-        empty := SectorSet.add (x, y) !empty;
+        let i = SectorSet.Interval.make x y in
+        written := SectorSet.remove i !written;
+        empty := SectorSet.add i !empty;
       end;
       Lwt.return_unit in
     let check_contents sector buf expected =
@@ -102,7 +105,9 @@ let random_write_discard_compact nr_clusters =
       done in
     let check_all_clusters () =
       let rec check p set = match SectorSet.choose set with
-        | x, y ->
+        | i ->
+          let x = SectorSet.Interval.x i in
+          let y = SectorSet.Interval.y i in
           begin
             let n = Int64.(succ (sub y x)) in
             assert (Int64.add x n <= nr_sectors);
@@ -120,7 +125,7 @@ let random_write_discard_compact nr_clusters =
                   for_each_sector (Int64.succ x) (Cstruct.shift remaining 512)
                 end in
               for_each_sector x buf;
-              check p (SectorSet.remove (x, y) set)
+              check p (SectorSet.remove i set)
           end
         | exception Not_found ->
           Lwt.return_unit in
