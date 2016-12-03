@@ -201,12 +201,13 @@ let check filename =
       >>= function
       | `Error _ -> failwith (Printf.sprintf "Failed to read qcow formatted data on %s" filename)
       | `Ok x ->
-        Mirage_block.fold_s ~f:(fun acc ofs buf ->
-          return ()
-        ) () (module B) x
+        B.check x
         >>= function
-        | `Error (`Msg m) -> failwith m
-        | `Ok () ->
+        | `Error _ -> failwith (Printf.sprintf "Qcow consistency check failed on %s" filename)
+        | `Ok x ->
+          Printf.printf "Qcow file seems intact.\n";
+          Printf.printf "Total free blocks: %Ld\n" x.B.free;
+          Printf.printf "Total used blocks: %Ld\n" x.B.used;
           return (`Ok ()) in
   Lwt_main.run t
 

@@ -767,8 +767,18 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     }
 
     (* mark a virtual -> physical mapping as in use *)
-    let mark t rf cluster =
+    let mark max_cluster t rf cluster =
+      let c, w = rf in
       if cluster = 0L then t else begin
+        if Int64Map.mem cluster t.refs then begin
+          let c', w' = Int64Map.find cluster t.refs in
+          Log.err (fun f -> f "Found two references to cluster %Ld: %Ld.%d and %Ld.%d" cluster c w c' w');
+          failwith (Printf.sprintf "Found two references to cluster %Ld: %Ld.%d and %Ld.%d" cluster c w c' w');
+        end;
+        if cluster > max_cluster then begin
+          Log.err (fun f -> f "Found a reference to cluster %Ld outside the file (max cluster %Ld) from cluster %Ld.%d" cluster max_cluster c w);
+          failwith (Printf.sprintf "Found a reference to cluster %Ld outside the file (max cluster %Ld) from cluster %Ld.%d" cluster max_cluster c w);
+        end;
         let free = Int64Set.(remove (Interval.make cluster cluster) t.free) in
         let refs = Int64Map.add cluster rf t.refs in
         { t with free; refs }
@@ -790,6 +800,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
          physical cluster back to virtual. The free set will show us the holes,
          and the map will tell us where to get the data from to fill the holes in
          with. *)
+      let mark = mark (Int64.pred t.next_cluster) in
       let module Int64Set = Qcow_diet.Make(Int64) in
       let refcount_start_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
       let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
@@ -888,6 +899,29 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
       Lwt.return (`Ok acc)
   end
+
+  type check_result = {
+    free: int64;
+    used: int64;
+  }
+
+  let check t =
+    RWLock.with_write_lock t.metadata_lock
+      (fun () ->
+        let open Block_map in
+        make t
+        >>*= fun block_map ->
+        let free =
+          Int64Set.fold
+            (fun i acc ->
+              let from = Int64Set.Interval.x i in
+              let upto = Int64Set.Interval.y i in
+              let size = Int64.succ (Int64.sub upto from) in
+              Int64.add size acc
+            ) block_map.free 0L in
+        let used = Int64.of_int @@ Int64Map.cardinal block_map.refs in
+        Lwt.return (`Ok { free; used })
+      )
 
   type compact_result = {
       copied:       int64;
