@@ -47,7 +47,6 @@ let random_write_discard_compact nr_clusters =
     >>= fun block ->
     B.create block ~size ()
     >>= fun qcow ->
-    let h = B.header qcow in
     let open Lwt.Infix in
     B.get_info qcow
     >>= fun info ->
@@ -57,44 +56,44 @@ let random_write_discard_compact nr_clusters =
     (* add to this set on write, remove on discard *)
     let module SectorSet = Qcow_diet.Make(Qcow_types.Int64) in
     let written = ref SectorSet.empty in
-    let empty = ref SectorSet.(add (0L, info.B.size_sectors) empty) in
+    let empty = ref SectorSet.(add (0L, Int64.pred info.B.size_sectors) empty) in
     let nr_iterations = ref 0 in
 
-    let make_cluster idx =
-      let cluster = malloc cluster_size in
-      for i = 0 to cluster_size / 8 - 1 do
-        Cstruct.BE.set_uint64 cluster (i * 8) idx
-      done;
-      cluster in
-    let write_cluster idx =
-      let cluster = make_cluster idx in
-      let n = Int64.of_int (Cstruct.len cluster / info.B.sector_size) in
-      let x = Int64.(mul idx (of_int sectors_per_cluster)) in
+    let write x n =
+      assert (Int64.add x n <= nr_sectors);
       let y = Int64.(add x (pred n)) in
-      B.write qcow x [ cluster ]
+      let buf = malloc (info.B.sector_size * (Int64.to_int n)) in
+      let rec for_each_sector x remaining =
+        if Cstruct.len remaining = 0 then () else begin
+          let cluster = Int64.(div x (of_int sectors_per_cluster)) in
+          let sector = Cstruct.sub remaining 0 512 in
+          for i = 0 to Cstruct.len sector / 8 - 1 do
+            Cstruct.BE.set_uint64 sector (i * 8) cluster
+          done;
+          for_each_sector (Int64.succ x) (Cstruct.shift remaining 512)
+        end in
+      for_each_sector x buf;
+      B.write qcow x [ buf ]
       >>= function
       | `Error _ -> failwith "write"
       | `Ok () ->
-        written := SectorSet.add (x, y) !written;
-        empty := SectorSet.remove (x, y) !empty;
+        if n > 0L then begin
+          written := SectorSet.add (x, y) !written;
+          empty := SectorSet.remove (x, y) !empty;
+        end;
         Lwt.return_unit in
     let discard x n =
+      assert (Int64.add x n <= nr_sectors);
       let y = Int64.(add x (pred n)) in
       B.discard qcow ~sector:x ~n ()
       >>= function
       | `Error _ -> failwith "discard"
       | `Ok () ->
+      if n > 0L then begin
         written := SectorSet.remove (x, y) !written;
         empty := SectorSet.add (x, y) !empty;
-        Lwt.return_unit in
-    let read_cluster idx =
-      let cluster = malloc cluster_size in
-      let x = Int64.(mul idx (of_int sectors_per_cluster)) in
-      B.read qcow x [ cluster ]
-      >>= function
-      | `Error _ -> failwith "read"
-      | `Ok () ->
-        Lwt.return cluster in
+      end;
+      Lwt.return_unit in
     let check_contents sector buf expected =
       for i = 0 to (Cstruct.len buf) / 8 - 1 do
         let actual = Cstruct.BE.get_uint64 buf (i * 8) in
@@ -106,6 +105,7 @@ let random_write_discard_compact nr_clusters =
         | x, y ->
           begin
             let n = Int64.(succ (sub y x)) in
+            assert (Int64.add x n <= nr_sectors);
             let buf = malloc ((Int64.to_int n) * info.B.sector_size) in
             B.read qcow x [ buf ]
             >>= function
@@ -124,40 +124,72 @@ let random_write_discard_compact nr_clusters =
           end
         | exception Not_found ->
           Lwt.return_unit in
-      check (fun _ -> 0L) !empty;
-      check (fun x -> x) !written in
+      Lwt.pick [
+        check (fun _ -> 0L) !empty;
+        Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "check empty")
+      ]
+      >>= fun () ->
+      Lwt.pick [
+        check (fun x -> x) !written;
+        Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "check written")
+      ] in
     Random.init 0;
     let rec loop () =
       incr nr_iterations;
       let r = Random.int 21 in
       (* A random action: mostly a write or a discard, occasionally a compact *)
       ( if 0 <= r && r < 10 then begin
-          let idx = Random.int64 nr_clusters in
-          if !debug then Printf.fprintf stderr "write %Ld\n%!" idx;
+          let sector = Random.int64 nr_sectors in
+          let n = Random.int64 (Int64.sub nr_sectors sector) in
+          if !debug then Printf.fprintf stderr "write %Ld %Ld\n%!" sector n;
           Printf.printf ".%!";
-          write_cluster idx
+          Lwt.pick [
+            write sector n;
+            Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "write timeout")
+          ]
         end else if 10 <= r && r < 20 then begin
           let sector = Random.int64 nr_sectors in
           let n = Random.int64 (Int64.sub nr_sectors sector) in
           if !debug then Printf.fprintf stderr "discard %Ld %Ld\n%!" sector n;
           Printf.printf "-%!";
-          discard sector n
+          Lwt.pick [
+            discard sector n;
+            Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "discard timeout")
+          ]
         end else begin
           if !debug then Printf.fprintf stderr "compact\n%!";
           Printf.printf "x%!";
-          B.compact qcow ()
+          Lwt.pick [
+            B.compact qcow ();
+            Lwt_unix.sleep 5. >>= fun () -> Lwt.return (`Error (`Unknown "compact timeout"))
+          ]
           >>= function
           | `Error _ -> failwith "compact"
           | `Ok _report -> Lwt.return_unit
         end )
       >>= fun () ->
-      check_all_clusters ()
+      check_all_clusters ();
       >>= fun () ->
       loop () in
     Lwt.catch loop
       (fun e ->
         Printf.fprintf stderr "Test failed on iteration # %d\n%!" !nr_iterations;
         Printexc.print_backtrace stderr;
+        let s = Sexplib.Sexp.to_string_hum (SectorSet.sexp_of_t !written) in
+        Lwt_io.open_file ~flags:[Unix.O_CREAT; Unix.O_TRUNC; Unix.O_WRONLY ] ~perm:0o644 ~mode:Lwt_io.output "/tmp/written.sexp"
+        >>= fun oc ->
+        Lwt_io.write oc s
+        >>= fun () ->
+        Lwt_io.close oc
+        >>= fun () ->
+        let s = Sexplib.Sexp.to_string_hum (SectorSet.sexp_of_t !empty) in
+        Lwt_io.open_file ~flags:[Unix.O_CREAT; Unix.O_TRUNC; Unix.O_WRONLY ] ~perm:0o644 ~mode:Lwt_io.output "/tmp/empty.sexp"
+        >>= fun oc ->
+        Lwt_io.write oc s
+        >>= fun () ->
+        Lwt_io.close oc
+        >>= fun () ->
+        Printf.fprintf stderr ".qcow2 file is at: %s\n" path;
         Lwt.fail e
       ) in
   or_failwith @@ Lwt_main.run t
@@ -168,9 +200,8 @@ let _ =
     "-clusters", Arg.Set_int clusters, Printf.sprintf "Total number of clusters (default %d)" !clusters;
     "-debug", Arg.Set debug, "enable debug"
   ] (fun x ->
-      Printf.fprintf stderr "Unexpected argument: %x\n";
+      Printf.fprintf stderr "Unexpected argument: %s\n" x;
       exit 1
     ) "Perform random read/write/discard/compact operations on a qcow file";
 
-  random_write_discard_compact (Int64.of_int !clusters);
-  ignore(run "rm" [ "-rf"; test_dir ])
+  random_write_discard_compact (Int64.of_int !clusters)
