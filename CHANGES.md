@@ -1,3 +1,10 @@
+0.6.0 (2016-12-04)
+- rename ocamlfind package from `qcow-format` to `qcow` for uniformity
+- add support for runtime configuration arguments to `connect` and `create`
+- add support for `discard` (aka TRIM or UNMAP) and online compaction
+  (through a stop-the-world GC)
+- switch the build from `oasis` to `topkg` (thanks to @jgimenez)
+
 0.5.0 (2016-11-26)
 - `resize` now takes a new size in bytes (rather than sectors) and uses a
   labelled argument

@@ -19,7 +19,7 @@ type 'a error = [ `Ok of 'a | `Error of [ `Msg of string ] ]
 
 module FromBlock: sig
   val ( >>= ): [< `Error of Mirage_block.Error.error | `Ok of 'a ] Lwt.t
-    -> ('a -> ([> `Error of [> `Msg of bytes ] ] as 'b) Lwt.t)
+    -> ('a -> ([> `Error of [> `Msg of string ] ] as 'b) Lwt.t)
     -> 'b Lwt.t
 end
 
