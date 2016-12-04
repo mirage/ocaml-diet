@@ -10,9 +10,4 @@
 _build
 *.native
 .coverage/
-
-# REMOVE to release the package
-*.mldylib
-*.mlpack
-*.odocl
-*.docdir
+*.install
