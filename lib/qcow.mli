@@ -98,6 +98,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
   (** [rebuild_refcount_table t] rebuilds the refcount table from scratch.
       Normally we won't update the refcount table live, for performance. *)
 
+  type check_result = {
+    free: int64; (** unused sectors *)
+    used: int64; (** used sectors *)
+  }
+
+  val check: t -> [ `Ok of check_result | `Error of error ] io
+  (** [check t] performs sanity checks of the file, looking for errors *)
+
   val header: t -> Header.t
   (** Return a snapshot of the current header *)
 

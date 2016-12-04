@@ -35,7 +35,7 @@ module Make(Elt: ELT): sig
   type elt = Elt.t [@@deriving sexp]
   (** The type of the set elements *)
 
-  type interval = elt * elt
+  type interval
   (** An interval: a range (x, y) of set values where all the elements from
       x to y inclusive are in the set *)
 
@@ -43,6 +43,12 @@ module Make(Elt: ELT): sig
     val make: elt -> elt -> interval
     (** [make first last] construct an interval describing all the elements from
         [first] to [last] inclusive. *)
+
+    val x: interval -> elt
+    (** the starting element of the interval *)
+
+    val y: interval -> elt
+    (** the ending element of the interval *)
   end
 
   type t [@@deriving sexp]
