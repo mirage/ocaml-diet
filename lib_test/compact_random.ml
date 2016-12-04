@@ -31,7 +31,7 @@ let debug = ref false
    checking with read whether the expected data is in each cluster. By convention
    we write the cluster index into each cluster so we can detect if they
    permute or alias. *)
-let random_write_discard_compact nr_clusters =
+let random_write_discard_compact nr_clusters stop_after =
   (* create a large disk *)
   let open Lwt.Infix in
   let module B = Qcow.Make(Block) in
@@ -141,41 +141,43 @@ let random_write_discard_compact nr_clusters =
     Random.init 0;
     let rec loop () =
       incr nr_iterations;
-      let r = Random.int 21 in
-      (* A random action: mostly a write or a discard, occasionally a compact *)
-      ( if 0 <= r && r < 10 then begin
-          let sector = Random.int64 nr_sectors in
-          let n = Random.int64 (Int64.sub nr_sectors sector) in
-          if !debug then Printf.fprintf stderr "write %Ld %Ld\n%!" sector n;
-          Printf.printf ".%!";
-          Lwt.pick [
-            write sector n;
-            Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "write timeout")
-          ]
-        end else if 10 <= r && r < 20 then begin
-          let sector = Random.int64 nr_sectors in
-          let n = Random.int64 (Int64.sub nr_sectors sector) in
-          if !debug then Printf.fprintf stderr "discard %Ld %Ld\n%!" sector n;
-          Printf.printf "-%!";
-          Lwt.pick [
-            discard sector n;
-            Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "discard timeout")
-          ]
-        end else begin
-          if !debug then Printf.fprintf stderr "compact\n%!";
-          Printf.printf "x%!";
-          Lwt.pick [
-            B.compact qcow ();
-            Lwt_unix.sleep 5. >>= fun () -> Lwt.return (`Error (`Unknown "compact timeout"))
-          ]
-          >>= function
-          | `Error _ -> failwith "compact"
-          | `Ok _report -> Lwt.return_unit
-        end )
-      >>= fun () ->
-      check_all_clusters ();
-      >>= fun () ->
-      loop () in
+      if !nr_iterations = stop_after then Lwt.return (`Ok ()) else begin
+        let r = Random.int 21 in
+        (* A random action: mostly a write or a discard, occasionally a compact *)
+        ( if 0 <= r && r < 10 then begin
+            let sector = Random.int64 nr_sectors in
+            let n = Random.int64 (Int64.sub nr_sectors sector) in
+            if !debug then Printf.fprintf stderr "write %Ld %Ld\n%!" sector n;
+            Printf.printf ".%!";
+            Lwt.pick [
+              write sector n;
+              Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "write timeout")
+            ]
+          end else if 10 <= r && r < 20 then begin
+            let sector = Random.int64 nr_sectors in
+            let n = Random.int64 (Int64.sub nr_sectors sector) in
+            if !debug then Printf.fprintf stderr "discard %Ld %Ld\n%!" sector n;
+            Printf.printf "-%!";
+            Lwt.pick [
+              discard sector n;
+              Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "discard timeout")
+            ]
+          end else begin
+            if !debug then Printf.fprintf stderr "compact\n%!";
+            Printf.printf "x%!";
+            Lwt.pick [
+              B.compact qcow ();
+              Lwt_unix.sleep 5. >>= fun () -> Lwt.return (`Error (`Unknown "compact timeout"))
+            ]
+            >>= function
+            | `Error _ -> failwith "compact"
+            | `Ok _report -> Lwt.return_unit
+          end )
+        >>= fun () ->
+        check_all_clusters ();
+        >>= fun () ->
+        loop ()
+      end in
     Lwt.catch loop
       (fun e ->
         Printf.fprintf stderr "Test failed on iteration # %d\n%!" !nr_iterations;
@@ -201,12 +203,14 @@ let random_write_discard_compact nr_clusters =
 
 let _ =
   let clusters = ref 128 in
+  let stop_after = ref 1024 in
   Arg.parse [
     "-clusters", Arg.Set_int clusters, Printf.sprintf "Total number of clusters (default %d)" !clusters;
+    "-stop-after", Arg.Set_int stop_after, Printf.sprintf "Number of iterations to stop after (default: 1024, 0 means never)";
     "-debug", Arg.Set debug, "enable debug"
   ] (fun x ->
       Printf.fprintf stderr "Unexpected argument: %s\n" x;
       exit 1
     ) "Perform random read/write/discard/compact operations on a qcow file";
 
-  random_write_discard_compact (Int64.of_int !clusters)
+  random_write_discard_compact (Int64.of_int !clusters) (!stop_after)

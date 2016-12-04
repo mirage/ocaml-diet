@@ -7,4 +7,6 @@ let () =
   Pkg.describe "qcow" @@ fun c ->
   Ok [ Pkg.mllib "lib/qcow.mllib";
        Pkg.bin "cli/main" ~dst:"qcow-tool";
-       Pkg.test "lib_test/test" ]
+       Pkg.test "lib_test/test";
+       Pkg.test "lib_test/compact_random";
+  ]
