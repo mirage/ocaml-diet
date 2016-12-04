@@ -111,7 +111,7 @@ let progress_cb ~percent =
   spinner_idx := (!spinner_idx + 1) mod (Array.length spinner);
   let percent' = Printf.sprintf "%3d%%" percent in
   String.blit percent' 0 line (progress_bar_width + 4) 4;
-  Printf.printf "\r%s%!" line;
+  Printf.printf "\r%s%!" (Bytes.to_string line);
   if percent = 100 then Printf.printf "\n"
 
 let mib = Int64.mul 1024L 1024L
