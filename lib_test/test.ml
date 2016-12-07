@@ -509,6 +509,58 @@ let create_resize_equals_create size_from size_to =
     Lwt.return (`Ok ()) in
   or_failwith @@ Lwt_main.run t
 
+let range from upto =
+  let rec loop acc n = if n = upto then acc else loop (n :: acc) (Int64.succ n) in
+  loop [] from
+
+let create_write_discard_all_compact clusters () =
+  (* create a large disk *)
+  let open Lwt.Infix in
+  let module B = Qcow.Make(Block) in
+  let size = gib in
+  let path = Filename.concat test_dir (Int64.to_string size) ^ ".compact" in
+  let t =
+    truncate path
+    >>= fun () ->
+    let open FromBlock in
+    Block.connect path
+    >>= fun block ->
+    B.create block ~size ()
+    >>= fun qcow ->
+    let h = B.header qcow in
+    let cluster_size = 1 lsl (Int32.to_int h.Qcow.Header.cluster_bits) in
+    let open Lwt.Infix in
+    B.get_info qcow
+    >>= fun info ->
+    let sectors_per_cluster = cluster_size / info.B.sector_size in
+    (* write a bunch of clusters at the beginning *)
+    let write_cluster idx =
+      let cluster = malloc cluster_size in (* don't care about the contents *)
+      B.write qcow Int64.(mul idx (of_int sectors_per_cluster)) [ cluster ]
+      >>= function
+      | `Error _ -> failwith "write"
+      | `Ok () ->
+        Lwt.return_unit in
+    Lwt_list.iter_s write_cluster (range 0L clusters)
+    >>= fun () ->
+    (* discard everything *)
+    ( B.discard qcow ~sector:0L ~n:info.B.size_sectors ()
+      >>= function
+      | `Error _ -> failwith "discard"
+      | `Ok () -> Lwt.return_unit )
+    >>= fun () ->
+    (* compact *)
+    let open FromBlock in
+    B.compact qcow ()
+    >>= fun _report ->
+    let open Lwt.Infix in
+    B.disconnect qcow
+    >>= fun () ->
+    Block.disconnect block
+    >>= fun () ->
+    Lwt.return (`Ok ()) in
+  or_failwith @@ Lwt_main.run t
+
 let create_write_discard_compact () =
   (* create a large disk *)
   let open Lwt.Infix in
@@ -685,6 +737,10 @@ let _ =
       "create 1M" >:: create_1M;
       "create 1P" >:: create_1P;
       "compact" >:: create_write_discard_compact;
+      "discard all then compact 0L" >:: create_write_discard_all_compact 0L;
+      "discard all then compact 1L" >:: create_write_discard_all_compact 1L;
+      "discard all then compact 2L" >:: create_write_discard_all_compact 2L;
+      "discard all then compact 16384L" >:: create_write_discard_all_compact 16384L;
     ] @ interesting_native_reads @ interesting_native_discards @ interesting_qemu_reads @ qemu_img_suite @ qcow_tool_suite) in
   OUnit2.run_test_tt_main (ounit2_of_ounit1 suite);
   (* If no error, delete the directory *)
