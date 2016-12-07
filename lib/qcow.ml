@@ -33,7 +33,7 @@ let src =
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
+module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
 
   type 'a io = 'a Lwt.t
   type error = B.error

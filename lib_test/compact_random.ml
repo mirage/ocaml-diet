@@ -34,7 +34,7 @@ let debug = ref false
 let random_write_discard_compact nr_clusters stop_after =
   (* create a large disk *)
   let open Lwt.Infix in
-  let module B = Qcow.Make(Block) in
+  let module B = Qcow.Make(Block)(Time) in
   let cluster_bits = 16 in (* FIXME: avoid hardcoding this *)
   let cluster_size = 1 lsl cluster_bits in
   let size = Int64.(mul nr_clusters (of_int cluster_size)) in

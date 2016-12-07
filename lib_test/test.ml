@@ -26,7 +26,7 @@ open Sizes
 module Block = UnsafeBlock
 
 let repair_refcounts path =
-  let module B = Qcow.Make(Block) in
+  let module B = Qcow.Make(Block)(Time) in
   let t =
     let open FromBlock in
     Block.connect path
@@ -49,7 +49,7 @@ let repair_refcounts path =
    presumably for extension headers *)
 
 let read_write_header name size =
-  let module B = Qcow.Make(Block) in
+  let module B = Qcow.Make(Block)(Time) in
   let path = Filename.concat test_dir (Printf.sprintf "read_write_header.%s.%Ld" name size) in
 
   let t =
@@ -142,7 +142,7 @@ let rec fragment into remaining =
 
 let check_file_contents path id sector_size size_sectors (start, length) () =
   let module RawReader = Block in
-  let module Reader = Qcow.Make(RawReader) in
+  let module Reader = Qcow.Make(RawReader)(Time) in
   let sector = Int64.div start 512L in
   (* This is the range that we expect to see written *)
   let open FromBlock in
@@ -188,7 +188,7 @@ let check_file_contents path id sector_size size_sectors (start, length) () =
 
 let write_read_native sector_size size_sectors (start, length) () =
   let module RawWriter = Block in
-  let module Writer = Qcow.Make(RawWriter) in
+  let module Writer = Qcow.Make(RawWriter)(Time) in
   let path = Filename.concat test_dir (Printf.sprintf "write_read_native.%Ld.%Ld.%d" size_sectors start length) in
 
   let t =
@@ -224,7 +224,7 @@ let write_read_native sector_size size_sectors (start, length) () =
 
 let write_discard_read_native sector_size size_sectors (start, length) () =
   let module RawWriter = Block in
-  let module Writer = Qcow.Make(RawWriter) in
+  let module Writer = Qcow.Make(RawWriter)(Time) in
   let path = Filename.concat test_dir (Printf.sprintf "write_discard_read_native.%Ld.%Ld.%d" size_sectors start length) in
   let t =
     truncate path
@@ -296,7 +296,7 @@ let write_read_qemu sector_size size_sectors (start, length) () =
     or_failwith @@ Lwt_main.run t
 
 let check_refcount_table_allocation () =
-  let module B = Qcow.Make(Ramdisk) in
+  let module B = Qcow.Make(Ramdisk)(Time) in
   let t =
     Ramdisk.destroy ~name:"test";
     let open FromBlock in
@@ -318,7 +318,7 @@ let check_refcount_table_allocation () =
   or_failwith @@ Lwt_main.run t
 
 let check_full_disk () =
-  let module B = Qcow.Make(Ramdisk) in
+  let module B = Qcow.Make(Ramdisk)(Time) in
   let t =
     Ramdisk.destroy ~name:"test";
     let open FromBlock in
@@ -356,7 +356,7 @@ let virtual_sizes = [
 let check_file path size =
   let info = Qemu.Img.info path in
   assert_equal ~printer:Int64.to_string size info.Qemu.Img.virtual_size;
-  let module M = Qcow.Make(Block) in
+  let module M = Qcow.Make(Block)(Time) in
   repair_refcounts path
   >>= fun () ->
   Qemu.Img.check path;
@@ -406,7 +406,7 @@ let qemu_img_suite =
 
 let qcow_tool size =
   let open Lwt.Infix in
-  let module B = Qcow.Make(Block) in
+  let module B = Qcow.Make(Block)(Time) in
   let path = Filename.concat test_dir (Int64.to_string size) in
 
   let t =
@@ -427,7 +427,7 @@ let qcow_tool size =
 
 let qcow_tool_resize ?ignore_data_loss size_from size_to =
   let open Lwt.Infix in
-  let module B = Qcow.Make(Block) in
+  let module B = Qcow.Make(Block)(Time) in
   let path = Filename.concat test_dir (Int64.to_string size_from) in
 
   let t =
@@ -450,7 +450,7 @@ let qcow_tool_resize ?ignore_data_loss size_from size_to =
 
 let qcow_tool_bad_resize size_from size_to =
   let open Lwt.Infix in
-  let module B = Qcow.Make(Block) in
+  let module B = Qcow.Make(Block)(Time) in
   let path = Filename.concat test_dir (Int64.to_string size_from) in
 
   let t =
@@ -475,7 +475,7 @@ let qcow_tool_bad_resize size_from size_to =
 
 let create_resize_equals_create size_from size_to =
   let open Lwt.Infix in
-  let module B = Qcow.Make(Block) in
+  let module B = Qcow.Make(Block)(Time) in
   let path1 = Filename.concat test_dir (Int64.to_string size_from) in
   let path2 = path1 ^ ".resized" in
   let t =
@@ -516,7 +516,7 @@ let range from upto =
 let create_write_discard_all_compact clusters () =
   (* create a large disk *)
   let open Lwt.Infix in
-  let module B = Qcow.Make(Block) in
+  let module B = Qcow.Make(Block)(Time) in
   let size = gib in
   let path = Filename.concat test_dir (Int64.to_string size) ^ ".compact" in
   let t =
@@ -564,7 +564,7 @@ let create_write_discard_all_compact clusters () =
 let create_write_discard_compact () =
   (* create a large disk *)
   let open Lwt.Infix in
-  let module B = Qcow.Make(Block) in
+  let module B = Qcow.Make(Block)(Time) in
   let size = gib in
   let path = Filename.concat test_dir (Int64.to_string size) ^ ".compact" in
   let t =
