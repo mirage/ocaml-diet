@@ -17,7 +17,7 @@
 module Error = Qcow_error
 module Header = Qcow_header
 
-module Make(B: Qcow_s.RESIZABLE_BLOCK) : sig
+module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) : sig
   include V1_LWT.BLOCK
 
   module Config: sig

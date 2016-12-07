@@ -5,4 +5,6 @@ Qcow_virtual
 Qcow_physical
 Qcow_s
 Qcow_diet
+Qcow_rwlock
+Qcow_timer
 Qcow

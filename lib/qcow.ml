@@ -33,7 +33,7 @@ let src =
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
+module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
 
   type 'a io = 'a Lwt.t
   type error = B.error
@@ -187,66 +187,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         )
   end
 
-  module RWLock = struct
-    type t = {
-      mutable nr_readers: int;
-      mutable writer: bool;
-      m: Lwt_mutex.t;
-      c: unit Lwt_condition.t;
-    }
-    let make () =
-      let nr_readers = 0 in
-      let writer = false in
-      let m = Lwt_mutex.create () in
-      let c = Lwt_condition.create () in
-      { nr_readers; writer; m; c }
-    let with_read_lock t f =
-      let open Lwt.Infix in
-      Lwt_mutex.with_lock t.m
-        (fun () ->
-          let rec wait () =
-            if t.writer then begin
-              Lwt_condition.wait t.c ~mutex:t.m
-              >>= fun () ->
-              wait ()
-            end else begin
-              t.nr_readers <- t.nr_readers + 1;
-              Lwt.return_unit
-            end in
-          wait ()
-        )
-      >>= fun () ->
-      Lwt.finalize f
-        (fun () ->
-          t.nr_readers <- t.nr_readers - 1;
-          Lwt_condition.signal t.c ();
-          Lwt.return_unit
-        )
-    let with_write_lock t f =
-      let open Lwt.Infix in
-      Lwt_mutex.with_lock t.m
-        (fun () ->
-          let rec wait () =
-            if t.nr_readers > 0 || t.writer then begin
-              Lwt_condition.wait t.c ~mutex:t.m
-              >>= fun () ->
-              wait ()
-            end else begin
-              t.writer <- true;
-              Lwt.return_unit
-            end in
-          wait ()
-        )
-      >>= fun () ->
-      Lwt.finalize f
-        (fun () ->
-          t.writer <- false;
-          Lwt_condition.broadcast t.c ();
-          Lwt.return_unit
-        )
-
-  end
-
   module Stats = struct
 
     type t = {
@@ -258,6 +198,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       nr_unmapped = 0L;
     }
   end
+
+  module Timer = Qcow_timer.Make(Time)
 
   type t = {
     mutable h: Header.t;
@@ -273,7 +215,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     sector_size: int;
     mutable lazy_refcounts: bool; (* true if we are omitting refcounts right now *)
     mutable stats: Stats.t;
-    metadata_lock: RWLock.t; (* held to stop the world during compacts and resizes *)
+    metadata_lock: Qcow_rwlock.t; (* held to stop the world during compacts and resizes *)
+    background_compact_timer: Timer.t;
   }
 
   let get_info t = Lwt.return t.info
@@ -708,7 +651,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       end
 
   let read t sector bufs =
-    RWLock.with_read_lock t.metadata_lock
+    Qcow_rwlock.with_read_lock t.metadata_lock
       (fun () ->
         let cluster_size = 1L <| t.cluster_bits in
         let byte = Int64.(mul sector (of_int t.info.sector_size)) in
@@ -729,7 +672,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       )
 
   let write t sector bufs =
-    RWLock.with_read_lock t.metadata_lock
+    Qcow_rwlock.with_read_lock t.metadata_lock
       (fun () ->
         let cluster_size = 1L <| t.cluster_bits in
         let byte = Int64.(mul sector (of_int t.info.sector_size)) in
@@ -906,7 +849,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   }
 
   let check t =
-    RWLock.with_write_lock t.metadata_lock
+    Qcow_rwlock.with_write_lock t.metadata_lock
       (fun () ->
         let open Block_map in
         make t
@@ -931,7 +874,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   }
 
   let compact t ?(progress_cb = fun ~percent -> ()) () =
-    RWLock.with_write_lock t.metadata_lock
+    Qcow_rwlock.with_write_lock t.metadata_lock
       (fun () ->
         Block_map.make t
         >>*= fun block_map ->
@@ -1124,13 +1067,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     Lwt.return (`Ok x)
 
   let seek_mapped t from =
-    RWLock.with_read_lock t.metadata_lock
+    Qcow_rwlock.with_read_lock t.metadata_lock
       (fun () ->
         seek_mapped_already_locked t from
       )
 
   let seek_unmapped t from =
-    RWLock.with_read_lock t.metadata_lock
+    Qcow_rwlock.with_read_lock t.metadata_lock
       (fun () ->
         let bytes = Int64.(mul from (of_int t.sector_size)) in
         let addr = Qcow_virtual.make ~cluster_bits:t.cluster_bits bytes in
@@ -1199,8 +1142,26 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let cache = ClusterCache.make ~read_cluster ~write_cluster ~flush () in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true } -> true | _ -> false in
     let stats = Stats.zero in
-    let metadata_lock = RWLock.make () in
-    Lwt.return (`Ok { h; base; info = info'; config; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock })
+    let metadata_lock = Qcow_rwlock.make () in
+    let t = ref None in
+    let background_compact_timer = Timer.make ~description:"compact" ~f:(fun () ->
+      match !t with
+      | None ->
+        Lwt.return_unit
+      | Some t ->
+        (* Don't schedule another compact until the nr_unmapped is above the
+           threshold again. *)
+        t.stats.nr_unmapped <- 0L;
+        compact t ()
+        >>= function
+        | `Ok _report -> Lwt.return_unit
+        | `Error e ->
+          Log.err (fun f -> f "background compaction returned error");
+          Lwt.return_unit
+      ) () in
+    let t' = { h; base; info = info'; config; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock; background_compact_timer } in
+    t := Some t';
+    Lwt.return (`Ok t')
 
   let connect ?(config=Config.default) base =
     let open Lwt in
@@ -1216,7 +1177,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       | Ok (h, _) -> make config base h
 
   let resize t ~new_size:requested_size_bytes ?(ignore_data_loss=false) () =
-    RWLock.with_write_lock t.metadata_lock
+    Qcow_rwlock.with_write_lock t.metadata_lock
       (fun () ->
         let existing_size = t.h.Header.size in
         if existing_size > requested_size_bytes && not ignore_data_loss
@@ -1264,7 +1225,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     end
 
   let discard t ~sector ~n () =
-    RWLock.with_read_lock t.metadata_lock
+    Qcow_rwlock.with_read_lock t.metadata_lock
       (fun () ->
         (* we can only discard whole clusters. We will explicitly zero non-cluster
            aligned discards in order to satisfy RZAT *)
@@ -1296,10 +1257,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     >>*= fun () ->
     match t.config.compact_after_unmaps with
     | Some sectors when t.stats.nr_unmapped > sectors ->
-      Log.info (fun f -> f "Total unmapped sectors %Ld > configured threshold %Ld: compacting now" t.stats.nr_unmapped sectors);
-      t.stats.nr_unmapped <- 0L;
-      compact t ()
-      >>*= fun _report ->
+      Timer.restart ~duration_ms:1000 t.background_compact_timer;
       Lwt.return (`Ok ())
     | _ -> Lwt.return (`Ok ())
 
@@ -1377,7 +1335,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     Lwt.return (`Ok t)
 
   let rebuild_refcount_table t =
-    RWLock.with_write_lock t.metadata_lock
+    Qcow_rwlock.with_write_lock t.metadata_lock
       (fun () ->
         (* Disable lazy refcounts so we actually update the real refcounts *)
         let lazy_refcounts = t.lazy_refcounts in
