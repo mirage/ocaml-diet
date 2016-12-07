@@ -199,6 +199,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     }
   end
 
+  module Timer = Qcow_timer.Make(Time)
+
   type t = {
     mutable h: Header.t;
     base: B.t;
@@ -214,6 +216,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     mutable lazy_refcounts: bool; (* true if we are omitting refcounts right now *)
     mutable stats: Stats.t;
     metadata_lock: Qcow_rwlock.t; (* held to stop the world during compacts and resizes *)
+    background_compact_timer: Timer.t;
   }
 
   let get_info t = Lwt.return t.info
@@ -1140,7 +1143,25 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true } -> true | _ -> false in
     let stats = Stats.zero in
     let metadata_lock = Qcow_rwlock.make () in
-    Lwt.return (`Ok { h; base; info = info'; config; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock })
+    let t = ref None in
+    let background_compact_timer = Timer.make ~description:"compact" ~f:(fun () ->
+      match !t with
+      | None ->
+        Lwt.return_unit
+      | Some t ->
+        (* Don't schedule another compact until the nr_unmapped is above the
+           threshold again. *)
+        t.stats.nr_unmapped <- 0L;
+        compact t ()
+        >>= function
+        | `Ok _report -> Lwt.return_unit
+        | `Error e ->
+          Log.err (fun f -> f "background compaction returned error");
+          Lwt.return_unit
+      ) () in
+    let t' = { h; base; info = info'; config; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock; background_compact_timer } in
+    t := Some t';
+    Lwt.return (`Ok t')
 
   let connect ?(config=Config.default) base =
     let open Lwt in
@@ -1236,10 +1257,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     >>*= fun () ->
     match t.config.compact_after_unmaps with
     | Some sectors when t.stats.nr_unmapped > sectors ->
-      Log.info (fun f -> f "Total unmapped sectors %Ld > configured threshold %Ld: compacting now" t.stats.nr_unmapped sectors);
-      t.stats.nr_unmapped <- 0L;
-      compact t ()
-      >>*= fun _report ->
+      Timer.restart ~duration_ms:1000 t.background_compact_timer;
       Lwt.return (`Ok ())
     | _ -> Lwt.return (`Ok ())
 
