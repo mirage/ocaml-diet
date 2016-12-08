@@ -41,8 +41,9 @@ val get_references: t -> reference ClusterMap.t
 val get_first_movable_cluster: t -> cluster
 (** Return the first movable cluster *)
 
-val mark: cluster -> t -> (cluster * int) -> cluster -> t
-(** Rename this to 'add' *)
+val add: t -> reference -> cluster -> t
+(** [add t ref cluster] marks [cluster] as in-use and notes the reference from
+    [reference]. *)
 
 val fold_over_free: (cluster -> 'a -> 'a) -> t -> 'a -> 'a
 (** [fold_over_free f t acc] folds [f] over all the free clusters in [t] *)

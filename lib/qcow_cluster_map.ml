@@ -51,18 +51,13 @@ let get_free t = t.free
 let get_references t = t.refs
 let get_first_movable_cluster t = t.first_movable_cluster
 
-(* mark a virtual -> physical mapping as in use *)
-let mark max_cluster t rf cluster =
+let add t rf cluster =
   let c, w = rf in
   if cluster = 0L then t else begin
     if ClusterMap.mem cluster t.refs then begin
       let c', w' = ClusterMap.find cluster t.refs in
       Log.err (fun f -> f "Found two references to cluster %Ld: %Ld.%d and %Ld.%d" cluster c w c' w');
       failwith (Printf.sprintf "Found two references to cluster %Ld: %Ld.%d and %Ld.%d" cluster c w c' w');
-    end;
-    if cluster > max_cluster then begin
-      Log.err (fun f -> f "Found a reference to cluster %Ld outside the file (max cluster %Ld) from cluster %Ld.%d" cluster max_cluster c w);
-      failwith (Printf.sprintf "Found a reference to cluster %Ld outside the file (max cluster %Ld) from cluster %Ld.%d" cluster max_cluster c w);
     end;
     let free = ClusterSet.(remove (Interval.make cluster cluster) t.free) in
     let refs = ClusterMap.add cluster rf t.refs in

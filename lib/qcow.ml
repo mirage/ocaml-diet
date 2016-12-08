@@ -703,7 +703,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
        physical cluster back to virtual. The free set will show us the holes,
        and the map will tell us where to get the data from to fill the holes in
        with. *)
-    let mark = mark (Int64.pred t.next_cluster) in
+    let mark m rf cluster =
+      let max_cluster = Int64.pred t.next_cluster in
+      let c, w = rf in
+      if cluster > max_cluster then begin
+        Log.err (fun f -> f "Found a reference to cluster %Ld outside the file (max cluster %Ld) from cluster %Ld.%d" cluster max_cluster c w);
+        failwith (Printf.sprintf "Found a reference to cluster %Ld outside the file (max cluster %Ld) from cluster %Ld.%d" cluster max_cluster c w);
+      end;
+      add m rf cluster in
     let refcount_start_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
     let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
     let l1_table_start_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.l1_table_offset) in
