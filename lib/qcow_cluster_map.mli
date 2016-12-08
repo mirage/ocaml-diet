@@ -20,27 +20,31 @@ type t
     tracks which clusters are free, and which are used, and where the references
     are. *)
 
-module Clusters: Qcow_s.INTERVAL_SET with type elt = int64
+type cluster = int64
 
-module Int64Map: Map.S with type key = int64
+type reference = cluster * int (* cluster * offset within cluster *)
 
-val make: free:Clusters.t -> references:(int64 * int) Int64Map.t ->
-  first_movable_cluster:int64 -> t
+module ClusterSet: Qcow_s.INTERVAL_SET with type elt = cluster
+
+module ClusterMap: Map.S with type key = cluster
+
+val make: free:ClusterSet.t -> references:reference ClusterMap.t ->
+  first_movable_cluster:cluster -> t
 (** Given a set of free clusters, a map of references and the first
     cluster which can be moved (i.e. that isn't fixed header), construct a
     cluster map. *)
 
-val get_free: t -> Clusters.t
+val get_free: t -> ClusterSet.t
 (** Return the current set of free clusters *)
 
-val get_references: t -> (int64 * int) Int64Map.t
+val get_references: t -> reference ClusterMap.t
 (** Return the current map of references *)
 
-val get_first_movable_cluster: t -> int64
+val get_first_movable_cluster: t -> cluster
 (** Return the first movable cluster *)
 
-val mark: int64 -> t -> (int64 * int) -> int64 -> t
+val mark: cluster -> t -> (cluster * int) -> cluster -> t
 (** Rename this to 'add' *)
 
-val fold_over_free: (int64 -> 'a -> 'a) -> t -> 'a -> 'a
+val fold_over_free: (cluster -> 'a -> 'a) -> t -> 'a -> 'a
 (** [fold_over_free f t acc] folds [f] over all the free clusters in [t] *)

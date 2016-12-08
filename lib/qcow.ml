@@ -709,8 +709,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     let l1_table_start_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.l1_table_offset) in
     let l1_table_clusters = Int64.(div (round_up (of_int32 t.h.Header.l1_size) int64s_per_cluster) int64s_per_cluster) in
     (* Subtract the fixed structures at the beginning of the file *)
-    let whole_file = Clusters.(add (Interval.make 0L (Int64.pred t.next_cluster)) empty) in
-    let free = Clusters.(
+    let whole_file = ClusterSet.(add (Interval.make 0L (Int64.pred t.next_cluster)) empty) in
+    let free = ClusterSet.(
       remove (Interval.make l1_table_start_cluster (Int64.add l1_table_start_cluster l1_table_clusters))
       @@ remove (Interval.make refcount_start_cluster (Int64.add refcount_start_cluster (Int64.of_int32 t.h.Header.refcount_table_clusters)))
       @@ remove (Interval.make 0L 0L)
@@ -718,7 +718,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     ) in
     let first_movable_cluster =
       try
-        Clusters.Interval.x @@ Clusters.min_elt free
+        ClusterSet.Interval.x @@ ClusterSet.min_elt free
       with
       | Not_found -> t.next_cluster in
 
@@ -729,7 +729,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
         cluster
       end in
 
-    let acc = make ~free ~references:Int64Map.empty ~first_movable_cluster in
+    let acc = make ~free ~references:ClusterMap.empty ~first_movable_cluster in
     (* scan the refcount table *)
     let rec loop acc i =
       if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
@@ -811,14 +811,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
         make_cluster_map t
         >>*= fun block_map ->
         let free =
-          Clusters.fold
+          ClusterSet.fold
             (fun i acc ->
-              let from = Clusters.Interval.x i in
-              let upto = Clusters.Interval.y i in
+              let from = ClusterSet.Interval.x i in
+              let upto = ClusterSet.Interval.y i in
               let size = Int64.succ (Int64.sub upto from) in
               Int64.add size acc
             ) (get_free block_map) 0L in
-        let used = Int64.of_int @@ Int64Map.cardinal (get_references block_map) in
+        let used = Int64.of_int @@ ClusterMap.cardinal (get_references block_map) in
         Lwt.return (`Ok { free; used })
       )
 
@@ -836,10 +836,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
         make_cluster_map t
         >>*= fun block_map ->
 
-        Log.debug (fun f -> f "Physical blocks discovered: %d" (Int64Map.cardinal (get_references block_map)));
-        let total_free = Clusters.fold (fun i acc ->
-          let x = Clusters.Interval.x i in
-          let y = Clusters.Interval.y i in
+        Log.debug (fun f -> f "Physical blocks discovered: %d" (ClusterMap.cardinal (get_references block_map)));
+        let total_free = ClusterSet.fold (fun i acc ->
+          let x = ClusterSet.Interval.x i in
+          let y = ClusterSet.Interval.y i in
           Int64.(add acc (succ (sub y x)))) (get_free block_map) 0L in
         Log.debug (fun f -> f "Total free blocks discovered: %Ld" total_free);
 
@@ -847,7 +847,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
            point to the last header block even though it is immovable. *)
         let start_last_block =
           try
-            fst @@ Int64Map.max_binding (get_references block_map)
+            fst @@ ClusterMap.max_binding (get_references block_map)
           with Not_found ->
             Int64.pred (get_first_movable_cluster block_map) in
         (* Note the next_cluster can be greater than this if the last cluster(s)
@@ -860,12 +860,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
                  end. *)
               if cluster >= max_cluster then (ops, max_cluster, refs) else begin
                 (* find the last physical block *)
-                let last_block, rf = Int64Map.max_binding refs in
+                let last_block, rf = ClusterMap.max_binding refs in
 
                 if cluster >= last_block then (ops, last_block, refs) else begin
                   (* copy last_block into cluster and update rf *)
                   let op = last_block, cluster, rf in
-                  let refs = Int64Map.remove last_block refs in
+                  let refs = ClusterMap.remove last_block refs in
                   op :: ops, last_block, refs
                 end
               end
@@ -916,13 +916,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
             ClusterCache.remove t.cache dst
             >>*= fun () ->
             update_progress ();
-            let src_interval = Clusters.Interval.make src src in
-            let dst_interval = Clusters.Interval.make dst dst in
-            let free = Clusters.remove src_interval @@ Clusters.add dst_interval free in
-            let refs = Int64Map.remove src @@ Int64Map.add dst rf refs in
-            let substitutions = Int64Map.add src dst substitutions in
+            let src_interval = ClusterSet.Interval.make src src in
+            let dst_interval = ClusterSet.Interval.make dst dst in
+            let free = ClusterSet.remove src_interval @@ ClusterSet.add dst_interval free in
+            let refs = ClusterMap.remove src @@ ClusterMap.add dst rf refs in
+            let substitutions = ClusterMap.add src dst substitutions in
             Lwt.return (`Ok (free, refs, substitutions))
-          ) (get_free block_map, get_references block_map, Int64Map.empty) ops
+          ) (get_free block_map, get_references block_map, ClusterMap.empty) ops
         >>*= fun (free, refs, substitutions) ->
 
         (* Flush now so that if we crash after updating some of the references, the
@@ -935,8 +935,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
           (fun () (src, dst, (ref_cluster, ref_cluster_within)) ->
             update_progress ();
             let ref_cluster' =
-              if Int64Map.mem ref_cluster substitutions
-              then Int64Map.find ref_cluster substitutions
+              if ClusterMap.mem ref_cluster substitutions
+              then ClusterMap.find ref_cluster substitutions
               else ref_cluster in
             ClusterCache.update t.cache ref_cluster'
               (fun buf ->
@@ -966,17 +966,17 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
 
         let last_block =
           try
-            fst @@ Int64Map.max_binding refs
+            fst @@ ClusterMap.max_binding refs
           with Not_found -> start_last_block in
         Log.debug (fun f -> f "Shrink file so that last cluster was %Ld, now %Ld" start_last_block last_block);
         t.next_cluster <- Int64.succ last_block;
         Cluster.allocate_clusters t 0L (* takes care of the file size *)
         >>*= fun _ ->
 
-        Log.debug (fun f -> f "Physical blocks remaining: %d" (Int64Map.cardinal refs));
-        let total_free = Clusters.fold (fun i acc ->
-          let x = Clusters.Interval.x i in
-          let y = Clusters.Interval.y i in
+        Log.debug (fun f -> f "Physical blocks remaining: %d" (ClusterMap.cardinal refs));
+        let total_free = ClusterSet.fold (fun i acc ->
+          let x = ClusterSet.Interval.x i in
+          let y = ClusterSet.Interval.y i in
           Int64.(add acc (succ (sub y x)))) free 0L in
         Log.debug (fun f -> f "Total free blocks remaining: %Ld" total_free);
         progress_cb ~percent:100;
