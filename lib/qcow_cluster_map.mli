@@ -28,11 +28,9 @@ module ClusterSet: Qcow_s.INTERVAL_SET with type elt = cluster
 
 module ClusterMap: Map.S with type key = cluster
 
-val make: free:ClusterSet.t -> references:reference ClusterMap.t ->
-  first_movable_cluster:cluster -> t
-(** Given a set of free clusters, a map of references and the first
-    cluster which can be moved (i.e. that isn't fixed header), construct a
-    cluster map. *)
+val make: free:ClusterSet.t -> first_movable_cluster:cluster -> t
+(** Given a set of free clusters, and the first cluster which can be moved
+    (i.e. that isn't fixed header), construct an empty cluster map. *)
 
 val get_free: t -> ClusterSet.t
 (** Return the current set of free clusters *)

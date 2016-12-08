@@ -43,8 +43,9 @@ type t = {
   first_movable_cluster: int64;
 }
 
-let make ~free ~references ~first_movable_cluster =
-  { free; refs=references; first_movable_cluster }
+let make ~free ~first_movable_cluster =
+  let refs = ClusterMap.empty in
+  { free; refs; first_movable_cluster }
 
 let get_free t = t.free
 let get_references t = t.refs

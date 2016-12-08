@@ -729,7 +729,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
         cluster
       end in
 
-    let acc = make ~free ~references:ClusterMap.empty ~first_movable_cluster in
+    let acc = make ~free ~first_movable_cluster in
     (* scan the refcount table *)
     let rec loop acc i =
       if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
