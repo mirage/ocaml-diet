@@ -963,9 +963,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
                 Cluster.allocate_clusters t 0L (* takes care of the file size *)
                 >>*= fun _ ->
 
-                Log.debug (fun f -> f "Physical blocks remaining: %Ld" (total_free map));
-                Log.debug (fun f -> f "Total free blocks remaining: %Ld" (total_free map));
-
                 progress_cb ~percent:100;
 
                 let refs_updated = Int64.of_int (List.length moves) in
@@ -973,6 +970,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
                 let old_size = Int64.mul start_last_block sectors_per_cluster in
                 let new_size = Int64.mul last_block sectors_per_cluster in
                 let report = { refs_updated; copied; old_size; new_size } in
+                Log.info (fun f -> f "%Ld sectors copied, %Ld references updated, file shrunk by %Ld sectors"
+                  copied refs_updated (Int64.sub old_size new_size)
+                );
                 Lwt.return (`Ok report)
             )
         ) (fun e ->
@@ -1106,10 +1106,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
         t.stats.nr_unmapped <- 0L;
         compact t ()
         >>= function
-        | `Ok report ->
-          Log.info (fun f -> f "%Ld sectors copied, %Ld references updated, file shrunk by %Ld sectors"
-            report.copied report.refs_updated (Int64.sub report.old_size report.new_size)
-          );
+        | `Ok _report ->
           Lwt.return_unit
         | `Error e ->
           Log.err (fun f -> f "background compaction returned error");
