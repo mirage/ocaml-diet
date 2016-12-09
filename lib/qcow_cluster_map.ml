@@ -47,10 +47,6 @@ let make ~free ~first_movable_cluster =
   let refs = ClusterMap.empty in
   { free; refs; first_movable_cluster }
 
-let get_free t = t.free
-let get_references t = t.refs
-let get_first_movable_cluster t = t.first_movable_cluster
-
 let total_used t =
   Int64.of_int @@ ClusterMap.cardinal t.refs
 

@@ -32,15 +32,6 @@ val make: free:ClusterSet.t -> first_movable_cluster:cluster -> t
 (** Given a set of free clusters, and the first cluster which can be moved
     (i.e. that isn't fixed header), construct an empty cluster map. *)
 
-val get_free: t -> ClusterSet.t
-(** Return the current set of free clusters *)
-
-val get_references: t -> reference ClusterMap.t
-(** Return the current map of references *)
-
-val get_first_movable_cluster: t -> cluster
-(** Return the first movable cluster *)
-
 val total_used: t -> int64
 (** Return the number of tracked used clusters *)
 
