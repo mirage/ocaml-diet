@@ -886,9 +886,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
                    block has been copied to. (Otherwise we may go to adjust the referring block
                    only to find it has also been moved) *)
                 compact_s
-                  (fun ({ src; dst; _ } as move) map (moves, _, substitutions) ->
+                  (fun ({ src; dst; _ } as move) new_map (moves, existing_map, substitutions) ->
                     if !cancel_requested
-                    then Lwt.return (`Ok (moves, map, substitutions))
+                    then Lwt.return (`Ok (moves, existing_map, substitutions))
                     else begin
                       Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
                       let src_sector = Int64.mul src sectors_per_cluster in
@@ -903,7 +903,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
                       >>*= fun () ->
                       update_progress ();
                       let substitutions = ClusterMap.add src dst substitutions in
-                      Lwt.return (`Ok (move :: moves, map, substitutions))
+                      Lwt.return (`Ok (move :: moves, new_map, substitutions))
                     end
                   ) map ([], map, ClusterMap.empty)
                 >>*= fun (moves, map, substitutions) ->
