@@ -164,14 +164,31 @@ let random_write_discard_compact nr_clusters stop_after =
             ]
           end else begin
             if !debug then Printf.fprintf stderr "compact\n%!";
+            let cancel_at_percent = Random.int 300 in
             Printf.printf "x%!";
-            Lwt.pick [
-              B.compact qcow ();
-              Lwt_unix.sleep 5. >>= fun () -> Lwt.return (`Error (`Unknown "compact timeout"))
-            ]
-            >>= function
-            | `Error _ -> failwith "compact"
-            | `Ok _report -> Lwt.return_unit
+            let th = ref None in
+            let progress_cb ~percent =
+              if percent >= cancel_at_percent then match !th with
+                | Some th' ->
+                  th := None;
+                  Printf.printf "X%!";
+                  Lwt.cancel th'
+                | None -> () in
+            let t = B.compact ~progress_cb qcow () in
+            th := Some t;
+            Lwt.catch
+              (fun () ->
+                Lwt.pick [
+                  t;
+                  Lwt_unix.sleep 5. >>= fun () -> Lwt.return (`Error (`Unknown "compact timeout"))
+                ]
+                >>= function
+                | `Error _ -> failwith "compact"
+                | `Ok _report -> Lwt.return_unit
+              ) (function
+                | Lwt.Canceled -> Lwt.return_unit
+                | e -> Lwt.fail e
+              )
           end )
         >>= fun () ->
         check_all_clusters ();
