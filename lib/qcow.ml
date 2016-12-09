@@ -1097,7 +1097,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
         t.stats.nr_unmapped <- 0L;
         compact t ()
         >>= function
-        | `Ok _report -> Lwt.return_unit
+        | `Ok report ->
+          Log.info (fun f -> f "%Ld sectors copied, %Ld references updated, file shrunk by %Ld sectors"
+            report.copied report.refs_updated (Int64.sub report.old_size report.new_size)
+          );
+          Lwt.return_unit
         | `Error e ->
           Log.err (fun f -> f "background compaction returned error");
           Lwt.return_unit
