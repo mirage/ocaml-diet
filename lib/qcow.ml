@@ -830,129 +830,150 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
   }
 
   let compact t ?(progress_cb = fun ~percent -> ()) () =
-    Qcow_rwlock.with_write_lock t.metadata_lock
+    (* We will return a cancellable task to the caller, and on cancel we will
+       set the cancel_requested flag. The main compact loop will detect this
+       and complete the moves already in progress before returning. *)
+    let cancel_requested = ref false in
+
+    let th, u = Lwt.task () in
+    Lwt.on_cancel th (fun () -> cancel_requested := true);
+    (* Catch stray exceptions and return as unknown errors *)
+    let open Lwt.Infix in
+    Lwt.catch
       (fun () ->
-        let open Qcow_cluster_map in
-        make_cluster_map t
-        >>*= fun map ->
+        Qcow_rwlock.with_write_lock t.metadata_lock
+          (fun () ->
+            let open Qcow_cluster_map in
+            make_cluster_map t
+            >>*= fun map ->
 
-        Log.debug (fun f -> f "Physical blocks discovered: %Ld" (total_free map));
-        Log.debug (fun f -> f "Total free blocks discovered: %Ld" (total_free map));
-        let start_last_block = get_last_block map in
+            Log.debug (fun f -> f "Physical blocks discovered: %Ld" (total_free map));
+            Log.debug (fun f -> f "Total free blocks discovered: %Ld" (total_free map));
+            let start_last_block = get_last_block map in
 
-        let one_cluster = malloc t.h in
-        let sector_size = Int64.of_int t.base_info.B.sector_size in
-        let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
-        let sectors_per_cluster = Int64.div (1L <| cluster_bits) sector_size in
+            let one_cluster = malloc t.h in
+            let sector_size = Int64.of_int t.base_info.B.sector_size in
+            let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
+            let sectors_per_cluster = Int64.div (1L <| cluster_bits) sector_size in
 
-        (* An initial run through only to calculate the total work. We shall
-           treat a block copy and a reference rewrite as a single unit of work
-           even though a block copy is probably bigger. *)
-        compact_s (fun _ _ total_work -> Lwt.return (`Ok (total_work + 2))) map 0
-        >>*= fun total_work ->
+            (* An initial run through only to calculate the total work. We shall
+               treat a block copy and a reference rewrite as a single unit of work
+               even though a block copy is probably bigger. *)
+            compact_s (fun _ _ total_work -> Lwt.return (`Ok (total_work + 2))) map 0
+            >>*= fun total_work ->
 
-        (* We shall treat a block copy and a reference rewrite as a single unit of
-           work even though a block copy is probably bigger. *)
-        let update_progress =
-          let progress_so_far = ref 0 in
-          let last_percent = ref (-1) in
-          fun () ->
-            incr progress_so_far;
-            let percent = (100 * !progress_so_far) / total_work in
-            if !last_percent <> percent then begin
-              progress_cb ~percent;
-              last_percent := percent
-            end in
+            (* We shall treat a block copy and a reference rewrite as a single unit of
+               work even though a block copy is probably bigger. *)
+            let update_progress =
+              let progress_so_far = ref 0 in
+              let last_percent = ref (-1) in
+              fun () ->
+                incr progress_so_far;
+                let percent = (100 * !progress_so_far) / total_work in
+                if !last_percent <> percent then begin
+                  progress_cb ~percent;
+                  last_percent := percent
+                end in
 
-        (* Copy the blocks and build up a substitution map so we know where the referring
-           block has been copied to. (Otherwise we may go to adjust the referring block
-           only to find it has also been moved) *)
-        compact_s
-          (fun ({ src; dst; _ } as move) map (moves, _, substitutions) ->
-            Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
-            let src_sector = Int64.mul src sectors_per_cluster in
-            let dst_sector = Int64.mul dst sectors_per_cluster in
-            read_base t.base src_sector one_cluster
+            (* Copy the blocks and build up a substitution map so we know where the referring
+               block has been copied to. (Otherwise we may go to adjust the referring block
+               only to find it has also been moved) *)
+            compact_s
+              (fun ({ src; dst; _ } as move) map (moves, _, substitutions) ->
+                if !cancel_requested
+                then Lwt.return (`Ok (moves, map, substitutions))
+                else begin
+                  Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
+                  let src_sector = Int64.mul src sectors_per_cluster in
+                  let dst_sector = Int64.mul dst sectors_per_cluster in
+                  read_base t.base src_sector one_cluster
+                  >>*= fun () ->
+                  B.write t.base dst_sector [ one_cluster ]
+                  >>*= fun () ->
+                  (* If these were metadata blocks (e.g. L2 table entries) then they might
+                     be cached. Remove the overwritten block's cache entry just in case. *)
+                  ClusterCache.remove t.cache dst
+                  >>*= fun () ->
+                  update_progress ();
+                  let substitutions = ClusterMap.add src dst substitutions in
+                  Lwt.return (`Ok (move :: moves, map, substitutions))
+                end
+              ) map ([], map, ClusterMap.empty)
+            >>*= fun (moves, map, substitutions) ->
+
+            (* Flush now so that if we crash after updating some of the references, the
+               destination blocks will contain the correct data. *)
+            B.flush t.base
             >>*= fun () ->
-            B.write t.base dst_sector [ one_cluster ]
+
+            (* fold_left_s over Block.error Lwt.t values *)
+            let rec fold_left_s f acc =
+              let open Lwt.Infix in function
+              | [] -> Lwt.return (`Ok acc)
+              | x :: xs ->
+                begin f acc x >>= function
+                | `Ok acc -> fold_left_s f acc xs
+                | `Error e -> Lwt.return (`Error e)
+                end in
+
+            (* Rewrite the block references, taking care to follow the substitutions map *)
+            fold_left_s
+              (fun () { Move.src; dst; update = ref_cluster, ref_cluster_within } ->
+                update_progress ();
+                let ref_cluster' =
+                  if ClusterMap.mem ref_cluster substitutions
+                  then ClusterMap.find ref_cluster substitutions
+                  else ref_cluster in
+                ClusterCache.update t.cache ref_cluster'
+                  (fun buf ->
+                    (* Read the current value in the referencing cluster as a sanity check *)
+                    ( match Physical.read (Cstruct.shift buf ref_cluster_within) with
+                      | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
+                      | Ok (old_reference, _) -> Lwt.return (`Ok old_reference) )
+                    >>*= fun old_reference ->
+                    let old_cluster, _ = Physical.to_cluster ~cluster_bits old_reference in
+                    ( if old_cluster <> src then begin
+                        Log.err (fun f -> f "Rewriting reference in %Ld (was %Ld) :%d from %Ld to %Ld, old reference actually pointing to %Ld" ref_cluster' ref_cluster ref_cluster_within src dst old_cluster);
+                        Lwt.return (`Error (`Unknown "Failed to rewrite cluster reference"))
+                      end else Lwt.return (`Ok ()) )
+                    >>*= fun () ->
+                    (* Preserve any flags but update the pointer *)
+                    let new_reference = Physical.make ~is_mutable:(Physical.is_mutable old_reference) ~is_compressed:(Physical.is_compressed old_reference) (dst <| cluster_bits) in
+                    match Physical.write new_reference (Cstruct.shift buf ref_cluster_within) with
+                    | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
+                    | Ok _ -> Lwt.return (`Ok ())
+                  )
+              ) () moves
             >>*= fun () ->
-            (* If these were metadata blocks (e.g. L2 table entries) then they might
-               be cached. Remove the overwritten block's cache entry just in case. *)
-            ClusterCache.remove t.cache dst
+
+            (* Flush now so that the pointers are persisted before we truncate the file *)
+            B.flush t.base
             >>*= fun () ->
-            update_progress ();
-            let substitutions = ClusterMap.add src dst substitutions in
-            Lwt.return (`Ok (move :: moves, map, substitutions))
-          ) map ([], map, ClusterMap.empty)
-        >>*= fun (moves, map, substitutions) ->
 
-        (* Flush now so that if we crash after updating some of the references, the
-           destination blocks will contain the correct data. *)
-        B.flush t.base
-        >>*= fun () ->
+            let last_block = get_last_block map in
+            Log.debug (fun f -> f "Shrink file so that last cluster was %Ld, now %Ld" start_last_block last_block);
+            t.next_cluster <- Int64.succ last_block;
+            Cluster.allocate_clusters t 0L (* takes care of the file size *)
+            >>*= fun _ ->
 
-        (* fold_left_s over Block.error Lwt.t values *)
-        let rec fold_left_s f acc =
-          let open Lwt.Infix in function
-          | [] -> Lwt.return (`Ok acc)
-          | x :: xs ->
-            begin f acc x >>= function
-            | `Ok acc -> fold_left_s f acc xs
-            | `Error e -> Lwt.return (`Error e)
-            end in
+            Log.debug (fun f -> f "Physical blocks remaining: %Ld" (total_free map));
+            Log.debug (fun f -> f "Total free blocks remaining: %Ld" (total_free map));
 
-        (* Rewrite the block references, taking care to follow the substitutions map *)
-        fold_left_s
-          (fun () { Move.src; dst; update = ref_cluster, ref_cluster_within } ->
-            update_progress ();
-            let ref_cluster' =
-              if ClusterMap.mem ref_cluster substitutions
-              then ClusterMap.find ref_cluster substitutions
-              else ref_cluster in
-            ClusterCache.update t.cache ref_cluster'
-              (fun buf ->
-                (* Read the current value in the referencing cluster as a sanity check *)
-                ( match Physical.read (Cstruct.shift buf ref_cluster_within) with
-                  | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
-                  | Ok (old_reference, _) -> Lwt.return (`Ok old_reference) )
-                >>*= fun old_reference ->
-                let old_cluster, _ = Physical.to_cluster ~cluster_bits old_reference in
-                ( if old_cluster <> src then begin
-                    Log.err (fun f -> f "Rewriting reference in %Ld (was %Ld) :%d from %Ld to %Ld, old reference actually pointing to %Ld" ref_cluster' ref_cluster ref_cluster_within src dst old_cluster);
-                    Lwt.return (`Error (`Unknown "Failed to rewrite cluster reference"))
-                  end else Lwt.return (`Ok ()) )
-                >>*= fun () ->
-                (* Preserve any flags but update the pointer *)
-                let new_reference = Physical.make ~is_mutable:(Physical.is_mutable old_reference) ~is_compressed:(Physical.is_compressed old_reference) (dst <| cluster_bits) in
-                match Physical.write new_reference (Cstruct.shift buf ref_cluster_within) with
-                | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
-                | Ok _ -> Lwt.return (`Ok ())
-              )
-          ) () moves
-        >>*= fun () ->
+            progress_cb ~percent:100;
 
-        (* Flush now so that the pointers are persisted before we truncate the file *)
-        B.flush t.base
-        >>*= fun () ->
-
-        let last_block = get_last_block map in
-        Log.debug (fun f -> f "Shrink file so that last cluster was %Ld, now %Ld" start_last_block last_block);
-        t.next_cluster <- Int64.succ last_block;
-        Cluster.allocate_clusters t 0L (* takes care of the file size *)
-        >>*= fun _ ->
-
-        Log.debug (fun f -> f "Physical blocks remaining: %Ld" (total_free map));
-        Log.debug (fun f -> f "Total free blocks remaining: %Ld" (total_free map));
-
-        progress_cb ~percent:100;
-
-        let refs_updated = Int64.of_int (List.length moves) in
-        let copied = Int64.mul refs_updated sectors_per_cluster in (* one ref per block *)
-        let old_size = Int64.mul start_last_block sectors_per_cluster in
-        let new_size = Int64.mul last_block sectors_per_cluster in
-        let report = { refs_updated; copied; old_size; new_size } in
-        Lwt.return (`Ok report)
+            let refs_updated = Int64.of_int (List.length moves) in
+            let copied = Int64.mul refs_updated sectors_per_cluster in (* one ref per block *)
+            let old_size = Int64.mul start_last_block sectors_per_cluster in
+            let new_size = Int64.mul last_block sectors_per_cluster in
+            let report = { refs_updated; copied; old_size; new_size } in
+            Lwt.return (`Ok report)
+        )
+    ) (fun e ->
+      Lwt.return (`Error (`Unknown (Printexc.to_string e)))
     )
+    >>= fun result ->
+    Lwt.wakeup u result;
+    th
 
   let seek_mapped_already_locked t from =
     let bytes = Int64.(mul from (of_int t.sector_size)) in
