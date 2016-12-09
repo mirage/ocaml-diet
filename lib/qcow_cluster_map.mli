@@ -51,5 +51,19 @@ val add: t -> reference -> cluster -> t
 (** [add t ref cluster] marks [cluster] as in-use and notes the reference from
     [reference]. *)
 
-val fold_over_free: (cluster -> 'a -> 'a) -> t -> 'a -> 'a
-(** [fold_over_free f t acc] folds [f] over all the free clusters in [t] *)
+module Move: sig
+  type t = { src: cluster; dst: cluster; update: reference }
+  (** An instruction to move the contents from cluster [src] to cluster [dst]
+      and update the reference in cluster [update] *)
+end
+
+val compact_s: (Move.t -> t -> 'a -> [ `Ok of 'a | `Error of 'b ] Lwt.t ) -> t -> 'a
+  -> [ `Ok of 'a | `Error of 'b ] Lwt.t
+(** [compact_s f t acc] accumulates the result of [f move t'] where [move] is
+    the next cluster move needed to perform a compaction of [t] and [t']
+    is the state of [t] after the move has been completed. *)
+
+val get_last_block: t -> int64
+(** [get_last_block t] is the last allocated block in [t]. Note if there are no
+    data blocks this will point to the last header block even though it is
+    immovable. *)

@@ -111,6 +111,9 @@ module type INTERVAL_SET = sig
   val fold: (interval -> 'a -> 'a) -> t -> 'a -> 'a
   (** [fold f t acc] folds [f] across all the intervals in [t] *)
 
+  val fold_s: (interval -> 'a -> 'a Lwt.t) -> t -> 'a -> 'a Lwt.t
+  (** [fold_s f t acc] folds [f] across all the intervals in [t] *)
+
   val add: interval -> t -> t
   (** [add interval t] returns the set consisting of [t] plus [interval] *)
 
