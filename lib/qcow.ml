@@ -651,6 +651,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
       end
 
   let read t sector bufs =
+    Timer.cancel t.background_compact_timer;
     Qcow_rwlock.with_read_lock t.metadata_lock
       (fun () ->
         let cluster_size = 1L <| t.cluster_bits in
@@ -672,6 +673,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
       )
 
   let write t sector bufs =
+    Timer.cancel t.background_compact_timer;
     Qcow_rwlock.with_read_lock t.metadata_lock
       (fun () ->
         let cluster_size = 1L <| t.cluster_bits in
@@ -1172,6 +1174,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     end
 
   let discard t ~sector ~n () =
+    Timer.cancel t.background_compact_timer;
     Qcow_rwlock.with_read_lock t.metadata_lock
       (fun () ->
         (* we can only discard whole clusters. We will explicitly zero non-cluster

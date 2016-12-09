@@ -34,4 +34,7 @@ module Make(Time: V1_LWT.TIME): sig
       If no task is running then any existing scheduled task is removed and a
       new one is scheduled for [duration_ms] from now.
   *)
+
+  val cancel: t -> unit
+  (** If an operation is in progress, cancel and reschedule it. *)
 end
