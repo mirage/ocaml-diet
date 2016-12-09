@@ -41,6 +41,12 @@ val get_references: t -> reference ClusterMap.t
 val get_first_movable_cluster: t -> cluster
 (** Return the first movable cluster *)
 
+val total_used: t -> int64
+(** Return the number of tracked used clusters *)
+
+val total_free: t -> int64
+(** Return the number of tracked free clusters *)
+
 val add: t -> reference -> cluster -> t
 (** [add t ref cluster] marks [cluster] as in-use and notes the reference from
     [reference]. *)

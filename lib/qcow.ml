@@ -817,15 +817,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
         let open Qcow_cluster_map in
         make_cluster_map t
         >>*= fun block_map ->
-        let free =
-          ClusterSet.fold
-            (fun i acc ->
-              let from = ClusterSet.Interval.x i in
-              let upto = ClusterSet.Interval.y i in
-              let size = Int64.succ (Int64.sub upto from) in
-              Int64.add size acc
-            ) (get_free block_map) 0L in
-        let used = Int64.of_int @@ ClusterMap.cardinal (get_references block_map) in
+        let free = total_free block_map in
+        let used = total_used block_map in
         Lwt.return (`Ok { free; used })
       )
 
@@ -843,12 +836,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
         make_cluster_map t
         >>*= fun block_map ->
 
-        Log.debug (fun f -> f "Physical blocks discovered: %d" (ClusterMap.cardinal (get_references block_map)));
-        let total_free = ClusterSet.fold (fun i acc ->
-          let x = ClusterSet.Interval.x i in
-          let y = ClusterSet.Interval.y i in
-          Int64.(add acc (succ (sub y x)))) (get_free block_map) 0L in
-        Log.debug (fun f -> f "Total free blocks discovered: %Ld" total_free);
+        Log.debug (fun f -> f "Physical blocks discovered: %Ld" (total_free block_map));
+        Log.debug (fun f -> f "Total free blocks discovered: %Ld" (total_free block_map));
 
         (* The last allocated block. Note if there are no data blocks this will
            point to the last header block even though it is immovable. *)

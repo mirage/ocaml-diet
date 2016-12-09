@@ -51,6 +51,18 @@ let get_free t = t.free
 let get_references t = t.refs
 let get_first_movable_cluster t = t.first_movable_cluster
 
+let total_used t =
+  Int64.of_int @@ ClusterMap.cardinal t.refs
+
+let total_free t =
+  ClusterSet.fold
+    (fun i acc ->
+      let from = ClusterSet.Interval.x i in
+      let upto = ClusterSet.Interval.y i in
+      let size = Int64.succ (Int64.sub upto from) in
+      Int64.add size acc
+    ) t.free 0L
+
 let add t rf cluster =
   let c, w = rf in
   if cluster = 0L then t else begin
