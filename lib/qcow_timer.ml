@@ -28,42 +28,49 @@ module Make(Time: V1_LWT.TIME) = struct
     description: string;
     mutable timer: unit Lwt.t;
     f: unit -> unit Lwt.t;
-    mutable task_running: bool;
+    mutable th: unit Lwt.t;
+    mutable loop_running: bool;
     mutable please_schedule_another: bool;
   }
 
   let make ~f ~description () =
     let timer = Lwt.return_unit in
-    let task_running = false in
+    let loop_running = false in
     let please_schedule_another = false in
-    { description; timer; f; task_running; please_schedule_another }
+    let th = Lwt.return_unit in
+    { description; timer; f; th; loop_running; please_schedule_another }
 
   let restart t ~duration_ms =
     let open Lwt.Infix in
-    Lwt.cancel t.timer;
-    match t.task_running with
+    match t.loop_running with
     | true ->
-      t.please_schedule_another <- true
+      t.please_schedule_another <- true;
+      Lwt.cancel t.timer
     | false ->
-      let timer = Time.sleep (float_of_int duration_ms /. 1000.0) in
-      t.timer <- timer;
+      t.loop_running <- true;
       let rec loop () =
+        let timer = Time.sleep (float_of_int duration_ms /. 1000.0) in
+        t.timer <- timer;
         Lwt.catch
           (fun () ->
             timer
             >>= fun () ->
-            t.task_running <- true;
             Log.info (fun f -> f "running background %s" t.description);
             Lwt.catch
               (fun () ->
-                t.f ()
-                >>= fun () ->
+                t.th <- t.f ();
+                t.th >>= fun () ->
                 Log.info (fun f -> f "background %s successful" t.description);
                 Lwt.return_unit
               )
-              (fun e ->
-                Log.err (fun f -> f "background %s failed with: %s" t.description (Printexc.to_string e));
-                Lwt.return_unit
+              (function
+                | Lwt.Canceled ->
+                  Log.info (fun f -> f "background %s cancelled" t.description);
+                  t.please_schedule_another <- true;
+                  Lwt.return_unit
+                | e ->
+                  Log.err (fun f -> f "background %s failed with: %s" t.description (Printexc.to_string e));
+                  Lwt.return_unit
               )
             >>= fun () ->
             Lwt.return_unit
@@ -74,11 +81,14 @@ module Make(Time: V1_LWT.TIME) = struct
               Lwt.return_unit
           )
         >>= fun () ->
-        t.task_running <- false;
         if t.please_schedule_another then begin
           t.please_schedule_another <- false;
           loop ()
-        end else
-          Lwt.return_unit in
+        end else begin
+          t.loop_running <- false;
+          Lwt.return_unit
+        end in
       Lwt.async loop
+
+  let cancel t = Lwt.cancel t.th
 end

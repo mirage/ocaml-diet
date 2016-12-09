@@ -133,6 +133,14 @@ module Make(Elt: ELT) = struct
       let acc = f (n.x, n.y) acc in
       fold f n.r acc
 
+  let rec fold_s f t acc = match t with
+    | Empty -> Lwt.return acc
+    | Node n ->
+      let open Lwt.Infix in
+      fold_s f n.l acc >>= fun acc ->
+      f (n.x, n.y) acc >>= fun acc ->
+      fold_s f n.r acc
+
   (* fold over individual elements *)
   let fold_individual f t acc =
     let range (from, upto) acc =
