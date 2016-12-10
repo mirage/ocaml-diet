@@ -1,5 +1,5 @@
 description = "Qcow2 image format"
-version = "0.6.0"
+version = "0.7.0"
 requires="astring cmdliner cstruct fmt logs lwt io-page mirage-types.lwt mirage-block mirage-block-unix result sexplib"
 archive(byte) = "qcow.cma"
 plugin(byte) = "qcow.cma"
