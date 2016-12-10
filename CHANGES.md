@@ -1,3 +1,11 @@
+0.7.0 (2016-12-10)
+- now functorised over `TIME`
+- allow background compact to be cancelled
+- cancel background compact to allow regular I/O to go through
+- don't trigger the background compact until 1s after the last
+  `discard`
+- on `connect`, sanity-check the image
+
 0.6.0 (2016-12-04)
 - rename ocamlfind package from `qcow-format` to `qcow` for uniformity
 - add support for runtime configuration arguments to `connect` and `create`
