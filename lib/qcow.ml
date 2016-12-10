@@ -1127,7 +1127,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     | `Ok () ->
       match Header.read sector with
       | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
-      | Ok (h, _) -> make config base h
+      | Ok (h, _) ->
+        make config base h
+        >>*= fun t ->
+        check t
+        >>*= fun { free; used } ->
+        Log.info (fun f -> f "image has %Ld free sectors and %Ld used sectors" free used);
+        Lwt.return (`Ok t)
 
   let resize t ~new_size:requested_size_bytes ?(ignore_data_loss=false) () =
     Qcow_rwlock.with_write_lock t.metadata_lock
