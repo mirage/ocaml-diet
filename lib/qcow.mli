@@ -110,8 +110,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
     used: int64; (** used sectors *)
   }
 
-  val check: t -> (check_result, error) result io
-  (** [check t] performs sanity checks of the file, looking for errors *)
+  val check: t -> (check_result, [
+    Mirage_block.error
+    | `Reference_outside_file of int64 * int64
+    | `Msg of string
+  ]) result io
+  (** [check t] performs sanity checks of the file, looking for errors.
+      The error [`Reference_outside_file (src, dst)] means that at offset [src]
+      there is a reference to offset [dst] which is outside the file. *)
 
   val header: t -> Header.t
   (** Return a snapshot of the current header *)
