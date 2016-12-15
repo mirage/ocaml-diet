@@ -37,8 +37,11 @@ end
 type t
 (** The type of sets *)
 
-val make: int -> t
-(** [make n] creates a set of maximum size [n], initially empty *)
+val make_empty: int -> t
+(** [make_empty n] creates a set of maximum size [n], initially empty *)
+
+val make_full: int -> t
+(** [make_full n] creates a set of maximum size [n], initially full *)
 
 val fold: (interval -> 'a -> 'a) -> t -> 'a -> 'a
 (** [fold f t acc] folds [f] across all the intervals in [t] *)

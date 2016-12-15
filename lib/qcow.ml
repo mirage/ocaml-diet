@@ -724,8 +724,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
     let l1_table_start_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.l1_table_offset) in
     let l1_table_clusters = Int64.(div (round_up (of_int32 t.h.Header.l1_size) int64s_per_cluster) int64s_per_cluster) in
+    (* Assume all clusters are free *)
+    let free = ClusterSet.make_full (Int64.to_int t.next_cluster) in
     (* Subtract the fixed structures at the beginning of the file *)
-    let free = ClusterSet.make (Int64.to_int t.next_cluster) in
     ClusterSet.(remove (Interval.make l1_table_start_cluster (Int64.add l1_table_start_cluster l1_table_clusters)));
     ClusterSet.(remove (Interval.make refcount_start_cluster (Int64.add refcount_start_cluster (Int64.of_int32 t.h.Header.refcount_table_clusters))));
     ClusterSet.(remove (Interval.make 0L 0L));

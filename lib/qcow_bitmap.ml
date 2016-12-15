@@ -24,10 +24,16 @@ type elt = int64
 
 type interval = elt * elt
 
-let make len =
+let make_empty len =
   let bytes_required = (len + 7) / 8 in
   let buf = Cstruct.create bytes_required in
   Cstruct.memset buf 0;
+  { buf; len }
+
+let make_full len =
+  let bytes_required = (len + 7) / 8 in
+  let buf = Cstruct.create bytes_required in
+  Cstruct.memset buf 0xff;
   { buf; len }
 
 let set t n v =
@@ -151,7 +157,7 @@ module IntSet = Set.Make(Int)
 module Test = struct
 
   let make_random n m =
-    let diet = make n in
+    let diet = make_empty n in
     let rec loop set = function
       | 0 -> set, diet
       | m ->
@@ -185,13 +191,13 @@ module Test = struct
     done
 
   let test_add_1 () =
-    let t = make 10 in
+    let t = make_empty 10 in
     add (3L, 3L) t;
     add (3L, 4L) t;
     assert (elements t = [ 3L; 4L ])
 
   let test_remove_1 () =
-    let t = make 10 in
+    let t = make_empty 10 in
     add (7L, 8L) t;
     remove (6L, 7L) t;
     assert (elements t = [ 8L ])
