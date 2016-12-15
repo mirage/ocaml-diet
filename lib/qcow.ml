@@ -718,22 +718,20 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
         Log.err (fun f -> f "Found a reference to cluster %Ld outside the file (max cluster %Ld) from cluster %Ld.%d" cluster max_cluster c w);
         failwith (Printf.sprintf "Found a reference to cluster %Ld outside the file (max cluster %Ld) from cluster %Ld.%d" cluster max_cluster c w);
       end;
-      add m rf cluster in
+      add m rf cluster;
+      m in
     let refcount_start_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
     let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
     let l1_table_start_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.l1_table_offset) in
     let l1_table_clusters = Int64.(div (round_up (of_int32 t.h.Header.l1_size) int64s_per_cluster) int64s_per_cluster) in
     (* Subtract the fixed structures at the beginning of the file *)
-    let whole_file = ClusterSet.(add (Interval.make 0L (Int64.pred t.next_cluster)) empty) in
-    let free = ClusterSet.(
-      remove (Interval.make l1_table_start_cluster (Int64.add l1_table_start_cluster l1_table_clusters))
-      @@ remove (Interval.make refcount_start_cluster (Int64.add refcount_start_cluster (Int64.of_int32 t.h.Header.refcount_table_clusters)))
-      @@ remove (Interval.make 0L 0L)
-      whole_file
-    ) in
+    let free = ClusterSet.make (Int64.to_int t.next_cluster) in
+    ClusterSet.(remove (Interval.make l1_table_start_cluster (Int64.add l1_table_start_cluster l1_table_clusters)));
+    ClusterSet.(remove (Interval.make refcount_start_cluster (Int64.add refcount_start_cluster (Int64.of_int32 t.h.Header.refcount_table_clusters))));
+    ClusterSet.(remove (Interval.make 0L 0L));
     let first_movable_cluster =
       try
-        ClusterSet.Interval.x @@ ClusterSet.min_elt free
+        ClusterSet.min_elt free
       with
       | Not_found -> t.next_cluster in
 

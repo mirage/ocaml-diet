@@ -23,12 +23,7 @@ let src =
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-module ClusterSet = Qcow_diet.Make(struct
-  type t = int64 [@@deriving sexp]
-  let succ = Int64.succ
-  let pred = Int64.pred
-  let compare = Int64.compare
-end)
+module ClusterSet = Qcow_bitmap
 module ClusterMap = Map.Make(Int64)
 
 type cluster = int64
@@ -39,7 +34,7 @@ type t = {
   free: ClusterSet.t;
   (* map from physical cluster to the physical cluster + offset of the reference.
      When a block is moved, this reference must be updated. *)
-  refs: reference ClusterMap.t;
+  mutable refs: reference ClusterMap.t;
   first_movable_cluster: int64;
 }
 
@@ -61,15 +56,15 @@ let total_free t =
 
 let add t rf cluster =
   let c, w = rf in
-  if cluster = 0L then t else begin
+  if cluster = 0L then () else begin
     if ClusterMap.mem cluster t.refs then begin
       let c', w' = ClusterMap.find cluster t.refs in
       Log.err (fun f -> f "Found two references to cluster %Ld: %Ld.%d and %Ld.%d" cluster c w c' w');
       failwith (Printf.sprintf "Found two references to cluster %Ld: %Ld.%d and %Ld.%d" cluster c w c' w');
     end;
-    let free = ClusterSet.(remove (Interval.make cluster cluster) t.free) in
-    let refs = ClusterMap.add cluster rf t.refs in
-    { t with free; refs }
+    ClusterSet.(remove (Interval.make cluster cluster) t.free);
+    t.refs <- ClusterMap.add cluster rf t.refs;
+    ()
   end
 
 (* Fold over all free blocks *)
@@ -118,9 +113,9 @@ let compact_s f t acc =
           let move = { Move.src = last_block; dst = cluster; update = rf } in
           let src_interval = ClusterSet.Interval.make last_block last_block in
           let dst_interval = ClusterSet.Interval.make cluster cluster in
-          let free = ClusterSet.remove src_interval @@ ClusterSet.add dst_interval free in
-          let refs = ClusterMap.remove last_block @@ ClusterMap.add cluster rf refs in
-          let t = { t with free; refs } in
+          ClusterSet.add dst_interval free;
+          ClusterSet.remove src_interval free;
+          t.refs <- ClusterMap.remove last_block @@ ClusterMap.add cluster rf refs;
           f move t acc
           >>= function
           | `Ok acc -> Lwt.return (`Ok (acc, last_block, free, refs))

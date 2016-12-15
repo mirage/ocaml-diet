@@ -24,7 +24,7 @@ type cluster = int64
 
 type reference = cluster * int (* cluster * offset within cluster *)
 
-module ClusterSet: Qcow_s.INTERVAL_SET with type elt = cluster
+module ClusterSet = Qcow_bitmap
 
 module ClusterMap: Map.S with type key = cluster
 
@@ -38,7 +38,7 @@ val total_used: t -> int64
 val total_free: t -> int64
 (** Return the number of tracked free clusters *)
 
-val add: t -> reference -> cluster -> t
+val add: t -> reference -> cluster -> unit
 (** [add t ref cluster] marks [cluster] as in-use and notes the reference from
     [reference]. *)
 
