@@ -48,13 +48,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
       discard: bool;
       compact_after_unmaps: int64 option;
       compact_ms: int;
+      check_on_connect: bool;
     }
-    let create ?(discard=false) ?compact_after_unmaps ?(compact_ms=1000) () =
-      { discard; compact_after_unmaps; compact_ms }
-    let to_string t = Printf.sprintf "discard=%b;compact_after_unmaps=%s;compact_ms=%d"
+    let create ?(discard=false) ?compact_after_unmaps ?(compact_ms=1000) ?(check_on_connect=true) () =
+      { discard; compact_after_unmaps; compact_ms; check_on_connect }
+    let to_string t = Printf.sprintf "discard=%b;compact_after_unmaps=%s;compact_ms=%d;check_on_connect=%b"
       t.discard (match t.compact_after_unmaps with None -> "0" | Some x -> Int64.to_string x)
-      t.compact_ms
-    let default = { discard = false; compact_after_unmaps = None; compact_ms = 1000 }
+      t.compact_ms t.check_on_connect
+    let default = { discard = false; compact_after_unmaps = None; compact_ms = 1000; check_on_connect = true }
     let of_string txt =
       let open Astring in
       try
@@ -69,6 +70,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
               let compact_after_unmaps = if v = "0" then None else Some (Int64.of_string v) in
               { t with compact_after_unmaps }
             | "compact_ms" -> { t with compact_ms = int_of_string v }
+            | "check_on_connect" -> { t with check_on_connect = bool_of_string v }
             | x -> failwith ("Unknown qcow configuration key: " ^ x)
             end
         ) default strings)
@@ -1134,9 +1136,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
       | Ok (h, _) ->
         make config base h
         >>*= fun t ->
-        check t
-        >>*= fun { free; used } ->
-        Log.info (fun f -> f "image has %Ld free sectors and %Ld used sectors" free used);
+        ( if config.Config.check_on_connect then begin
+            check t
+            >>*= fun { free; used } ->
+            Log.info (fun f -> f "image has %Ld free sectors and %Ld used sectors" free used);
+            Lwt.return (`Ok ())
+          end else Lwt.return (`Ok ()) )
+        >>*= fun () ->
         Lwt.return (`Ok t)
 
   let resize t ~new_size:requested_size_bytes ?(ignore_data_loss=false) () =

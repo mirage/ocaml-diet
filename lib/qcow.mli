@@ -25,11 +25,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) : sig
       discard: bool; (** true if `discard` will be enabled at runtime *)
       compact_after_unmaps: int64 option; (** automatically compact after n sectors are unmapped *)
       compact_ms: int; (** if automatically compacting, wait for this many milliseconds *)
+      check_on_connect: bool; (** perform an integrity check on connect *)
     }
     (** Runtime configuration of a device *)
 
     val create: ?discard:bool -> ?compact_after_unmaps:int64 ->
-      ?compact_ms:int -> unit -> t
+      ?compact_ms:int -> ?check_on_connect:bool -> unit -> t
     (** [create ?discard ?compact_after_unmaps ?compact_ms ()] constructs a runtime configuration *)
 
     val to_string: t -> string
