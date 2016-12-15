@@ -1,3 +1,8 @@
+0.7.1 (2016-12-15)
+- speed up `check` and `compact` up to 50x
+- `qcow-tool compact` work around files which aren't a whole number of
+  sectors
+
 0.7.0 (2016-12-10)
 - now functorised over `TIME`
 - allow background compact to be cancelled
