@@ -861,7 +861,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
                 (* An initial run through only to calculate the total work. We shall
                    treat a block copy and a reference rewrite as a single unit of work
                    even though a block copy is probably bigger. *)
-                compact_s (fun _ _ total_work -> Lwt.return (`Ok (total_work + 2))) map 0
+                compact_s (fun _ _ total_work -> Lwt.return (`Ok (true, total_work + 2))) map 0
                 >>*= fun total_work ->
 
                 (* We shall treat a block copy and a reference rewrite as a single unit of
@@ -881,25 +881,22 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
                    block has been copied to. (Otherwise we may go to adjust the referring block
                    only to find it has also been moved) *)
                 compact_s
-                  (fun ({ Move.src; dst; _ } as move) new_map (moves, existing_map, substitutions) ->
-                    if !cancel_requested
-                    then Lwt.return (`Ok (moves, existing_map, substitutions))
-                    else begin
-                      Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
-                      let src_sector = Int64.mul src sectors_per_cluster in
-                      let dst_sector = Int64.mul dst sectors_per_cluster in
-                      read_base t.base src_sector one_cluster
-                      >>*= fun () ->
-                      B.write t.base dst_sector [ one_cluster ]
-                      >>*= fun () ->
-                      (* If these were metadata blocks (e.g. L2 table entries) then they might
-                         be cached. Remove the overwritten block's cache entry just in case. *)
-                      ClusterCache.remove t.cache dst
-                      >>*= fun () ->
-                      update_progress ();
-                      let substitutions = ClusterMap.add src dst substitutions in
-                      Lwt.return (`Ok (move :: moves, new_map, substitutions))
-                    end
+                  (fun ({ Move.src; dst; _ } as move) new_map (moves, _, substitutions) ->
+                    Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
+                    let src_sector = Int64.mul src sectors_per_cluster in
+                    let dst_sector = Int64.mul dst sectors_per_cluster in
+                    read_base t.base src_sector one_cluster
+                    >>*= fun () ->
+                    B.write t.base dst_sector [ one_cluster ]
+                    >>*= fun () ->
+                    (* If these were metadata blocks (e.g. L2 table entries) then they might
+                       be cached. Remove the overwritten block's cache entry just in case. *)
+                    ClusterCache.remove t.cache dst
+                    >>*= fun () ->
+                    update_progress ();
+                    let substitutions = ClusterMap.add src dst substitutions in
+                    let acc = move :: moves, new_map, substitutions in
+                    Lwt.return (`Ok (not !cancel_requested, acc))
                   ) map ([], map, ClusterMap.empty)
                 >>*= fun (moves, map, substitutions) ->
 

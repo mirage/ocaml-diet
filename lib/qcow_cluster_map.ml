@@ -80,8 +80,10 @@ let fold_over_free_s f t acc =
     let rec loop acc x =
       let open Lwt.Infix in
       if x = (Int64.succ upto) then Lwt.return acc else begin
-        f x acc >>= fun acc ->
-        loop acc (Int64.succ x)
+        f x acc >>= fun (continue, acc) ->
+        if continue
+        then loop acc (Int64.succ x)
+        else Lwt.return acc
       end in
     loop acc from in
   ClusterSet.fold_s range t.free acc
@@ -105,30 +107,30 @@ let compact_s f t acc =
 
   fold_over_free_s
     (fun cluster acc -> match acc with
-      | `Error e -> Lwt.return (`Error e)
-      | `Ok (acc, max_cluster, free, refs) ->
+      | `Error e -> Lwt.return (false, `Error e)
+      | `Ok (acc, max_cluster) ->
       (* A free block after the last allocated block will not be filled.
          It will be erased from existence when the file is truncated at the
          end. *)
-      if cluster >= max_cluster then Lwt.return (`Ok (acc, max_cluster, free, refs)) else begin
+      if cluster >= max_cluster then Lwt.return (false, `Ok (acc, max_cluster)) else begin
         (* find the last physical block *)
-        let last_block, rf = ClusterMap.max_binding refs in
+        let last_block, rf = ClusterMap.max_binding t.refs in
 
-        if cluster >= last_block then Lwt.return (`Ok (acc, last_block, free, refs)) else begin
+        if cluster >= last_block then Lwt.return (false, `Ok (acc, last_block)) else begin
           (* copy last_block into cluster and update rf *)
           let move = { Move.src = last_block; dst = cluster; update = rf } in
           let src_interval = ClusterSet.Interval.make last_block last_block in
           let dst_interval = ClusterSet.Interval.make cluster cluster in
-          ClusterSet.add dst_interval free;
-          ClusterSet.remove src_interval free;
-          t.refs <- ClusterMap.remove last_block @@ ClusterMap.add cluster rf refs;
+          ClusterSet.add dst_interval t.free;
+          ClusterSet.remove src_interval t.free;
+          t.refs <- ClusterMap.remove last_block @@ ClusterMap.add cluster rf t.refs;
           f move t acc
           >>= function
-          | `Ok acc -> Lwt.return (`Ok (acc, last_block, free, refs))
-          | `Error e -> Lwt.return (`Error e)
+          | `Ok (continue, acc) -> Lwt.return (continue, `Ok (acc, last_block))
+          | `Error e -> Lwt.return (false, `Error e)
         end
       end
-    ) t (`Ok (acc, max_cluster, t.free, t.refs))
+    ) t (`Ok (acc, max_cluster))
   >>= function
-  | `Ok (result, _, _, _) -> Lwt.return (`Ok result)
+  | `Ok (result, _) -> Lwt.return (`Ok result)
   | `Error e -> Lwt.return (`Error e)
