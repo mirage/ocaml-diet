@@ -60,3 +60,7 @@ val min_elt: t -> elt
     is empty. *)
 
 val to_string: t -> string
+
+module Test: sig
+  val all: (string * (unit -> unit)) list
+end
