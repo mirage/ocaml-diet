@@ -36,22 +36,6 @@ let make_full len =
   Cstruct.memset buf 0xff;
   { buf; len }
 
-let set t n v =
-  if n >= (Int64.of_int t.len) then invalid_arg (Printf.sprintf "Qcow_bitmap.set %Ld >= %d" n t.len);
-  let i = Int64.(to_int (div n 8L)) in
-  let byte = Cstruct.get_uint8 t.buf i in
-  let byte' =
-    if v
-    then byte lor (1 lsl (Int64.(to_int (rem n 8L))))
-    else byte land (lnot (1 lsl (Int64.(to_int (rem n 8L))))) in
-  Cstruct.set_uint8 t.buf i byte'
-
-let get t n =
-  if n >= (Int64.of_int t.len) then invalid_arg (Printf.sprintf "Qcow_bitmap.get %Ld >= %d" n t.len);
-  let i = Int64.(to_int (div n 8L)) in
-  let byte = Cstruct.get_uint8 t.buf i in
-  byte land (1 lsl (Int64.(to_int (rem n 8L)))) <> 0
-
 let set' t n v =
   if n >= t.len then invalid_arg (Printf.sprintf "Qcow_bitmap.set %d >= %d" n t.len);
   let i = n / 8 in
@@ -147,9 +131,8 @@ let to_string t =
   fold (fun (a, b) acc -> Printf.sprintf "%Ld - %Ld\n" a b :: acc) t []
   |> String.concat ", "
 
-open Sexplib.Std
 module Int = struct
-  type t = int [@@deriving sexp]
+  type t = int
   let compare (x: t) (y: t) = Pervasives.compare x y
 end
 module IntSet = Set.Make(Int)
@@ -170,9 +153,6 @@ module Test = struct
         loop set (m - 1) in
     loop IntSet.empty m
 
-  let set_to_string set =
-    String.concat "; " @@ List.map string_of_int @@ IntSet.elements set
-
   let check_equals set diet =
     let set' = IntSet.elements set |> List.map Int64.of_int in
     let diet' = elements diet in
@@ -185,7 +165,7 @@ module Test = struct
     end
 
   let test_adds () =
-    for i = 1 to 1000 do
+    for _ = 1 to 1000 do
       let set, diet = make_random 1000 1000 in
       check_equals set diet;
     done

@@ -116,7 +116,7 @@ module Block = struct
     >>= fun (client, size, flags) ->
     let read_write = not(List.mem Nbd.Protocol.PerExportFlag.Read_only flags) in
     Nbd_lwt_unix.Client.get_info client
-    >>= function { sector_size } ->
+    >>= function { Nbd_lwt_unix.Client.sector_size } ->
     assert (sector_size == 1);
     let sector_size = 512 in
     let size_sectors = Int64.(div size (of_int sector_size)) in

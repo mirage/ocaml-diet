@@ -31,7 +31,7 @@ module Version = struct
     | `Three
   ] [@@deriving sexp]
 
-  let sizeof t = 4
+  let sizeof _ = 4
 
   let write t rest =
     Int32.write (match t with | `One -> 1l | `Two -> 2l | `Three -> 3l) rest
@@ -243,7 +243,6 @@ let write t rest =
   | None -> return rest
   | Some e ->
     let incompatible_features =
-      let open Int64 in
       let bits = [
         (if e.dirty then 1L <| 0 else 0L);
         (if e.corrupt then 1L <| 1 else 0L);
@@ -252,7 +251,6 @@ let write t rest =
     Int64.write incompatible_features rest
     >>= fun rest ->
     let compatible_features =
-      let open Int64 in
       let bits = [
         (if e.lazy_refcounts then 1L <| 0 else 0L);
       ] in
@@ -421,7 +419,6 @@ let read rest =
 
 let refcounts_per_cluster t =
   let cluster_bits = Int32.to_int t.cluster_bits in
-  let size = t.size in
   let cluster_size = 1L <| cluster_bits in
   (* Each reference count is 2 bytes long *)
   OldInt64.div cluster_size 2L

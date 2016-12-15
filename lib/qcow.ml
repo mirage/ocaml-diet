@@ -14,9 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
-open Sexplib.Std
 open Result
-open Qcow_error
 open Qcow_types
 module Error = Qcow_error
 module Header = Qcow_header
@@ -89,7 +87,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
 
   (* Run all threads in parallel, wait for all to complete, then iterate through
      the results and return the first failure we discover. *)
-  let rec iter_p f xs =
+  let iter_p f xs =
     let open Lwt in
     let threads = List.map f xs in
     Lwt_list.fold_left_s (fun acc t ->
@@ -473,7 +471,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
 
 
     let read_l1_table t l1_index =
-      let table_offset = t.h.Header.l1_table_offset in
       (* Read l1[l1_index] as a 64-bit offset *)
       let l1_table_start = Physical.make t.h.Header.l1_table_offset in
       let l1_index_offset = Physical.shift l1_table_start (Int64.mul 8L l1_index) in
@@ -483,7 +480,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
 
     (* Find the first l1_index whose values satisfies [f] *)
     let find_mapped_l1_table t l1_index f =
-      let table_offset = t.h.Header.l1_table_offset in
       (* Read l1[l1_index] as a 64-bit offset *)
       let rec loop l1_index =
         if l1_index >= Int64.of_int32 t.h.Header.l1_size
@@ -511,7 +507,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
       loop l1_index
 
     let write_l1_table t l1_index l2_table_offset =
-      let table_offset = t.h.Header.l1_table_offset in
       (* Read l1[l1_index] as a 64-bit offset *)
       let l1_table_start = Physical.make t.h.Header.l1_table_offset in
       let l1_index_offset = Physical.shift l1_table_start (Int64.mul 8L l1_index) in
@@ -628,7 +623,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
             (* The data at [data_offset] is about to become an unreferenced
                hole in the file *)
             let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
-            t.stats.nr_unmapped <- Int64.add t.stats.nr_unmapped sectors_per_cluster;
+            t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
             let data_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits data_offset in
             write_l2_table t l2_offset a.Virtual.l2_index (Physical.make 0L)
             >>*= fun () ->
@@ -672,7 +667,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
             | Some offset' ->
               (* Qemu-img will 'allocate' the last cluster by writing only the last sector.
                  Cope with this by assuming all later sectors are full of zeroes *)
-              let buf_len = Int64.of_int (Cstruct.len buf) in
               let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
               read_base t.base base_sector buf
           ) (chop_into_aligned cluster_size byte bufs)
@@ -891,7 +885,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
                    block has been copied to. (Otherwise we may go to adjust the referring block
                    only to find it has also been moved) *)
                 compact_s
-                  (fun ({ src; dst; _ } as move) new_map (moves, existing_map, substitutions) ->
+                  (fun ({ Move.src; dst; _ } as move) new_map (moves, existing_map, substitutions) ->
                     if !cancel_requested
                     then Lwt.return (`Ok (moves, existing_map, substitutions))
                     else begin
@@ -991,7 +985,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
 
   let seek_mapped_already_locked t from =
     let bytes = Int64.(mul from (of_int t.sector_size)) in
-    let addr = Qcow_virtual.make ~cluster_bits:t.cluster_bits bytes in
     let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
     let rec scan_l1 a =
       if a.Virtual.l1_index >= Int64.of_int32 t.h.Header.l1_size
@@ -1033,7 +1026,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     Qcow_rwlock.with_read_lock t.metadata_lock
       (fun () ->
         let bytes = Int64.(mul from (of_int t.sector_size)) in
-        let addr = Qcow_virtual.make ~cluster_bits:t.cluster_bits bytes in
         let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
         let rec scan_l1 a =
           if a.Virtual.l1_index >= Int64.of_int32 t.h.Header.l1_size
@@ -1097,7 +1089,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
       B.write base sector [ buf ] in
     let flush () = B.flush base in
     let cache = ClusterCache.make ~read_cluster ~write_cluster ~flush () in
-    let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true } -> true | _ -> false in
+    let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true; _ } -> true | _ -> false in
     let stats = Stats.zero in
     let metadata_lock = Qcow_rwlock.make () in
     let t = ref None in
@@ -1108,7 +1100,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
       | Some t ->
         (* Don't schedule another compact until the nr_unmapped is above the
            threshold again. *)
-        t.stats.nr_unmapped <- 0L;
+        t.stats.Stats.nr_unmapped <- 0L;
         compact t ()
         >>= function
         | `Ok _report ->
@@ -1186,7 +1178,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
           Lwt.return (`Ok ())
         | Some offset' ->
           let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
-          t.stats.nr_erased <- Int64.succ t.stats.nr_erased;
+          t.stats.Stats.nr_erased <- Int64.succ t.stats.Stats.nr_erased;
           B.write t.base base_sector [ Cstruct.sub zero 0 t.info.sector_size ] )
       >>*= fun () ->
       erase t ~sector:(Int64.succ sector) ~n:(Int64.pred n) ()
@@ -1224,8 +1216,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
         loop sector' n'
       )
     >>*= fun () ->
-    match t.config.compact_after_unmaps with
-    | Some sectors when t.stats.nr_unmapped > sectors ->
+    match t.config.Config.compact_after_unmaps with
+    | Some sectors when t.stats.Stats.nr_unmapped > sectors ->
       Timer.restart ~duration_ms:t.config.Config.compact_ms t.background_compact_timer;
       Lwt.return (`Ok ())
     | _ -> Lwt.return (`Ok ())
@@ -1269,7 +1261,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
        + l1 table. Future allocations will enlarge the file. *)
     let l1_size_bytes = Int64.mul 8L l2_tables_required in
     let next_free_byte = Int64.round_up (Int64.add l1_table_offset l1_size_bytes) cluster_size in
-    let next_free_cluster = Int64.div next_free_byte cluster_size in
     let open Lwt in
     B.get_info base
     >>= fun base_info ->

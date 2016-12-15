@@ -64,7 +64,7 @@ module Make(Elt: ELT) = struct
   and node = { x: elt; y: elt; l: t; r: t }
   [@@deriving sexp]
 
-  let to_string_internal t = Sexplib.Sexp.to_string_hum @@ sexp_of_t t
+  let to_string_internal t = Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t t
 
   module Invariant = struct
 
@@ -275,12 +275,12 @@ module Test = struct
           else IntSet.remove r set, IntDiet.remove (IntDiet.Interval.make r r) diet in
         loop set diet (m - 1) in
     loop IntSet.empty IntDiet.empty m
-
+    (*
   let set_to_string set =
     String.concat "; " @@ List.map string_of_int @@ IntSet.elements set
   let diet_to_string diet =
     String.concat "; " @@ List.map string_of_int @@ IntDiet.elements diet
-
+    *)
   let check_equals set diet =
     let set' = IntSet.elements set in
     let diet' = IntDiet.elements diet in
@@ -293,7 +293,7 @@ module Test = struct
     end
 
   let test_adds () =
-    for i = 1 to 1000 do
+    for _ = 1 to 1000 do
       let set, diet = make_random 1000 1000 in
       begin
         try
@@ -308,7 +308,7 @@ module Test = struct
     done
 
   let test_operator set_op diet_op () =
-    for i = 1 to 1000 do
+    for _ = 1 to 1000 do
       let set1, diet1 = make_random 1000 1000 in
       let set2, diet2 = make_random 1000 1000 in
       check_equals set1 diet1;

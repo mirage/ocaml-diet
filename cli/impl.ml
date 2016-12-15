@@ -107,12 +107,12 @@ let progress_cb ~percent =
 
   let len = (progress_bar_width * percent) / 100 in
   for i = 0 to len - 1 do
-    line.[4 + i] <- (if i = len - 1 then '>' else '#')
+    Bytes.set line (4 + i) (if i = len - 1 then '>' else '#')
   done;
-  line.[0] <- '[';
-  line.[1] <- spinner.(!spinner_idx);
-  line.[2] <- ']';
-  line.[3] <- ' ';
+  Bytes.set line 0 '[';
+  Bytes.set line 1 spinner.(!spinner_idx);
+  Bytes.set line 2 ']';
+  Bytes.set line 3 ' ';
   spinner_idx := (!spinner_idx + 1) mod (Array.length spinner);
   let percent' = Printf.sprintf "%3d%%" percent in
   String.blit percent' 0 line (progress_bar_width + 4) 4;
@@ -285,7 +285,7 @@ let compact common_options_t unsafe_buffering filename =
   let module BLOCK = (val block: BLOCK) in
   let module B = Qcow.Make(BLOCK)(Time) in
   let open Lwt in
-  let progress_cb = if common_options_t.progress then Some progress_cb else None in
+  let progress_cb = if common_options_t.Common.progress then Some progress_cb else None in
   let t =
     BLOCK.connect filename
     >>*= fun x ->

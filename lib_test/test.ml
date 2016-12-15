@@ -151,7 +151,6 @@ let check_file_contents path id sector_size size_sectors (start, length) () =
   Reader.connect raw
   >>= fun b ->
   let expected = { Extent.start = sector; length = Int64.(div (of_int length) 512L) } in
-  let ofs' = Int64.(mul sector (of_int sector_size)) in
   Mirage_block.fold_mapped_s
     ~f:(fun bytes_seen ofs data ->
         let actual = { Extent.start = ofs; length = Int64.of_int (Cstruct.len data / 512) } in
@@ -367,10 +366,6 @@ let check_file path size =
   >>= fun qcow ->
   let h = M.header qcow in
   assert_equal ~printer:Int64.to_string size h.Qcow.Header.size;
-  let dirty =
-    match h.Qcow.Header.additional with
-    | Some { Qcow.Header.dirty = true } -> true
-    | _ -> false in
   (* Unfortunately qemu-img info doesn't query the dirty flag:
      https://github.com/djs55/qemu/commit/9ac8f24fde855c66b1378cee30791a4aef5c33ba
   assert_equal ~printer:string_of_bool dirty info.Qemu.Img.dirty_flag;

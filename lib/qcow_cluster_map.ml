@@ -14,7 +14,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
-open Sexplib.Std
 
 let src =
   let src = Logs.Src.create "qcow" ~doc:"qcow2-formatted BLOCK device" in

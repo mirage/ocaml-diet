@@ -23,12 +23,16 @@ module Version : sig
   ] [@@deriving sexp]
 
   include Qcow_s.SERIALISABLE with type t := t
+
+  val compare: t -> t -> int
 end
 
 module CryptMethod : sig
   type t = [ `Aes | `None ] [@@deriving sexp]
 
   include Qcow_s.SERIALISABLE with type t := t
+
+  val compare: t -> t -> int
 end
 
 module Feature : sig
