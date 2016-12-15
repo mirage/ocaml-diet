@@ -58,3 +58,5 @@ val remove: interval -> t -> unit
 val min_elt: t -> elt
 (** [min_elt t] returns the smallest element, or raises [Not_found] if the set
     is empty. *)
+
+val to_string: t -> string
