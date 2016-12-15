@@ -14,10 +14,8 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
-open Sexplib.Std
 open Result
 open Qcow
-open Error
 
 let expect_ok = function
   | Ok x -> x
@@ -243,7 +241,7 @@ let discard unsafe_buffering filename =
     B.connect x
     >>*= fun x ->
     Mirage_block.fold_mapped_s
-      (fun acc sector buffer ->
+      ~f:(fun acc sector buffer ->
         if is_zero buffer then begin
           let len = Cstruct.len buffer in
           assert (len mod info.BLOCK.sector_size = 0);
@@ -410,7 +408,7 @@ let create size strict_refcounts trace filename =
       B.create x ~size ~lazy_refcounts:(not strict_refcounts) ()
       >>= function
       | `Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" filename)
-      | `Ok x -> return (`Ok ()) in
+      | `Ok _ -> return (`Ok ()) in
   Lwt_main.run t
 
 let resize trace filename new_size ignore_data_loss =
@@ -441,7 +439,7 @@ let resize trace filename new_size ignore_data_loss =
       B.resize qcow ~new_size ~ignore_data_loss ()
       >>= function
       | `Error _ -> failwith (Printf.sprintf "Failed to resize qcow formatted data on %s" filename)
-      | `Ok x -> return (`Ok ())
+      | `Ok _ -> return (`Ok ())
     end in
   Lwt_main.run t
 
@@ -455,7 +453,7 @@ let is_zero buf =
     (ofs >= Cstruct.len buf) || (Cstruct.get_uint8 buf ofs = 0 && (loop (ofs + 1))) in
   loop 0
 
-let mapped filename format ignore_zeroes =
+let mapped filename _format ignore_zeroes =
   let module B = Qcow.Make(Block)(Time) in
   let open Lwt in
   let t =
@@ -466,7 +464,7 @@ let mapped filename format ignore_zeroes =
     B.get_info x
     >>= fun info ->
     Printf.printf "# offset (bytes), length (bytes)\n";
-    Mirage_block.fold_mapped_s ~f:(fun acc sector_ofs data ->
+    Mirage_block.fold_mapped_s ~f:(fun () sector_ofs data ->
       let sector_bytes = Int64.(mul sector_ofs (of_int info.B.sector_size)) in
       if not ignore_zeroes || not(is_zero data)
       then Printf.printf "%Lx %d\n" sector_bytes (Cstruct.len data);

@@ -78,17 +78,17 @@ module Block = struct
     info: info;
   }
 
-  let get_info { info } = Lwt.return info
+  let get_info { info; _ } = Lwt.return info
 
   type id = unit
   type 'a io = 'a Lwt.t
   type page_aligned_buffer = Cstruct.t
   type error = Mirage_block.Error.error
 
-  let read { client } sector bufs =
+  let read { client; _ } sector bufs =
     Nbd_lwt_unix.Client.read client (Int64.mul sector 512L) bufs
 
-  let write { client } sector bufs =
+  let write { client; _ } sector bufs =
     Nbd_lwt_unix.Client.write client (Int64.mul sector 512L) bufs
 
   let connect file =
@@ -116,7 +116,7 @@ module Block = struct
     >>= fun (client, size, flags) ->
     let read_write = not(List.mem Nbd.Protocol.PerExportFlag.Read_only flags) in
     Nbd_lwt_unix.Client.get_info client
-    >>= function { Nbd_lwt_unix.Client.sector_size } ->
+    >>= function { Nbd_lwt_unix.Client.sector_size; _ } ->
     assert (sector_size == 1);
     let sector_size = 512 in
     let size_sectors = Int64.(div size (of_int sector_size)) in
@@ -127,7 +127,7 @@ module Block = struct
     Img.create file size;
     connect file
 
-  let disconnect { server; client; s } =
+  let disconnect { server; client; s; _ } =
     let open Lwt.Infix in
     Nbd_lwt_unix.Client.disconnect client
     >>= fun () ->

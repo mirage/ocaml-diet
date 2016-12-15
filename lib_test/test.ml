@@ -16,7 +16,6 @@
 module FromBlock = Error.FromBlock
 module FromResult = Error.FromResult
 
-open Sexplib.Std
 open Qcow
 open Lwt
 open OUnit
@@ -59,7 +58,7 @@ let read_write_header name size =
     Block.connect path
     >>= fun raw ->
     B.create raw ~size ()
-    >>= fun b ->
+    >>= fun _b ->
     let open Lwt.Infix in
     repair_refcounts path
     >>= fun () ->
@@ -140,7 +139,7 @@ let rec fragment into remaining =
     let rest = Cstruct.shift remaining into in
     this :: (fragment into rest)
 
-let check_file_contents path id sector_size size_sectors (start, length) () =
+let check_file_contents path id _sector_size _size_sectors (start, length) () =
   let module RawReader = Block in
   let module Reader = Qcow.Make(RawReader)(Time) in
   let sector = Int64.div start 512L in
@@ -299,7 +298,7 @@ let check_refcount_table_allocation () =
   let t =
     Ramdisk.destroy ~name:"test";
     let open FromBlock in
-    Ramdisk.connect "test"
+    Ramdisk.connect ~name:"test"
     >>= fun ramdisk ->
     B.create ramdisk ~size:pib ()
     >>= fun b ->
@@ -321,7 +320,7 @@ let check_full_disk () =
   let t =
     Ramdisk.destroy ~name:"test";
     let open FromBlock in
-    Ramdisk.connect "test"
+    Ramdisk.connect ~name:"test"
     >>= fun ramdisk ->
     B.create ramdisk ~size:gib ()
     >>= fun b ->

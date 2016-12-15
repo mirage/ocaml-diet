@@ -88,10 +88,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
   (* Run all threads in parallel, wait for all to complete, then iterate through
      the results and return the first failure we discover. *)
   let iter_p f xs =
-    let open Lwt in
     let threads = List.map f xs in
     Lwt_list.fold_left_s (fun acc t ->
-        t >>= fun result ->
         match acc with
         | `Error x -> Lwt.return (`Error x) (* first error wins *)
         | `Ok () -> t
@@ -152,7 +150,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
            unlock cluster >>= fun () ->
            Lwt.fail e)
     let read t cluster f =
-      let open Lwt in
       with_lock t cluster
         (fun () ->
            ( if Int64Map.mem cluster t.clusters
@@ -167,7 +164,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
            f buf
         )
     let update t cluster f =
-      let open Lwt in
       with_lock t cluster
         (fun () ->
            ( if Int64Map.mem cluster t.clusters
@@ -462,7 +458,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
         then Lwt.return (`Ok ())
         else really_incr t cluster
 
-      let decr t cluster =
+      let decr t _cluster =
         if t.lazy_refcounts
         then Lwt.return (`Ok ())
         else Lwt.return (`Error `Unimplemented)
@@ -830,7 +826,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
       new_size:     int64;
   }
 
-  let compact t ?(progress_cb = fun ~percent -> ()) () =
+  let compact t ?(progress_cb = fun ~percent:_ -> ()) () =
     (* We will return a cancellable task to the caller, and on cancel we will
        set the cancel_requested flag. The main compact loop will detect this
        and complete the moves already in progress before returning. *)
@@ -1105,7 +1101,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
         >>= function
         | `Ok _report ->
           Lwt.return_unit
-        | `Error e ->
+        | `Error _e ->
           Log.err (fun f -> f "background compaction returned error");
           Lwt.return_unit
       ) () in
@@ -1450,10 +1446,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     type error = error'
     let check_no_overlaps t =
       let l1_table_offset = Physical.make t.h.Header.l1_table_offset in
-      let l1_table_cluster, within = Physical.to_cluster ~cluster_bits:t.cluster_bits l1_table_offset in
+      let _, within = Physical.to_cluster ~cluster_bits:t.cluster_bits l1_table_offset in
       assert (within = 0);
       let refcount_table_offset = Physical.make t.h.Header.refcount_table_offset in
-      let refcount_table_cluster, within = Physical.to_cluster ~cluster_bits:t.cluster_bits refcount_table_offset in
+      let _, within = Physical.to_cluster ~cluster_bits:t.cluster_bits refcount_table_offset in
       assert (within = 0);
       Lwt.return (`Ok ())
 

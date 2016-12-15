@@ -15,12 +15,6 @@
  *)
 module FromBlock = Error.FromBlock
 
-open Sexplib.Std
-open Qcow
-open Lwt
-open OUnit
-open Utils
-
 let mib = Int64.mul 1024L 1024L
 let gib = Int64.mul mib 1024L
 let tib = Int64.mul gib 1024L
@@ -53,7 +47,7 @@ let off_by ((label', offset'), (label, offset)) = [
 ]
 
 let rec cross xs ys = match xs, ys with
-  | [], ys -> []
+  | [], _ -> []
   | x :: xs, ys -> List.map (fun y -> x, y) ys @ (cross xs ys)
 
 (* Parameterise over sector, page, cluster, more *)
@@ -66,6 +60,6 @@ let interesting_ranges sector_size size_sectors cluster_bits =
       label' ^ " @ " ^ label, offset, length'
     ) (cross (sizes sector_size cluster_bits) all) in
   List.filter
-    (fun (label, offset, length) ->
+    (fun (_label, offset, length) ->
        offset >= 0L && (Int64.add offset length <= size_bytes)
     ) all
