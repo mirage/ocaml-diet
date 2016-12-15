@@ -36,6 +36,13 @@ let make_full len =
   Cstruct.memset buf 0xff;
   { buf; len }
 
+let copy t =
+  let bytes_required = Cstruct.len t.buf in
+  let buf = Cstruct.create bytes_required in
+  Cstruct.blit t.buf 0 buf 0 bytes_required;
+  let len = t.len in
+  { buf; len }
+
 let set' t n v =
   if n >= t.len then invalid_arg (Printf.sprintf "Qcow_bitmap.set %d >= %d" n t.len);
   let i = n / 8 in

@@ -41,6 +41,12 @@ let make ~free ~first_movable_cluster =
   let refs = ClusterMap.empty in
   { free; refs; first_movable_cluster }
 
+let copy t =
+  let free = ClusterSet.copy t.free in
+  let refs = t.refs in
+  let first_movable_cluster = t.first_movable_cluster in
+  { free; refs; first_movable_cluster }
+
 let total_used t =
   Int64.of_int @@ ClusterMap.cardinal t.refs
 
@@ -91,6 +97,7 @@ let get_last_block t =
     Int64.pred t.first_movable_cluster
 
 let compact_s f t acc =
+  let t = copy t in
   (* The last allocated block. Note if there are no data blocks this will
      point to the last header block even though it is immovable. *)
   let max_cluster = get_last_block t in

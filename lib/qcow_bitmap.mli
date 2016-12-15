@@ -43,6 +43,9 @@ val make_empty: int -> t
 val make_full: int -> t
 (** [make_full n] creates a set of maximum size [n], initially full *)
 
+val copy: t -> t
+(** [copy t] returns a duplicate of [t] *)
+
 val fold: (interval -> 'a -> 'a) -> t -> 'a -> 'a
 (** [fold f t acc] folds [f] across all the intervals in [t] *)
 
