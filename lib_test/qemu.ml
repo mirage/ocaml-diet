@@ -20,7 +20,23 @@ open Utils
 
 module Img = struct
   let create file size =
-    ignore_output @@ run "qemu-img" [ "create"; "-f"; "qcow2"; "-o"; "lazy_refcounts=on"; file; Int64.to_string size ]
+    ignore_output @@ run "qemu-img" [ "create"; "-f"; "qcow2"; "-o"; "lazy_refcounts=on"; file; Int64.to_string size ];
+    (* workaround for https://github.com/mirage/mirage-block-unix/issues/59 *)
+    Lwt_main.run begin
+      let open Lwt.Infix in
+      Lwt_unix.LargeFile.stat file
+      >>= fun stat ->
+      let bytes = stat.Lwt_unix.LargeFile.st_size in
+      let remainder = Int64.rem bytes 512L in
+      let padding_required = if remainder = 0L then 0L else Int64.sub 512L remainder in
+      Lwt_unix.openfile file [ Lwt_unix.O_WRONLY; Lwt_unix.O_APPEND ] 0o0
+      >>= fun fd ->
+      let buf = Cstruct.create (Int64.to_int padding_required) in
+      Cstruct.memset buf 0;
+      Lwt_cstruct.complete (Lwt_cstruct.write fd) buf
+      >>= fun () ->
+      Lwt_unix.close fd
+    end
 
   let check file =
     ignore_output @@ run "qemu-img" [ "check"; file ]
