@@ -24,7 +24,7 @@ type cluster = int64
 
 type reference = cluster * int (* cluster * offset within cluster *)
 
-module ClusterSet: Qcow_s.INTERVAL_SET with type elt = cluster
+module ClusterSet = Qcow_bitmap
 
 module ClusterMap: Map.S with type key = cluster
 
@@ -38,7 +38,7 @@ val total_used: t -> int64
 val total_free: t -> int64
 (** Return the number of tracked free clusters *)
 
-val add: t -> reference -> cluster -> t
+val add: t -> reference -> cluster -> unit
 (** [add t ref cluster] marks [cluster] as in-use and notes the reference from
     [reference]. *)
 
@@ -48,7 +48,7 @@ module Move: sig
       and update the reference in cluster [update] *)
 end
 
-val compact_s: (Move.t -> t -> 'a -> [ `Ok of 'a | `Error of 'b ] Lwt.t ) -> t -> 'a
+val compact_s: (Move.t -> t -> 'a -> [ `Ok of (bool * 'a) | `Error of 'b ] Lwt.t ) -> t -> 'a
   -> [ `Ok of 'a | `Error of 'b ] Lwt.t
 (** [compact_s f t acc] accumulates the result of [f move t'] where [move] is
     the next cluster move needed to perform a compaction of [t] and [t']

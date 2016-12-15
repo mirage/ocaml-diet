@@ -14,10 +14,8 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
-open Sexplib.Std
 open Result
 open Qcow
-open Error
 
 let expect_ok = function
   | Ok x -> x
@@ -107,12 +105,12 @@ let progress_cb ~percent =
 
   let len = (progress_bar_width * percent) / 100 in
   for i = 0 to len - 1 do
-    line.[4 + i] <- (if i = len - 1 then '>' else '#')
+    Bytes.set line (4 + i) (if i = len - 1 then '>' else '#')
   done;
-  line.[0] <- '[';
-  line.[1] <- spinner.(!spinner_idx);
-  line.[2] <- ']';
-  line.[3] <- ' ';
+  Bytes.set line 0 '[';
+  Bytes.set line 1 spinner.(!spinner_idx);
+  Bytes.set line 2 ']';
+  Bytes.set line 3 ' ';
   spinner_idx := (!spinner_idx + 1) mod (Array.length spinner);
   let percent' = Printf.sprintf "%3d%%" percent in
   String.blit percent' 0 line (progress_bar_width + 4) 4;
@@ -243,7 +241,7 @@ let discard unsafe_buffering filename =
     B.connect x
     >>*= fun x ->
     Mirage_block.fold_mapped_s
-      (fun acc sector buffer ->
+      ~f:(fun acc sector buffer ->
         if is_zero buffer then begin
           let len = Cstruct.len buffer in
           assert (len mod info.BLOCK.sector_size = 0);
@@ -285,7 +283,23 @@ let compact common_options_t unsafe_buffering filename =
   let module BLOCK = (val block: BLOCK) in
   let module B = Qcow.Make(BLOCK)(Time) in
   let open Lwt in
-  let progress_cb = if common_options_t.progress then Some progress_cb else None in
+  let progress_cb = if common_options_t.Common.progress then Some progress_cb else None in
+  (* workaround for https://github.com/mirage/mirage-block-unix/issues/59 *)
+  Lwt_main.run begin
+    let open Lwt.Infix in
+    Lwt_unix.LargeFile.stat filename
+    >>= fun stat ->
+    let bytes = stat.Lwt_unix.LargeFile.st_size in
+    let remainder = Int64.rem bytes 512L in
+    let padding_required = if remainder = 0L then 0L else Int64.sub 512L remainder in
+    Lwt_unix.openfile filename [ Lwt_unix.O_WRONLY; Lwt_unix.O_APPEND ] 0o0
+    >>= fun fd ->
+    let buf = Cstruct.create (Int64.to_int padding_required) in
+    Cstruct.memset buf 0;
+    Lwt_cstruct.complete (Lwt_cstruct.write fd) buf
+    >>= fun () ->
+    Lwt_unix.close fd
+  end;
   let t =
     BLOCK.connect filename
     >>*= fun x ->
@@ -410,7 +424,7 @@ let create size strict_refcounts trace filename =
       B.create x ~size ~lazy_refcounts:(not strict_refcounts) ()
       >>= function
       | `Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" filename)
-      | `Ok x -> return (`Ok ()) in
+      | `Ok _ -> return (`Ok ()) in
   Lwt_main.run t
 
 let resize trace filename new_size ignore_data_loss =
@@ -441,7 +455,7 @@ let resize trace filename new_size ignore_data_loss =
       B.resize qcow ~new_size ~ignore_data_loss ()
       >>= function
       | `Error _ -> failwith (Printf.sprintf "Failed to resize qcow formatted data on %s" filename)
-      | `Ok x -> return (`Ok ())
+      | `Ok _ -> return (`Ok ())
     end in
   Lwt_main.run t
 
@@ -455,7 +469,7 @@ let is_zero buf =
     (ofs >= Cstruct.len buf) || (Cstruct.get_uint8 buf ofs = 0 && (loop (ofs + 1))) in
   loop 0
 
-let mapped filename format ignore_zeroes =
+let mapped filename _format ignore_zeroes =
   let module B = Qcow.Make(Block)(Time) in
   let open Lwt in
   let t =
@@ -466,7 +480,7 @@ let mapped filename format ignore_zeroes =
     B.get_info x
     >>= fun info ->
     Printf.printf "# offset (bytes), length (bytes)\n";
-    Mirage_block.fold_mapped_s ~f:(fun acc sector_ofs data ->
+    Mirage_block.fold_mapped_s ~f:(fun () sector_ofs data ->
       let sector_bytes = Int64.(mul sector_ofs (of_int info.B.sector_size)) in
       if not ignore_zeroes || not(is_zero data)
       then Printf.printf "%Lx %d\n" sector_bytes (Cstruct.len data);

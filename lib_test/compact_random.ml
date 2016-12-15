@@ -16,10 +16,6 @@
 module FromBlock = Error.FromBlock
 module FromResult = Error.FromResult
 
-open Sexplib.Std
-open Qcow
-open Lwt
-open OUnit
 open Utils
 open Sizes
 

@@ -16,7 +16,6 @@
 module FromBlock = Error.FromBlock
 module FromResult = Error.FromResult
 
-open Sexplib.Std
 open Qcow
 open Lwt
 open OUnit
@@ -59,7 +58,7 @@ let read_write_header name size =
     Block.connect path
     >>= fun raw ->
     B.create raw ~size ()
-    >>= fun b ->
+    >>= fun _b ->
     let open Lwt.Infix in
     repair_refcounts path
     >>= fun () ->
@@ -140,7 +139,7 @@ let rec fragment into remaining =
     let rest = Cstruct.shift remaining into in
     this :: (fragment into rest)
 
-let check_file_contents path id sector_size size_sectors (start, length) () =
+let check_file_contents path id _sector_size _size_sectors (start, length) () =
   let module RawReader = Block in
   let module Reader = Qcow.Make(RawReader)(Time) in
   let sector = Int64.div start 512L in
@@ -151,7 +150,6 @@ let check_file_contents path id sector_size size_sectors (start, length) () =
   Reader.connect raw
   >>= fun b ->
   let expected = { Extent.start = sector; length = Int64.(div (of_int length) 512L) } in
-  let ofs' = Int64.(mul sector (of_int sector_size)) in
   Mirage_block.fold_mapped_s
     ~f:(fun bytes_seen ofs data ->
         let actual = { Extent.start = ofs; length = Int64.of_int (Cstruct.len data / 512) } in
@@ -300,7 +298,7 @@ let check_refcount_table_allocation () =
   let t =
     Ramdisk.destroy ~name:"test";
     let open FromBlock in
-    Ramdisk.connect "test"
+    Ramdisk.connect ~name:"test"
     >>= fun ramdisk ->
     B.create ramdisk ~size:pib ()
     >>= fun b ->
@@ -322,7 +320,7 @@ let check_full_disk () =
   let t =
     Ramdisk.destroy ~name:"test";
     let open FromBlock in
-    Ramdisk.connect "test"
+    Ramdisk.connect ~name:"test"
     >>= fun ramdisk ->
     B.create ramdisk ~size:gib ()
     >>= fun b ->
@@ -367,10 +365,6 @@ let check_file path size =
   >>= fun qcow ->
   let h = M.header qcow in
   assert_equal ~printer:Int64.to_string size h.Qcow.Header.size;
-  let dirty =
-    match h.Qcow.Header.additional with
-    | Some { Qcow.Header.dirty = true } -> true
-    | _ -> false in
   (* Unfortunately qemu-img info doesn't query the dirty flag:
      https://github.com/djs55/qemu/commit/9ac8f24fde855c66b1378cee30791a4aef5c33ba
   assert_equal ~printer:string_of_bool dirty info.Qemu.Img.dirty_flag;
@@ -730,7 +724,8 @@ let _ =
       (fun (label, start, length) -> label >:: write_discard_read_native sector_size size_sectors (start, Int64.to_int length))
       (interesting_ranges sector_size size_sectors cluster_bits) in
   let diet_tests = List.map (fun (name, fn) -> name >:: fn) Qcow_diet.Test.all in
-  let suite = "qcow2" >::: (diet_tests @ [
+  let bitmap_tests = List.map (fun (name, fn) -> name >:: fn) Qcow_bitmap.Test.all in
+  let suite = "qcow2" >::: (diet_tests @ bitmap_tests @ [
       "check we can fill the disk" >:: check_full_disk;
       "check we can reallocate the refcount table" >:: check_refcount_table_allocation;
       "create 1K" >:: create_1K;

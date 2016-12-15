@@ -14,8 +14,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
-open Sexplib.Std
-open Result
 open Astring
 
 let project_url = "http://github.com/mirage/ocaml-qcow"
@@ -190,10 +188,10 @@ let resize_cmd =
   let doc = "Change the maximum virtual size of the disk." in
   let man = [
     `S "DESCRIPTION";
-    `P "When a .qcow2 file is created, the physical file on disk is small but
-       the disk has a (usually much larger) 'virtual' size as seen from the
-       perspective of the client. A disk can usually be safely increased in size
-       without harming the contents. It's up to the client whether it is able
+    `P "When a .qcow2 file is created, the physical file on disk is small but \
+       the disk has a (usually much larger) 'virtual' size as seen from the \
+       perspective of the client. A disk can usually be safely increased in size \
+       without harming the contents. It's up to the client whether it is able \
        to use the new space or not."
   ] @ help in
   Term.(ret(pure Impl.resize $ trace $ filename $ size $ ignore_data_loss)),
@@ -207,8 +205,8 @@ let discard_cmd =
   let doc = "Scan for zeroes and discard them" in
   let man = [
     `S "DESCRIPTION";
-    `P "Iterate over all allocated blocks in the image, and if a block only
-        contains zeroes, then invoke discard (aka TRIM or UNMAP) on it. This
+    `P "Iterate over all allocated blocks in the image, and if a block only \
+        contains zeroes, then invoke discard (aka TRIM or UNMAP) on it. This \
         helps shrink the blocks in the file.";
   ] @ help in
   Term.(ret(pure Impl.discard $ unsafe_buffering $ filename)),
@@ -218,7 +216,7 @@ let compact_cmd =
   let doc = "Compact the file" in
   let man = [
     `S "DESCRIPTION";
-    `P "Iterate over all the unallocated blocks ('holes') in the file created
+    `P "Iterate over all the unallocated blocks ('holes') in the file created \
         by discard and move live data into them to shrink the file.";
   ] @ help in
   Term.(ret(pure Impl.compact $ common_options_t $ unsafe_buffering $ filename)),
@@ -228,9 +226,9 @@ let repair_cmd =
   let doc = "Regenerate the refcount table in an image" in
   let man = [
     `S "DESCRIPTION";
-    `P "Regenerate the refcount table in an image to make it compliant with
-    the spec. We normally avoid updating the refcount at runtime as a
-    performance optimisation."
+    `P "Regenerate the refcount table in an image to make it compliant with \
+        the spec. We normally avoid updating the refcount at runtime as a \
+        performance optimisation."
   ] @ help in
   Term.(ret(pure Impl.repair $ unsafe_buffering $ filename)),
   Term.info "repair" ~sdocs:_common_options ~doc ~man

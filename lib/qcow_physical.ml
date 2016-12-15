@@ -43,14 +43,14 @@ let shift t bytes =
 
 (* Take an offset and round it down to the nearest physical sector, returning
    the sector number and an offset within the sector *)
-let rec to_sector ~sector_size t =
+let to_sector ~sector_size t =
   let x = (t <| 2) |> 2 in
   Int64.(div x (of_int sector_size)),
   Int64.(to_int (rem x (of_int sector_size)))
 
 let to_bytes t = (t <| 2) |> 2
 
-let rec to_cluster ~cluster_bits t =
+let to_cluster ~cluster_bits t =
   let x = (t <| 2) |> 2 in
   Int64.(div x (1L <| cluster_bits)),
   Int64.(to_int (rem x (1L <| cluster_bits)))
@@ -78,7 +78,6 @@ let sexp_of_t t =
 
 let t_of_sexp s =
   let _t = _t_of_sexp s in
-  let bytes = (_t.bytes <| 2) |> 2 in
   let is_mutable = if _t.is_mutable then 1L <| 63 else 0L in
   let is_compressed = if _t.is_compressed then 1L <| 62 else 0L in
   Int64.(logor (logor _t.bytes is_mutable) is_compressed)
