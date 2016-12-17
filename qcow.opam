@@ -40,11 +40,11 @@ depends: [
 ]
 
 build: [
-  [ "ocaml" "detect_word_size.ml" ]
-  [ "ocaml" "pkg/pkg.ml" "build" "--pinned" "%{pinned}%" "--tests" "false" ]
+  [ "jbuilder" "build" ]
 ]
+
 build-test: [
-  [ "ocaml" "pkg/pkg.ml" "build" "--pinned" "%{pinned}%" "--tests" "true" ]
-  [ "ocaml" "pkg/pkg.ml" "test" ]
+  [ "jbuilder" "runtest" ]
 ]
+
 available: [ocaml-version >= "4.03.0"]

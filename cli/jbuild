@@ -1,0 +1,10 @@
+(executables
+ ((names (main))
+  (libraries   (qcow io-page.unix logs logs.fmt sha))
+  (preprocess  no_preprocessing)
+))
+
+(install
+ ((section bin)
+  (package qcow-tool)
+  (files ((main.exe as qcow-tool)))))

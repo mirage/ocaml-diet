@@ -1,0 +1,11 @@
+(library
+ ((name        qcow)
+  (public_name qcow)
+  (libraries (astring cmdliner cstruct logs lwt mirage-block mirage-block-unix mirage-types-lwt ppx_sexp_conv ppx_tools ppx_type_conv))
+  (wrapped false)
+  (preprocess (pps (ppx_sexp_conv)))))
+
+(rule
+ ((targets (qcow_word_size.ml))
+  (deps    (../generator/gen.exe))
+  (action  (run ${<} -o ${@}))))

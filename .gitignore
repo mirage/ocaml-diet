@@ -12,3 +12,4 @@ _build
 .coverage/
 *.install
 lib/qcow_word_size.ml
+*.exe
