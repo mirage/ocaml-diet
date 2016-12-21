@@ -230,7 +230,8 @@ let write_discard_read_native sector_size size_sectors (start, length) () =
     let open FromBlock in
     RawWriter.connect path
     >>= fun raw ->
-    Writer.create raw ~size:Int64.(mul size_sectors (of_int sector_size)) ()
+    let config = Writer.Config.create ~discard:true () in
+    Writer.create raw ~size:Int64.(mul size_sectors (of_int sector_size)) ~config ()
     >>= fun b ->
 
     let sector = Int64.div start 512L in
@@ -519,7 +520,8 @@ let create_write_discard_all_compact clusters () =
     let open FromBlock in
     Block.connect path
     >>= fun block ->
-    B.create block ~size ()
+    let config = B.Config.create ~discard:true () in
+    B.create block ~size ~config ()
     >>= fun qcow ->
     let h = B.header qcow in
     let cluster_size = 1 lsl (Int32.to_int h.Qcow.Header.cluster_bits) in
@@ -567,7 +569,8 @@ let create_write_discard_compact () =
     let open FromBlock in
     Block.connect path
     >>= fun block ->
-    B.create block ~size ()
+    let config = B.Config.create ~discard:true () in
+    B.create block ~size ~config ()
     >>= fun qcow ->
     (* write a bunch of clusters at the beginning *)
     let h = B.header qcow in
