@@ -1165,6 +1165,29 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
           Lwt.return_unit
       ) () in
     let t' = { h; base; info = info'; config; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock; background_compact_timer } in
+    ( if config.Config.discard && not(lazy_refcounts) then begin
+        Log.info (fun f -> f "discard requested and lazy_refcounts is disabled: erasing refcount table and enabling lazy_refcounts");
+        Cluster.Refcount.zero_all t'
+        >>*= fun () ->
+        let additional = match h.Header.additional with
+          | Some h -> { h with Header.lazy_refcounts = true }
+          | None -> {
+            Header.dirty = true;
+            corrupt = false;
+            lazy_refcounts = true;
+            autoclear_features = 0L;
+            refcount_order = 4l;
+            } in
+        let extensions = [
+          `Feature_name_table Header.Feature.understood
+        ] in
+        let h = { h with Header.additional = Some additional; extensions } in
+        update_header t' h
+        >>*= fun () ->
+        t'.lazy_refcounts <- true;
+        Lwt.return (`Ok ())
+      end else Lwt.return (`Ok ()) )
+    >>*= fun () ->
     t := Some t';
     Lwt.return (`Ok t')
 
