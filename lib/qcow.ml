@@ -1240,6 +1240,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     end
 
   let discard t ~sector ~n () =
+    ( if not(t.config.Config.discard) then begin
+        Log.err (fun f -> f "discard called but feature not implemented in configuration");
+        Lwt.return (`Error `Unimplemented)
+      end else Lwt.return (`Ok ()) )
+    >>*= fun () ->
     Timer.cancel t.background_compact_timer;
     Qcow_rwlock.with_read_lock t.metadata_lock
       (fun () ->
