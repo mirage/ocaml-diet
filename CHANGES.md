@@ -1,3 +1,8 @@
+0.7.2 (2016-12-21)
+- if `discard` is not enabled, fail `discard` calls
+- if `discard` is enabled, enable lazy-refcounts and zero refcount clusters
+  to avoid breaking refcounts over `discard`, `compact`
+
 0.7.1 (2016-12-15)
 - speed up `check` and `compact` up to 50x
 - `qcow-tool compact` work around files which aren't a whole number of
@@ -50,4 +55,3 @@
 - CLI tool for manipulating images
 - supports the `seek_mapped` `seek_unmapped` interface for iterating over
   sparse regions
-
