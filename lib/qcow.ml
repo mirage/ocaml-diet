@@ -330,6 +330,33 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
             )
         end
 
+      (** Decrement the refcount of a given cluster. This will never need to allocate.
+          We never bother to deallocate refcount clusters which are empty. *)
+      let really_decr t cluster =
+        let within_table = Int64.(div cluster (Header.refcounts_per_cluster t.h)) in
+        let within_cluster = Int64.(to_int (rem cluster (Header.refcounts_per_cluster t.h))) in
+
+        let offset = Physical.make Int64.(add t.h.Header.refcount_table_offset (mul 8L within_table)) in
+        unmarshal_physical_address t offset
+        >>*= fun offset ->
+        if Physical.to_bytes offset = 0L then begin
+          Log.err (fun f -> f "Refcount.decr: cluster %Ld has no refcount cluster allocated" cluster);
+          Lwt.return (`Error (`Unknown (Printf.sprintf "Refcount.decr: cluster %Ld has no refcount cluster allocated" cluster)));
+        end else begin
+          let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
+          ClusterCache.update t.cache cluster
+            (fun buf ->
+               let current = Cstruct.BE.get_uint16 buf (2 * within_cluster) in
+               if current = 0 then begin
+                 Log.err (fun f -> f "Refcount.decr: cluster %Ld already has a refcount of 0" cluster);
+                 Lwt.return (`Error (`Unknown (Printf.sprintf "Refcount.decr: cluster %Ld already has a refcount of 0" cluster)))
+               end else begin
+                 Cstruct.BE.set_uint16 buf (2 * within_cluster) (current - 1);
+                 Lwt.return (`Ok ())
+               end
+            )
+        end
+
       (** Increment the refcount of a given cluster. Note this might need
           to allocate itself, to enlarge the refcount table. When this function
           returns the refcount is guaranteed to have been persisted. *)
@@ -458,10 +485,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
         then Lwt.return (`Ok ())
         else really_incr t cluster
 
-      let decr t _cluster =
+      let decr t cluster =
         if t.lazy_refcounts
         then Lwt.return (`Ok ())
-        else Lwt.return (`Error `Unimplemented)
+        else really_decr t cluster
 
     end
 
