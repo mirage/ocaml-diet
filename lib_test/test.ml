@@ -710,6 +710,7 @@ let qcow_tool_suite =
   create @ ok_resize @ bad_resize @ ignore_data_loss_resize @ create_resize_equals_create
 
 let _ =
+  Logs.set_reporter (Logs_fmt.reporter ());
   let sector_size = 512 in
   (* Test with a 1 PiB disk, bigger than we'll need for a while. *)
   let size_sectors = Int64.div pib 512L in

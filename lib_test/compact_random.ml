@@ -215,6 +215,7 @@ let random_write_discard_compact nr_clusters stop_after =
   or_failwith @@ Lwt_main.run t
 
 let _ =
+  Logs.set_reporter (Logs_fmt.reporter ());
   let clusters = ref 128 in
   let stop_after = ref 1024 in
   Arg.parse [
