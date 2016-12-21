@@ -313,6 +313,41 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     module Refcount = struct
       (* The refcount table contains pointers to clusters which themselves
          contain the 2-byte refcounts *)
+
+      let zero_all t =
+         (* Zero all clusters allocated in the refcount table *)
+         let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
+         let rec loop i =
+           if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
+           then Lwt.return (`Ok ())
+           else begin
+             ClusterCache.read t.cache Int64.(add cluster i)
+               (fun buf ->
+                  let rec loop i =
+                    if i >= (Cstruct.len buf)
+                    then Lwt.return (`Ok ())
+                    else begin
+                      let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
+                      ( if Physical.to_bytes addr <> 0L then begin
+                            let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
+                            ClusterCache.update t.cache cluster
+                              (fun buf ->
+                                 Cstruct.memset buf 0;
+                                 Lwt.return (`Ok ())
+                              )
+                             >>*= fun () ->
+                             B.flush t.base
+                          end else Lwt.return (`Ok ()) )
+                      >>*= fun () ->
+                      loop (8 + i)
+                    end in
+                  loop 0
+               )
+             >>*= fun () ->
+             loop (Int64.succ i)
+           end in
+         loop 0L
+
       let read t cluster =
         let within_table = Int64.(div cluster (Header.refcounts_per_cluster t.h)) in
         let within_cluster = Int64.(to_int (rem cluster (Header.refcounts_per_cluster t.h))) in
@@ -1321,39 +1356,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
         let lazy_refcounts = t.lazy_refcounts in
         t.lazy_refcounts <- false;
         Log.info (fun f -> f "Zeroing existing refcount table");
-        (* Zero all clusters allocated in the refcount table *)
-        let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
-        let rec loop i =
-          if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
-          then Lwt.return (`Ok ())
-          else begin
-            ClusterCache.read t.cache Int64.(add cluster i)
-              (fun buf ->
-                 let rec loop i =
-                   if i >= (Cstruct.len buf)
-                   then Lwt.return (`Ok ())
-                   else begin
-                     let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
-                     ( if Physical.to_bytes addr <> 0L then begin
-                           let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
-                           ClusterCache.update t.cache cluster
-                             (fun buf ->
-                                Cstruct.memset buf 0;
-                                Lwt.return (`Ok ())
-                             )
-                            >>*= fun () ->
-                            B.flush t.base
-                         end else Lwt.return (`Ok ()) )
-                     >>*= fun () ->
-                     loop (8 + i)
-                   end in
-                 loop 0
-              )
-            >>*= fun () ->
-            loop (Int64.succ i)
-          end in
-        loop 0L
+        Cluster.Refcount.zero_all t
         >>*= fun () ->
+        let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
         let rec loop i =
           if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
           then Lwt.return (`Ok ())
