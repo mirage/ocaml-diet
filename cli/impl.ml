@@ -50,7 +50,7 @@ end
 
 module Time = struct
   type 'a io = 'a Lwt.t
-  let sleep = Lwt_unix.sleep
+  let sleep_ns ns = Lwt_unix.sleep (Int64.to_float ns /. 1e9)
 end
 
 module TracedBlock = struct
@@ -223,11 +223,11 @@ let discard unsafe_buffering filename =
   let open Lwt in
   let t =
     BLOCK.connect filename
-    >>*= fun x ->
+    >>= fun x ->
     BLOCK.get_info x
     >>= fun info ->
     B.connect x
-    >>*= fun x ->
+    >>= fun x ->
     Mirage_block.fold_mapped_s
       ~f:(fun acc sector buffer ->
         if is_zero buffer then begin
@@ -290,9 +290,9 @@ let compact common_options_t unsafe_buffering filename =
   end;
   let t =
     BLOCK.connect filename
-    >>*= fun x ->
+    >>= fun x ->
     B.connect x
-    >>*= fun x ->
+    >>= fun x ->
     B.get_info x
     >>= fun info ->
     B.compact x ?progress_cb ()
