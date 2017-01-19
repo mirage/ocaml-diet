@@ -34,13 +34,6 @@ let src =
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-let to_cmdliner_error = function
-  | Error `Disconnected -> Error(false, "Disconnected")
-  | Error `Is_read_only -> Error(false, "Is_read_only")
-  | Error `Unimplemented -> Error(false, "Unimplemented")
-  | Error (`Unknown x) -> Error(false, x)
-  | Ok x -> Ok x
-
 module Block = struct
   include Block
   (* We're not interested in any optional arguments [connect] may or may not
@@ -133,7 +126,7 @@ let info filename filter =
       | None -> original_sexp
       | Some str -> Sexplib.Path.get ~str original_sexp in
     Printf.printf "%s\n" (Sexplib.Sexp.to_string_hum sexp);
-    return (Ok ()) in
+    return (`Ok ()) in
   Lwt_main.run t
 
 let write filename sector data trace =
@@ -156,7 +149,7 @@ let write filename sector data trace =
     B.write x sector [ buf ]
     >>= function
     | Error _ -> failwith "write failed"
-    | Ok () -> return (Ok ()) in
+    | Ok () -> return (`Ok ()) in
   Lwt_main.run t
 
 let read filename sector length trace =
@@ -181,7 +174,7 @@ let read filename sector length trace =
     | Ok () ->
       let result = Cstruct.sub buf 0 length in
       Printf.printf "%s%!" (Cstruct.to_string result);
-      return (Ok ()) in
+      return (`Ok ()) in
   Lwt_main.run t
 
 let check filename =
@@ -199,7 +192,7 @@ let check filename =
       Printf.printf "Qcow file seems intact.\n";
       Printf.printf "Total free blocks: %Ld\n" x.B.free;
       Printf.printf "Total used blocks: %Ld\n" x.B.used;
-      return (Ok ()) in
+      return (`Ok ()) in
   Lwt_main.run t
 
 exception Non_zero
@@ -228,39 +221,50 @@ let discard unsafe_buffering filename =
     >>= fun info ->
     B.connect x
     >>= fun x ->
-    Mirage_block.fold_mapped_s
+    let module F = Mirage_block_lwt.Fast_fold(B) in
+    F.mapped_s
       ~f:(fun acc sector buffer ->
         if is_zero buffer then begin
           let len = Cstruct.len buffer in
-          assert (len mod info.BLOCK.sector_size = 0);
-          let n = Int64.of_int @@ len / info.BLOCK.sector_size in
-          if Int64.add sector n = info.BLOCK.size_sectors then begin
+          assert (len mod info.Mirage_block.sector_size = 0);
+          let n = Int64.of_int @@ len / info.Mirage_block.sector_size in
+          if Int64.add sector n = info.Mirage_block.size_sectors then begin
             (* The last block in the file: this is our last chance to discard *)
             let sector = match acc with None -> sector | Some x -> x in
-            let n = Int64.sub info.BLOCK.size_sectors sector in
+            let n = Int64.sub info.Mirage_block.size_sectors sector in
+            let open Lwt.Infix in
             B.discard x ~sector ~n ()
-            >>*= fun () ->
-            Lwt.return (Ok None)
+            >>= function
+            | Error _ -> Lwt.fail_with "error discarding block"
+            | Ok () -> Lwt.return None
           end else begin
             (* start/extend the current zero region *)
             let acc = match acc with None -> Some sector | Some x -> Some x in
-            Lwt.return (Ok acc)
+            Lwt.return acc
           end
         end else begin
           match acc with
           | Some start ->
             (* we accumulated zeros: discard them now *)
             let n = Int64.sub sector start in
-            B.discard x ~sector:start ~n ()
-            >>*= fun () ->
-            Lwt.return (Ok None)
+            let open Lwt.Infix in
+            begin
+              B.discard x ~sector:start ~n ()
+              >>= function
+              | Error _ -> Lwt.fail_with "error discarding block"
+              | Ok () -> Lwt.return None
+            end
           | None ->
-            Lwt.return (Ok None)
+            Lwt.return None
         end
-      ) None (module B) x
+      ) None x
     >>*= fun _ ->
     return (Ok ()) in
-  Lwt_main.run (t >>= fun r -> return (to_cmdliner_error r))
+  Lwt_main.run (t >>= function
+    | Error `Disconnected -> Lwt.return (`Error(false, "Disconnected"))
+    | Error `Unimplemented -> Lwt.return (`Error(false, "Unimplemented"))
+    | Ok x -> Lwt.return (`Ok x)
+  )
 
 let compact common_options_t unsafe_buffering filename =
   handle_common common_options_t;
@@ -301,14 +305,21 @@ let compact common_options_t unsafe_buffering filename =
     then Printf.printf "I couldn't make the file any smaller. Consider running `discard`.\n"
     else begin
       let smaller_sectors = Int64.sub report.B.old_size report.B.new_size in
-      let sector_size = Int64.of_int info.B.sector_size in
+      let sector_size = Int64.of_int info.Mirage_block.sector_size in
       let smaller_mib = Int64.(div (mul smaller_sectors sector_size) mib) in
       Printf.printf "The file is now %Ld MiB smaller.\n" smaller_mib
     end;
     B.Debug.check_no_overlaps x
-    >>*= fun () ->
-    return (Ok ()) in
-  Lwt_main.run (t >>= fun r -> return (to_cmdliner_error r))
+    >>= function
+    | Error `Disconnected -> Lwt.return (Error `Disconnected)
+    | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+    | Ok () -> Lwt.return (Ok ()) in
+  Lwt_main.run (t >>= function
+    | Error `Disconnected -> Lwt.return (`Error(false, "Disconnected"))
+    | Error `Unimplemented -> Lwt.return (`Error(false, "Unimplemented"))
+    | Error `Is_read_only -> Lwt.return (`Error(false, "Is_read_only"))
+    | Ok x -> Lwt.return (`Ok x)
+  )
 
 let repair unsafe_buffering filename =
   let block =
@@ -326,9 +337,16 @@ let repair unsafe_buffering filename =
     B.rebuild_refcount_table x
     >>*= fun () ->
     B.Debug.check_no_overlaps x
-    >>*= fun () ->
-    return (Ok ()) in
-  Lwt_main.run (t >>= fun r -> return (to_cmdliner_error r))
+    >>= function
+    | Error `Disconnected -> Lwt.return (Error `Disconnected)
+    | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+    | Ok () -> Lwt.return (Ok ()) in
+  Lwt_main.run (t >>= function
+    | Error `Disconnected -> Lwt.return (`Error(false, "Disconnected"))
+    | Error `Unimplemented -> Lwt.return (`Error(false, "Unimplemented"))
+    | Error `Is_read_only -> Lwt.return (`Error(false, "Is_read_only"))
+    | Ok x -> Lwt.return (`Ok x)
+  )
 
 let decode filename output =
   let module B = Qcow.Make(Block)(Time) in
@@ -340,7 +358,7 @@ let decode filename output =
     >>= fun x ->
     B.get_info x
     >>= fun info ->
-    let total_size = Int64.(mul info.B.size_sectors (of_int info.B.sector_size)) in
+    let total_size = Int64.(mul info.Mirage_block.size_sectors (of_int info.Mirage_block.sector_size)) in
     Lwt_unix.openfile output [ Lwt_unix.O_WRONLY; Lwt_unix.O_CREAT ] 0o0644
     >>= fun fd ->
     Lwt_unix.LargeFile.ftruncate fd total_size
@@ -349,10 +367,11 @@ let decode filename output =
     >>= fun () ->
     Block.connect output
     >>= fun y ->
-    Mirage_block.sparse_copy (module B) x (module Block) y
+    let module C = Mirage_block_lwt.Copy(B)(Block) in
+    C.v ~src:x ~dst:y
     >>= function
     | Error _ -> failwith "copy failed"
-    | Ok () -> return (Ok ()) in
+    | Ok () -> return (`Ok ()) in
   Lwt_main.run t
 
 let encode filename output =
@@ -363,7 +382,7 @@ let encode filename output =
     >>= fun raw_input ->
     Block.get_info raw_input
     >>= fun raw_input_info ->
-    let total_size = Int64.(mul raw_input_info.Block.size_sectors (of_int raw_input_info.Block.sector_size)) in
+    let total_size = Int64.(mul raw_input_info.Mirage_block.size_sectors (of_int raw_input_info.Mirage_block.sector_size)) in
     Lwt_unix.openfile output [ Lwt_unix.O_WRONLY; Lwt_unix.O_CREAT ] 0o0644
     >>= fun fd ->
     Lwt_unix.close fd
@@ -374,12 +393,11 @@ let encode filename output =
     >>= function
     | Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" output)
     | Ok qcow_output ->
-
-      Mirage_block.sparse_copy (module Block) raw_input (module B) qcow_output
+      let module C = Mirage_block_lwt.Copy(Block)(B) in
+      C.v ~src:raw_input ~dst:qcow_output
       >>= function
-      | Error (`Msg m) -> failwith m
       | Error _ -> failwith "copy failed"
-      | Ok () -> return (Ok ()) in
+      | Ok () -> return (`Ok ()) in
   Lwt_main.run t
 
 let create size strict_refcounts trace filename =
@@ -398,9 +416,9 @@ let create size strict_refcounts trace filename =
     BLOCK.connect filename
     >>= fun x ->
     B.create x ~size ~lazy_refcounts:(not strict_refcounts) ()
-    >= function
+    >>= function
     | Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" filename)
-    | Ok _ -> return (Ok ()) in
+    | Ok _ -> return (`Ok ()) in
   Lwt_main.run t
 
 let resize trace filename new_size ignore_data_loss =
@@ -419,15 +437,15 @@ let resize trace filename new_size ignore_data_loss =
     B.get_info qcow
     >>= fun info ->
     let data_loss =
-      let existing_size = Int64.(mul info.B.size_sectors (of_int info.B.sector_size)) in
+      let existing_size = Int64.(mul info.Mirage_block.size_sectors (of_int info.Mirage_block.sector_size)) in
       existing_size > new_size in
     if not ignore_data_loss && data_loss
-    then return (Error(false, "Making a disk smaller results in data loss:\ndisk is currently %Ld bytes which is larger than requested %Ld\n.Please see the --ignore-data-loss option."))
+    then return (`Error(false, "Making a disk smaller results in data loss:\ndisk is currently %Ld bytes which is larger than requested %Ld\n.Please see the --ignore-data-loss option."))
     else begin
       B.resize qcow ~new_size ~ignore_data_loss ()
       >>= function
       | Error _ -> failwith (Printf.sprintf "Failed to resize qcow formatted data on %s" filename)
-      | Ok _ -> return (Ok ())
+      | Ok _ -> return (`Ok ())
     end in
   Lwt_main.run t
 
@@ -452,12 +470,17 @@ let mapped filename _format ignore_zeroes =
     B.get_info x
     >>= fun info ->
     Printf.printf "# offset (bytes), length (bytes)\n";
-    Mirage_block.fold_mapped_s ~f:(fun () sector_ofs data ->
-      let sector_bytes = Int64.(mul sector_ofs (of_int info.B.sector_size)) in
+    let module F = Mirage_block_lwt.Fast_fold(B) in
+    F.mapped_s ~f:(fun () sector_ofs data ->
+      let sector_bytes = Int64.(mul sector_ofs (of_int info.Mirage_block.sector_size)) in
       if not ignore_zeroes || not(is_zero data)
       then Printf.printf "%Lx %d\n" sector_bytes (Cstruct.len data);
-      Lwt.return (Ok ())
-    ) () (module B) x
+      Lwt.return_unit
+    ) () x
     >>*= fun () ->
     return (Ok ()) in
-  Lwt_main.run (t >>= fun r -> return (to_cmdliner_error r))
+  Lwt_main.run (t >>= function
+    | Error `Disconnected -> Lwt.return (`Error(false, "Disconnected"))
+    | Error `Unimplemented -> Lwt.return (`Error(false, "Unimplemented"))
+    | Ok x -> Lwt.return (`Ok x)
+  )
