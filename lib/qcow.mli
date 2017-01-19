@@ -18,7 +18,7 @@ module Error = Qcow_error
 module Header = Qcow_header
 
 module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) : sig
-  include V1_LWT.BLOCK
+  include Mirage_block_lwt.S
 
   module Config: sig
     type t = {

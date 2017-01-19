@@ -17,6 +17,7 @@ depends: [
   "mirage-types-lwt" {>= "3.0.0"}
   "lwt"
   "mirage-block" {>= "0.2"}
+  "mirage-block-lwt"
   "mirage-block-unix" {>= "2.1.0"}
   "cmdliner"
   "sexplib"

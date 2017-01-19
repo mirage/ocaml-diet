@@ -57,7 +57,7 @@ module type PRINTABLE = sig
 end
 
 module type RESIZABLE_BLOCK = sig
-  include V1_LWT.BLOCK
+  include Mirage_block_lwt.S
 
   val resize: t -> int64 -> [ `Ok of unit | `Error of error ] Lwt.t
   (** Resize the file to the given number of sectors. *)

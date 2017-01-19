@@ -34,12 +34,20 @@ module Log = (val Logs.src_log src : Logs.LOG)
 module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
 
   type 'a io = 'a Lwt.t
-  type error = B.error
-  type info = {
-    read_write : bool;
-    sector_size : int;
-    size_sectors : int64;
-  }
+
+  (* samoht: `Msg should be the list of all possible exceptions *)
+  type error = [ Mirage_block.error | `Msg of string ]
+
+  (* samoht: `Msg should be the list of all possible exceptions *)
+  type write_error = [ Mirage_block.write_error | `Msg of string ]
+
+  let pp_error ppf = function
+    | #Mirage_block.error as e -> Mirage_block.pp_error ppf e
+    | `Msg s -> Fmt.string ppf s
+
+  let pp_write_error ppf = function
+    | #Mirage_block.write_error as e -> Mirage_block.pp_write_error ppf e
+    | `Msg s -> Fmt.string ppf s
 
   module Config = struct
     type t = {
@@ -81,13 +89,15 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
   let (>>*=) m f =
     let open Lwt in
     m >>= function
-    | `Error x -> Lwt.return (`Error x)
+    | `Error (`Msg s) -> Lwt.return (`Error (`Msg s))
+    | `Error `Unimplemented -> Lwt.return (`Error `Unimplemented)
+    | `Error `Disconnected -> Lwt.return (`Error `Disconnected)
     | `Ok x -> f x
 
   let or_fail_with m =
     let open Lwt in
     m >>= function
-    | `Error (`Unknown s) -> Lwt.fail_with s
+    | `Error (`Msg s) -> Lwt.fail_with s
     | `Error `Unimplemented -> Lwt.fail_with "unimplemented"
     | `Error `Is_read_only -> Lwt.fail_with "is read only"
     | `Error `Disconnected -> Lwt.fail_with "disconnected"
@@ -212,9 +222,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
   type t = {
     mutable h: Header.t;
     base: B.t;
-    base_info: B.info;
+    base_info: Mirage_block.info;
     config: Config.t;
-    info: info;
+    info: Mirage_block.info;
     mutable next_cluster: int64;
     next_cluster_m: Lwt_mutex.t;
     cache: ClusterCache.t;
@@ -242,11 +252,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     let buf_len = Int64.of_int (Cstruct.len buf) in
     let missing_sectors =
       Int64.sub
-        Int64.(add base_sector (div buf_len (of_int base_info.B.sector_size)))
-        base_info.B.size_sectors in
+        Int64.(add base_sector (div buf_len (of_int base_info.Mirage_block.sector_size)))
+        base_info.Mirage_block.size_sectors in
     if missing_sectors > 0L then begin
-      let available_sectors = Int64.(sub (div buf_len (of_int base_info.B.sector_size)) missing_sectors) in
-      let bytes = Int64.(to_int (mul available_sectors (of_int base_info.B.sector_size))) in
+      let available_sectors = Int64.(sub (div buf_len (of_int base_info.Mirage_block.sector_size)) missing_sectors) in
+      let bytes = Int64.(to_int (mul available_sectors (of_int base_info.Mirage_block.sector_size))) in
       B.read base base_sector [ Cstruct.sub buf 0 bytes ]
       >>*= fun () ->
       Cstruct.(memset (shift buf bytes) 0);
@@ -265,7 +275,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     ClusterCache.update t.cache cluster
       (fun buf ->
          match Physical.write v (Cstruct.shift buf within) with
-         | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
+         | Error (`Msg m) -> Lwt.return (`Error (`Msg m))
          | Ok _ -> Lwt.return (`Ok ())
       )
 
@@ -275,7 +285,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     ClusterCache.read t.cache cluster
       (fun buf ->
          match Physical.read (Cstruct.shift buf within) with
-         | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
+         | Error (`Msg m) -> Lwt.return (`Error (`Msg m))
          | Ok (x, _) -> Lwt.return (`Ok x)
       )
 
@@ -291,12 +301,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
       t.h <- h;
       Lwt.return (`Ok ())
     | Result.Error (`Msg m) ->
-      Lwt.return (`Error (`Unknown m))
+      Lwt.return (`Error (`Msg m))
 
   let resize_base base sector_size new_size =
     let sector, within = Physical.to_sector ~sector_size new_size in
     if within <> 0
-    then Lwt.return (`Error (`Unknown (Printf.sprintf "Internal error: attempting to resize to a non-sector multiple %s" (Physical.to_string new_size))))
+    then Lwt.return (`Error (`Msg (Printf.sprintf "Internal error: attempting to resize to a non-sector multiple %s" (Physical.to_string new_size))))
     else begin
       B.resize base sector
       >>*= fun () ->
@@ -384,7 +394,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
         >>*= fun offset ->
         if Physical.to_bytes offset = 0L then begin
           Log.err (fun f -> f "Refcount.decr: cluster %Ld has no refcount cluster allocated" cluster);
-          Lwt.return (`Error (`Unknown (Printf.sprintf "Refcount.decr: cluster %Ld has no refcount cluster allocated" cluster)));
+          Lwt.return (`Error (`Msg (Printf.sprintf "Refcount.decr: cluster %Ld has no refcount cluster allocated" cluster)));
         end else begin
           let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
           ClusterCache.update t.cache cluster
@@ -392,7 +402,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
                let current = Cstruct.BE.get_uint16 buf (2 * within_cluster) in
                if current = 0 then begin
                  Log.err (fun f -> f "Refcount.decr: cluster %Ld already has a refcount of 0" cluster);
-                 Lwt.return (`Error (`Unknown (Printf.sprintf "Refcount.decr: cluster %Ld already has a refcount of 0" cluster)))
+                 Lwt.return (`Error (`Msg (Printf.sprintf "Refcount.decr: cluster %Ld already has a refcount of 0" cluster)))
                end else begin
                  Cstruct.BE.set_uint16 buf (2 * within_cluster) (current - 1);
                  Lwt.return (`Ok ())
@@ -924,7 +934,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
                 let start_last_block = get_last_block map in
 
                 let one_cluster = malloc t.h in
-                let sector_size = Int64.of_int t.base_info.B.sector_size in
+                let sector_size = Int64.of_int t.base_info.Mirage_block.sector_size in
                 let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
                 let sectors_per_cluster = Int64.div (1L <| cluster_bits) sector_size in
 
@@ -997,19 +1007,19 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
                       (fun buf ->
                         (* Read the current value in the referencing cluster as a sanity check *)
                         ( match Physical.read (Cstruct.shift buf ref_cluster_within) with
-                          | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
+                          | Error (`Msg m) -> Lwt.return (`Error (`Msg m))
                           | Ok (old_reference, _) -> Lwt.return (`Ok old_reference) )
                         >>*= fun old_reference ->
                         let old_cluster, _ = Physical.to_cluster ~cluster_bits old_reference in
                         ( if old_cluster <> src then begin
                             Log.err (fun f -> f "Rewriting reference in %Ld (was %Ld) :%d from %Ld to %Ld, old reference actually pointing to %Ld" ref_cluster' ref_cluster ref_cluster_within src dst old_cluster);
-                            Lwt.return (`Error (`Unknown "Failed to rewrite cluster reference"))
+                            Lwt.return (`Error (`Msg "Failed to rewrite cluster reference"))
                           end else Lwt.return (`Ok ()) )
                         >>*= fun () ->
                         (* Preserve any flags but update the pointer *)
                         let new_reference = Physical.make ~is_mutable:(Physical.is_mutable old_reference) ~is_compressed:(Physical.is_compressed old_reference) (dst <| cluster_bits) in
                         match Physical.write new_reference (Cstruct.shift buf ref_cluster_within) with
-                        | Error (`Msg m) -> Lwt.return (`Error (`Unknown m))
+                        | Error (`Msg m) -> Lwt.return (`Error (`Msg m))
                         | Ok _ -> Lwt.return (`Ok ())
                       )
                   ) () moves
@@ -1038,7 +1048,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
                 Lwt.return (`Ok report)
             )
         ) (fun e ->
-          Lwt.return (`Error (`Unknown (Printexc.to_string e)))
+          Lwt.return (`Error (`Msg (Printexc.to_string e)))
         )
         >>= fun result ->
         Lwt.wakeup u result;
@@ -1130,10 +1140,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     } in
     (* We assume the backing device is resized dynamically so the
        size is the address of the next cluster *)
-    let sector_size = base_info.B.sector_size in
+    let sector_size = base_info.Mirage_block.sector_size in
     let cluster_bits = Int32.to_int h.Header.cluster_bits in
     (* The first cluster is allocated after the L1 table *)
-    let size_bytes = Int64.(mul base_info.B.size_sectors (of_int sector_size)) in
+    let size_bytes = Int64.(mul base_info.Mirage_block.size_sectors (of_int sector_size)) in
     let cluster_size = 1L <| cluster_bits in
     (* qemu-img will allocate a cluster by writing only a single sector to the end
        of the file. Therefore we must round up: *)
@@ -1203,7 +1213,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     let open Lwt in
     B.get_info base
     >>= fun base_info ->
-    let sector = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 base_info.B.sector_size in
+    let sector = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 base_info.Mirage_block.sector_size in
     or_fail_with @@ read_base base 0L sector
     >>= fun () ->
       match Header.read sector with
@@ -1225,7 +1235,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
       (fun () ->
         let existing_size = t.h.Header.size in
         if existing_size > requested_size_bytes && not ignore_data_loss
-        then Lwt.return (`Error(`Unknown (Printf.sprintf "Requested resize would result in data loss: requested size = %Ld but current size = %Ld" requested_size_bytes existing_size)))
+        then Lwt.return (`Error(`Msg (Printf.sprintf "Requested resize would result in data loss: requested size = %Ld but current size = %Ld" requested_size_bytes existing_size)))
         else begin
           let size = Int64.round_up requested_size_bytes 512L in
           let l2_tables_required = Header.l2_tables_required ~cluster_bits:t.cluster_bits size in
@@ -1235,7 +1245,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
           let old_max_entries = Int64.round_up (Int64.of_int32 t.h.Header.l1_size) l2_entries_per_cluster in
           let new_max_entries = Int64.round_up l2_tables_required l2_entries_per_cluster in
           if new_max_entries > old_max_entries
-          then Lwt.return (`Error (`Unknown "I don't know how to resize in the case where the L1 table needs new clusters:"))
+          then Lwt.return (`Error (`Msg "I don't know how to resize in the case where the L1 table needs new clusters:"))
           else update_header t { t.h with
             Header.l1_size = Int64.to_int32 l2_tables_required;
             size
@@ -1355,7 +1365,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     >>= fun base_info ->
     (* make will use the file size to figure out where to allocate new clusters
        therefore we must resize the backing device now *)
-    resize_base base base_info.B.sector_size (Physical.make next_free_byte)
+    resize_base base base_info.Mirage_block.sector_size (Physical.make next_free_byte)
     >>*= fun () ->
     make config base h
     >>= fun t ->
@@ -1364,7 +1374,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     (* Write an initial empty refcount table *)
     let cluster = malloc t.h in
     Cstruct.memset cluster 0;
-    B.write base Int64.(div refcount_table_offset (of_int t.base_info.B.sector_size)) [ cluster ]
+    B.write base Int64.(div refcount_table_offset (of_int t.base_info.Mirage_block.sector_size)) [ cluster ]
     >>*= fun () ->
     let rec loop limit i =
       if i = limit
@@ -1377,7 +1387,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) = struct
     loop t.next_cluster 0L
     >>*= fun () ->
     (* Write an initial empty L1 table *)
-    B.write base Int64.(div l1_table_offset (of_int t.base_info.B.sector_size)) [ cluster ]
+    B.write base Int64.(div l1_table_offset (of_int t.base_info.Mirage_block.sector_size)) [ cluster ]
     >>*= fun () ->
     B.flush base
     >>*= fun () ->

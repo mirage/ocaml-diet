@@ -3,8 +3,8 @@ true: warn_error(+1..49-42), warn(A-3-4-41-44)
 
 <lib>: include
 
-<lib/**>: package(astring cmdliner cstruct logs lwt mirage-block mirage-block-unix mirage-types.lwt ppx_sexp_conv ppx_tools ppx_type_conv)
+<lib/**>: package(astring cmdliner cstruct logs lwt mirage-block mirage-block-lwt mirage-block-unix mirage-types.lwt ppx_sexp_conv ppx_tools ppx_type_conv)
 
-<cli/**>: package(astring cmdliner io-page io-page.unix logs logs.fmt lwt mirage-block mirage-block-unix result sexplib)
+<cli/**>: package(astring cmdliner io-page io-page.unix logs logs.fmt lwt mirage-block mirage-block-lwt mirage-block-unix result sexplib)
 
-<lib_test/**>: package(astring ezjsonm logs logs.fmt mirage-block mirage-block-unix mirage-block-ramdisk oUnit ppx_sexp_conv nbd nbd.lwt)
+<lib_test/**>: package(astring ezjsonm logs logs.fmt mirage-block mirage-block-lwt  mirage-block-unix mirage-block-ramdisk oUnit ppx_sexp_conv nbd nbd.lwt)
