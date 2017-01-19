@@ -16,22 +16,22 @@
  *)
 open Lwt.Infix
 
-type 'a error = [ `Ok of 'a | `Error of [ `Msg of string ] ]
+type 'a error = [ Ok of 'a | Error of [ `Msg of string ] ]
 
 module FromBlock = struct
   let (>>=) m f = m >>= function
-    | `Error e -> Lwt.return (`Error (`Msg (Mirage_block.Error.string_of_error e)))
-    | `Ok x -> f x
+    | Error e -> Lwt.return (Error (`Msg (Mirage_block.Error.string_of_error e)))
+    | Ok x -> f x
 end
 
 module Infix = struct
   let (>>=) m f = m >>= function
-    | `Error e -> Lwt.return (`Error e)
-    | `Ok x -> f x
+    | Error e -> Lwt.return (Error e)
+    | Ok x -> f x
 end
 
 module FromResult = struct
   let (>>=) m f = match m with
-    | Result.Error x -> Lwt.return (`Error x)
+    | Result.Error x -> Lwt.return (Error x)
     | Result.Ok x -> f x
 end

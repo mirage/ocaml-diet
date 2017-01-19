@@ -59,10 +59,10 @@ end
 module type RESIZABLE_BLOCK = sig
   include Mirage_block_lwt.S
 
-  val resize: t -> int64 -> [ `Ok of unit | `Error of error ] Lwt.t
+  val resize: t -> int64 -> (unit, write_error) result Lwt.t
   (** Resize the file to the given number of sectors. *)
 
-  val flush : t -> [ `Ok of unit | `Error of error ] io
+  val flush : t -> (unit, write_error) result io
   (** [flush t] flushes any buffers, if the file has been opened in buffered
       mode *)
 end
@@ -71,7 +71,7 @@ module type DEBUG = sig
   type t
   type error
 
-  val check_no_overlaps: t -> [ `Ok of unit | `Error of error ] Lwt.t
+  val check_no_overlaps: t -> (unit, error) result Lwt.t
 
   val set_next_cluster: t -> int64 -> unit
 end

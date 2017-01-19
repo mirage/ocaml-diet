@@ -71,9 +71,9 @@ let size_parser txt =
       | None when not(String.is_suffix ~affix:suffix txt) -> None
       | None -> Some (Int64.(mul multiplier (of_string (prefix suffix txt))))
     ) None sizes with
-    | None -> `Ok (Int64.of_string txt)
-    | Some x -> `Ok x
-  with Failure _ -> `Error ("invalid size: " ^ txt)
+    | None -> Ok (Int64.of_string txt)
+    | Some x -> Ok x
+  with Failure _ -> Error ("invalid size: " ^ txt)
 
 let size_printer ppf v =
   let txt =
@@ -93,9 +93,9 @@ let size =
   Arg.(value & opt size_converter 1024L & info [ "size" ] ~doc)
 
 let output_parser txt = match String.Ascii.lowercase txt with
-  | "text" -> `Ok `Text
-  | "json" -> `Ok `Json
-  | _ -> `Error ("Unknown output format, expected either 'text' or 'json'")
+  | "text" -> Ok `Text
+  | "json" -> Ok `Json
+  | _ -> Error ("Unknown output format, expected either 'text' or 'json'")
 
 let output_printer ppf v =
   Format.fprintf ppf "%s" (match v with
@@ -286,5 +286,5 @@ let cmds = [info_cmd; create_cmd; check_cmd; repair_cmd; encode_cmd; decode_cmd;
 let _ =
   Logs.set_reporter (Logs_fmt.reporter ());
   match Term.eval_choice default_cmd cmds with
-  | `Error _ -> exit 1
+  | Error _ -> exit 1
   | _ -> exit 0

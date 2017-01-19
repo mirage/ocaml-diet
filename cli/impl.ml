@@ -24,8 +24,8 @@ let expect_ok = function
 let (>>*=) m f =
   let open Lwt in
   m >>= function
-  | `Error x -> Lwt.return (`Error x)
-  | `Ok x -> f x
+  | Error x -> Lwt.return (Error x)
+  | Ok x -> f x
 
 let src =
   let src = Logs.Src.create "qcow" ~doc:"qcow2-formatted BLOCK device" in
@@ -35,11 +35,11 @@ let src =
 module Log = (val Logs.src_log src : Logs.LOG)
 
 let to_cmdliner_error = function
-  | `Error `Disconnected -> `Error(false, "Disconnected")
-  | `Error `Is_read_only -> `Error(false, "Is_read_only")
-  | `Error `Unimplemented -> `Error(false, "Unimplemented")
-  | `Error (`Unknown x) -> `Error(false, x)
-  | `Ok x -> `Ok x
+  | Error `Disconnected -> Error(false, "Disconnected")
+  | Error `Is_read_only -> Error(false, "Is_read_only")
+  | Error `Unimplemented -> Error(false, "Unimplemented")
+  | Error (`Unknown x) -> Error(false, x)
+  | Ok x -> Ok x
 
 module Block = struct
   include Block
@@ -85,7 +85,7 @@ end
 
 module UnsafeBlock = struct
   include Block
-  let flush _ = Lwt.return (`Ok ())
+  let flush _ = Lwt.return (Ok ())
 end
 
 let handle_common common_options_t =
@@ -133,7 +133,7 @@ let info filename filter =
       | None -> original_sexp
       | Some str -> Sexplib.Path.get ~str original_sexp in
     Printf.printf "%s\n" (Sexplib.Sexp.to_string_hum sexp);
-    return (`Ok ()) in
+    return (Ok ()) in
   Lwt_main.run t
 
 let write filename sector data trace =
@@ -155,8 +155,8 @@ let write filename sector data trace =
     Cstruct.blit_from_string data 0 buf 0 (String.length data);
     B.write x sector [ buf ]
     >>= function
-    | `Error _ -> failwith "write failed"
-    | `Ok () -> return (`Ok ()) in
+    | Error _ -> failwith "write failed"
+    | Ok () -> return (Ok ()) in
   Lwt_main.run t
 
 let read filename sector length trace =
@@ -177,11 +177,11 @@ let read filename sector length trace =
     let buf = Io_page.(to_cstruct (get npages)) in
     B.read x sector [ buf ]
     >>= function
-    | `Error _ -> failwith "write failed"
-    | `Ok () ->
+    | Error _ -> failwith "write failed"
+    | Ok () ->
       let result = Cstruct.sub buf 0 length in
       Printf.printf "%s%!" (Cstruct.to_string result);
-      return (`Ok ()) in
+      return (Ok ()) in
   Lwt_main.run t
 
 let check filename =
@@ -194,12 +194,12 @@ let check filename =
     >>= fun x ->
     B.check x
     >>= function
-    | `Error _ -> failwith (Printf.sprintf "Qcow consistency check failed on %s" filename)
-    | `Ok x ->
+    | Error _ -> failwith (Printf.sprintf "Qcow consistency check failed on %s" filename)
+    | Ok x ->
       Printf.printf "Qcow file seems intact.\n";
       Printf.printf "Total free blocks: %Ld\n" x.B.free;
       Printf.printf "Total used blocks: %Ld\n" x.B.used;
-      return (`Ok ()) in
+      return (Ok ()) in
   Lwt_main.run t
 
 exception Non_zero
@@ -240,11 +240,11 @@ let discard unsafe_buffering filename =
             let n = Int64.sub info.BLOCK.size_sectors sector in
             B.discard x ~sector ~n ()
             >>*= fun () ->
-            Lwt.return (`Ok None)
+            Lwt.return (Ok None)
           end else begin
             (* start/extend the current zero region *)
             let acc = match acc with None -> Some sector | Some x -> Some x in
-            Lwt.return (`Ok acc)
+            Lwt.return (Ok acc)
           end
         end else begin
           match acc with
@@ -253,13 +253,13 @@ let discard unsafe_buffering filename =
             let n = Int64.sub sector start in
             B.discard x ~sector:start ~n ()
             >>*= fun () ->
-            Lwt.return (`Ok None)
+            Lwt.return (Ok None)
           | None ->
-            Lwt.return (`Ok None)
+            Lwt.return (Ok None)
         end
       ) None (module B) x
     >>*= fun _ ->
-    return (`Ok ()) in
+    return (Ok ()) in
   Lwt_main.run (t >>= fun r -> return (to_cmdliner_error r))
 
 let compact common_options_t unsafe_buffering filename =
@@ -307,7 +307,7 @@ let compact common_options_t unsafe_buffering filename =
     end;
     B.Debug.check_no_overlaps x
     >>*= fun () ->
-    return (`Ok ()) in
+    return (Ok ()) in
   Lwt_main.run (t >>= fun r -> return (to_cmdliner_error r))
 
 let repair unsafe_buffering filename =
@@ -327,7 +327,7 @@ let repair unsafe_buffering filename =
     >>*= fun () ->
     B.Debug.check_no_overlaps x
     >>*= fun () ->
-    return (`Ok ()) in
+    return (Ok ()) in
   Lwt_main.run (t >>= fun r -> return (to_cmdliner_error r))
 
 let decode filename output =
@@ -351,8 +351,8 @@ let decode filename output =
     >>= fun y ->
     Mirage_block.sparse_copy (module B) x (module Block) y
     >>= function
-    | `Error _ -> failwith "copy failed"
-    | `Ok () -> return (`Ok ()) in
+    | Error _ -> failwith "copy failed"
+    | Ok () -> return (Ok ()) in
   Lwt_main.run t
 
 let encode filename output =
@@ -372,14 +372,14 @@ let encode filename output =
     >>= fun raw_output ->
     B.create raw_output ~size:total_size ()
     >>= function
-    | `Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" output)
-    | `Ok qcow_output ->
+    | Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" output)
+    | Ok qcow_output ->
 
       Mirage_block.sparse_copy (module Block) raw_input (module B) qcow_output
       >>= function
-      | `Error (`Msg m) -> failwith m
-      | `Error _ -> failwith "copy failed"
-      | `Ok () -> return (`Ok ()) in
+      | Error (`Msg m) -> failwith m
+      | Error _ -> failwith "copy failed"
+      | Ok () -> return (Ok ()) in
   Lwt_main.run t
 
 let create size strict_refcounts trace filename =
@@ -399,8 +399,8 @@ let create size strict_refcounts trace filename =
     >>= fun x ->
     B.create x ~size ~lazy_refcounts:(not strict_refcounts) ()
     >= function
-    | `Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" filename)
-    | `Ok _ -> return (`Ok ()) in
+    | Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" filename)
+    | Ok _ -> return (Ok ()) in
   Lwt_main.run t
 
 let resize trace filename new_size ignore_data_loss =
@@ -422,12 +422,12 @@ let resize trace filename new_size ignore_data_loss =
       let existing_size = Int64.(mul info.B.size_sectors (of_int info.B.sector_size)) in
       existing_size > new_size in
     if not ignore_data_loss && data_loss
-    then return (`Error(false, "Making a disk smaller results in data loss:\ndisk is currently %Ld bytes which is larger than requested %Ld\n.Please see the --ignore-data-loss option."))
+    then return (Error(false, "Making a disk smaller results in data loss:\ndisk is currently %Ld bytes which is larger than requested %Ld\n.Please see the --ignore-data-loss option."))
     else begin
       B.resize qcow ~new_size ~ignore_data_loss ()
       >>= function
-      | `Error _ -> failwith (Printf.sprintf "Failed to resize qcow formatted data on %s" filename)
-      | `Ok _ -> return (`Ok ())
+      | Error _ -> failwith (Printf.sprintf "Failed to resize qcow formatted data on %s" filename)
+      | Ok _ -> return (Ok ())
     end in
   Lwt_main.run t
 
@@ -456,8 +456,8 @@ let mapped filename _format ignore_zeroes =
       let sector_bytes = Int64.(mul sector_ofs (of_int info.B.sector_size)) in
       if not ignore_zeroes || not(is_zero data)
       then Printf.printf "%Lx %d\n" sector_bytes (Cstruct.len data);
-      Lwt.return (`Ok ())
+      Lwt.return (Ok ())
     ) () (module B) x
     >>*= fun () ->
-    return (`Ok ()) in
+    return (Ok ()) in
   Lwt_main.run (t >>= fun r -> return (to_cmdliner_error r))

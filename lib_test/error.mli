@@ -15,21 +15,21 @@
  *
  *)
 
-type 'a error = [ `Ok of 'a | `Error of [ `Msg of string ] ]
+type 'a error = [ Ok of 'a | Error of [ `Msg of string ] ]
 
 module FromBlock: sig
-  val ( >>= ): [< `Error of Mirage_block.Error.error | `Ok of 'a ] Lwt.t
-    -> ('a -> ([> `Error of [> `Msg of string ] ] as 'b) Lwt.t)
+  val ( >>= ): [< Error of Mirage_block.Error.error | Ok of 'a ] Lwt.t
+    -> ('a -> ([> Error of [> `Msg of string ] ] as 'b) Lwt.t)
     -> 'b Lwt.t
 end
 
 module Infix: sig
-  val ( >>= ) : [< `Error of 'a | `Ok of 'b ] Lwt.t
-    -> ('b -> ([> `Error of 'a ] as 'c) Lwt.t)
+  val ( >>= ) : [< Error of 'a | Ok of 'b ] Lwt.t
+    -> ('b -> ([> Error of 'a ] as 'c) Lwt.t)
     -> 'c Lwt.t
 end
 
 module FromResult: sig
-  val ( >>= ) :   ('a, 'b) Result.result -> ('a -> ([> `Error of 'b ] as 'c) Lwt.t) -> 'c Lwt.t
+  val ( >>= ) :   ('a, 'b) Result.result -> ('a -> ([> Error of 'b ] as 'c) Lwt.t) -> 'c Lwt.t
 
 end

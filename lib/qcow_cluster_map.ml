@@ -98,6 +98,8 @@ let get_last_block t =
   with Not_found ->
     Int64.pred t.first_movable_cluster
 
+open Result
+
 let compact_s f t acc =
   let t = copy t in
   (* The last allocated block. Note if there are no data blocks this will
@@ -107,16 +109,16 @@ let compact_s f t acc =
 
   fold_over_free_s
     (fun cluster acc -> match acc with
-      | `Error e -> Lwt.return (false, `Error e)
-      | `Ok (acc, max_cluster) ->
+      | Error e -> Lwt.return (false, Error e)
+      | Ok (acc, max_cluster) ->
       (* A free block after the last allocated block will not be filled.
          It will be erased from existence when the file is truncated at the
          end. *)
-      if cluster >= max_cluster then Lwt.return (false, `Ok (acc, max_cluster)) else begin
+      if cluster >= max_cluster then Lwt.return (false, Ok (acc, max_cluster)) else begin
         (* find the last physical block *)
         let last_block, rf = ClusterMap.max_binding t.refs in
 
-        if cluster >= last_block then Lwt.return (false, `Ok (acc, last_block)) else begin
+        if cluster >= last_block then Lwt.return (false, Ok (acc, last_block)) else begin
           (* copy last_block into cluster and update rf *)
           let move = { Move.src = last_block; dst = cluster; update = rf } in
           let src_interval = ClusterSet.Interval.make last_block last_block in
@@ -126,11 +128,11 @@ let compact_s f t acc =
           t.refs <- ClusterMap.remove last_block @@ ClusterMap.add cluster rf t.refs;
           f move t acc
           >>= function
-          | `Ok (continue, acc) -> Lwt.return (continue, `Ok (acc, last_block))
-          | `Error e -> Lwt.return (false, `Error e)
+          | Ok (continue, acc) -> Lwt.return (continue, Ok (acc, last_block))
+          | Error e -> Lwt.return (false, Error e)
         end
       end
-    ) t (`Ok (acc, max_cluster))
+    ) t (Ok (acc, max_cluster))
   >>= function
-  | `Ok (result, _) -> Lwt.return (`Ok result)
-  | `Error e -> Lwt.return (`Error e)
+  | Ok (result, _) -> Lwt.return (Ok result)
+  | Error e -> Lwt.return (Error e)

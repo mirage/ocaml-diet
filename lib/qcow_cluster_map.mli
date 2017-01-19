@@ -48,8 +48,8 @@ module Move: sig
       and update the reference in cluster [update] *)
 end
 
-val compact_s: (Move.t -> t -> 'a -> [ `Ok of (bool * 'a) | `Error of 'b ] Lwt.t ) -> t -> 'a
-  -> [ `Ok of 'a | `Error of 'b ] Lwt.t
+val compact_s: (Move.t -> t -> 'a -> ((bool * 'a), 'b) result Lwt.t ) -> t -> 'a
+  -> ('a, 'b) result Lwt.t
 (** [compact_s f t acc] accumulates the result of [f move t'] where [move] is
     the next cluster move needed to perform a compaction of [t] and [t']
     is the state of [t] after the move has been completed. *)

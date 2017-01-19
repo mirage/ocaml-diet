@@ -73,8 +73,8 @@ let random_write_discard_compact nr_clusters stop_after =
       for_each_sector x buf;
       B.write qcow x [ buf ]
       >>= function
-      | `Error _ -> failwith "write"
-      | `Ok () ->
+      | Error _ -> failwith "write"
+      | Ok () ->
         if n > 0L then begin
           let i = SectorSet.Interval.make x y in
           written := SectorSet.add i !written;
@@ -86,8 +86,8 @@ let random_write_discard_compact nr_clusters stop_after =
       let y = Int64.(add x (pred n)) in
       B.discard qcow ~sector:x ~n ()
       >>= function
-      | `Error _ -> failwith "discard"
-      | `Ok () ->
+      | Error _ -> failwith "discard"
+      | Ok () ->
       if n > 0L then begin
         let i = SectorSet.Interval.make x y in
         written := SectorSet.remove i !written;
@@ -111,8 +111,8 @@ let random_write_discard_compact nr_clusters stop_after =
             let buf = malloc ((Int64.to_int n) * info.B.sector_size) in
             B.read qcow x [ buf ]
             >>= function
-            | `Error _ -> failwith "read"
-            | `Ok () ->
+            | Error _ -> failwith "read"
+            | Ok () ->
               let rec for_each_sector x remaining =
                 if Cstruct.len remaining = 0 then () else begin
                   let cluster = Int64.(div x (of_int sectors_per_cluster)) in
@@ -138,7 +138,7 @@ let random_write_discard_compact nr_clusters stop_after =
     Random.init 0;
     let rec loop () =
       incr nr_iterations;
-      if !nr_iterations = stop_after then Lwt.return (`Ok ()) else begin
+      if !nr_iterations = stop_after then Lwt.return (Ok ()) else begin
         let r = Random.int 21 in
         (* A random action: mostly a write or a discard, occasionally a compact *)
         ( if 0 <= r && r < 10 then begin
@@ -177,11 +177,11 @@ let random_write_discard_compact nr_clusters stop_after =
               (fun () ->
                 Lwt.pick [
                   t;
-                  Lwt_unix.sleep 5. >>= fun () -> Lwt.return (`Error (`Unknown "compact timeout"))
+                  Lwt_unix.sleep 5. >>= fun () -> Lwt.return (Error (`Unknown "compact timeout"))
                 ]
                 >>= function
-                | `Error _ -> failwith "compact"
-                | `Ok _report -> Lwt.return_unit
+                | Error _ -> failwith "compact"
+                | Ok _report -> Lwt.return_unit
               ) (function
                 | Lwt.Canceled -> Lwt.return_unit
                 | e -> Lwt.fail e
