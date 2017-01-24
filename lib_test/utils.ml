@@ -111,5 +111,5 @@ let malloc (length: int) =
 
 module Time = struct
   type 'a io = 'a Lwt.t
-  let sleep = Lwt_unix.sleep
+  let sleep_ns ns = Lwt_unix.sleep (Int64.to_float ns /. 1_000_000_000.0)
 end

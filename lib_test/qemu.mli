@@ -18,7 +18,7 @@
    ocaml-qcow images and qemu-produced images. *)
 
 module Block : sig
-  include V1_LWT.BLOCK
+  include Mirage_block_lwt.S
 
   val connect: string -> t Lwt.t
   (** [connect path] connects to a BLOCK device exported by qemu-nbd *)

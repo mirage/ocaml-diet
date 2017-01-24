@@ -81,25 +81,21 @@ end
 
 module Block = struct
 
-  type info = {
-    read_write: bool;
-    sector_size: int;
-    size_sectors: int64;
-  }
-
   type t = {
     server: process;
     client: Nbd_lwt_unix.Client.t;
     s: Lwt_unix.file_descr;
-    info: info;
+    info: Mirage_block.info;
   }
 
   let get_info { info; _ } = Lwt.return info
 
-  type id = unit
   type 'a io = 'a Lwt.t
   type page_aligned_buffer = Cstruct.t
-  type error = Mirage_block.Error.error
+  type error = Nbd_lwt_unix.Client.error
+  type write_error = Nbd_lwt_unix.Client.write_error
+  let pp_error = Nbd_lwt_unix.Client.pp_error
+  let pp_write_error = Nbd_lwt_unix.Client.pp_write_error
 
   let read { client; _ } sector bufs =
     Nbd_lwt_unix.Client.read client (Int64.mul sector 512L) bufs
@@ -132,11 +128,11 @@ module Block = struct
     >>= fun (client, size, flags) ->
     let read_write = not(List.mem Nbd.Protocol.PerExportFlag.Read_only flags) in
     Nbd_lwt_unix.Client.get_info client
-    >>= function { Nbd_lwt_unix.Client.sector_size; _ } ->
+    >>= function { Mirage_block.sector_size; _ } ->
     assert (sector_size == 1);
     let sector_size = 512 in
     let size_sectors = Int64.(div size (of_int sector_size)) in
-    let info = { read_write; sector_size; size_sectors } in
+    let info = { Mirage_block.read_write; sector_size; size_sectors } in
     Lwt.return ({ server; client; s; info })
 
   let create file size =
