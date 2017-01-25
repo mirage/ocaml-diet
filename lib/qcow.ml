@@ -139,6 +139,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   module Int64Set = Set.Make(Int64)
 
   module ClusterCache = struct
+    (** An in-memory cache of metadata clusters used to speed up lookups.
+
+        Cache entries may be `read` or `update`d with a lock held to block
+        concurrent access.
+       *)
+
     type t = {
       read_cluster: int64 -> (Cstruct.t, error) result Lwt.t;
       write_cluster: int64 -> Cstruct.t -> (unit, write_error) result Lwt.t;
@@ -189,6 +195,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         (fun e ->
            unlock cluster >>= fun () ->
            Lwt.fail e)
+
+    (** Read the contents of [cluster] and apply the function [f] with the
+        lock held. *)
     let read t cluster f =
       let open Lwt_error.Infix in
       with_lock t cluster
@@ -204,6 +213,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
            ) >>= fun buf ->
            f buf
         )
+
+    (** Read the contents of [cluster], transform it via function [f] and write
+        back the results, all with the lock held. *)
     let update t cluster f =
       let open Lwt_write_error.Infix in
       with_lock t cluster
@@ -221,6 +233,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
            t.clusters <- Int64Map.add cluster buf t.clusters;
            t.write_cluster cluster buf
         )
+
+    (** Remove a cluster from the cache *)
     let remove t cluster =
       with_lock t cluster
         (fun () ->
