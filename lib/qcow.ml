@@ -273,6 +273,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     mutable stats: Stats.t;
     metadata_lock: Qcow_rwlock.t; (* held to stop the world during compacts and resizes *)
     background_compact_timer: Timer.t;
+    mutable cluster_map: Qcow_cluster_map.t; (* a live map of the allocated storage *)
   }
 
   let get_info t = Lwt.return t.info
@@ -1352,7 +1353,15 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           Log.err (fun f -> f "background compaction returned error");
           Lwt.return_unit
       ) () in
-    let t' = { h; base; info = info'; config; base_info; next_cluster; next_cluster_m; cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock; background_compact_timer } in
+    let cluster_map = Qcow_cluster_map.zero in
+    let t' = {
+      h; base; info = info'; config; base_info; next_cluster; next_cluster_m;
+      cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock;
+      background_compact_timer; cluster_map
+    } in
+    Lwt_error.or_fail_with @@ make_cluster_map t'
+    >>= fun cluster_map ->
+    t'.cluster_map <- cluster_map;
     ( if config.Config.discard && not(lazy_refcounts) then begin
         Log.info (fun f -> f "discard requested and lazy_refcounts is disabled: erasing refcount table and enabling lazy_refcounts");
         Lwt_error.or_fail_with @@ Cluster.Refcount.zero_all t'

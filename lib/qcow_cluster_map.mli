@@ -28,6 +28,9 @@ module ClusterSet = Qcow_bitmap
 
 module ClusterMap: Map.S with type key = cluster
 
+val zero: t
+(** A cluster map for a zero-length disk *)
+
 val make: free:ClusterSet.t -> first_movable_cluster:cluster -> t
 (** Given a set of free clusters, and the first cluster which can be moved
     (i.e. that isn't fixed header), construct an empty cluster map. *)
