@@ -8,6 +8,6 @@ dist: trusty
 env:
   global:
     - EXTRA_REMOTES="https://github.com/mirage/mirage-dev.git"
-    - PACKAGE="qcow-format" OCAML_VERSION=4.02
+    - PACKAGE="qcow-format" OCAML_VERSION=4.03
     - COV_CONF="export TESTS=--enable-tests"
     - PRE_INSTALL_HOOK="sudo apt-get install qemu-utils -y"
