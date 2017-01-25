@@ -274,6 +274,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     metadata_lock: Qcow_rwlock.t; (* held to stop the world during compacts and resizes *)
     background_compact_timer: Timer.t;
     mutable cluster_map: Qcow_cluster_map.t; (* a live map of the allocated storage *)
+    cluster_map_m: Lwt_mutex.t;
   }
 
   let get_info t = Lwt.return t.info
@@ -1354,10 +1355,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           Lwt.return_unit
       ) () in
     let cluster_map = Qcow_cluster_map.zero in
+    let cluster_map_m = Lwt_mutex.create () in
     let t' = {
       h; base; info = info'; config; base_info; next_cluster; next_cluster_m;
       cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock;
-      background_compact_timer; cluster_map
+      background_compact_timer; cluster_map; cluster_map_m
     } in
     Lwt_error.or_fail_with @@ make_cluster_map t'
     >>= fun cluster_map ->
