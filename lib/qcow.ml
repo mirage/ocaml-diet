@@ -173,6 +173,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let set t n v = Physical.write v (Cstruct.shift t (8 * n))
     end
 
+    let erase cluster = Cstruct.memset cluster 0
+
     let make ~read_cluster ~write_cluster ~flush () =
       let m = Lwt_mutex.create () in
       let c = Lwt_condition.create () in
@@ -304,6 +306,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       (** [set t n v] set the [n]th physical address within [t] to [v] *)
 
     end
+
+    val erase: cluster -> unit
+    (** Set the cluster contents to zeroes *)
 
     val to_cstruct: cluster -> Cstruct.t
 
@@ -495,9 +500,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                             let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
                             Metadata.update t.cache cluster
                               (fun c ->
-                                 let buf = Metadata.to_cstruct c in
-                                 Cstruct.memset buf 0;
-                                 Lwt.return (Ok ())
+                                Metadata.erase c;
+                                Lwt.return (Ok ())
                               )
                              >>= fun () ->
                              let open Lwt.Infix in
