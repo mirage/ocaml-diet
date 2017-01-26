@@ -138,7 +138,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   module Int64Map = Map.Make(Int64)
   module Int64Set = Set.Make(Int64)
 
-  module Metadata = struct
+  module Metadata = (struct
     (** An in-memory cache of metadata clusters used to speed up lookups.
 
         Cache entries may be `read` or `update`d with a lock held to block
@@ -154,6 +154,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       m: Lwt_mutex.t;
       c: unit Lwt_condition.t;
     }
+
+    type cluster = Cstruct.t
+
     let make ~read_cluster ~write_cluster ~flush () =
       let m = Lwt_mutex.create () in
       let c = Lwt_condition.create () in
@@ -241,7 +244,32 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           t.clusters <- Int64Map.remove cluster t.clusters;
           Lwt.return (Ok ())
         )
-  end
+  end: sig
+
+    type t
+    (** Qcow metadata: clusters containing references and clusters containing
+        reference counts. *)
+
+    val make:
+      read_cluster:(int64 -> (Cstruct.t, error) result Lwt.t)
+      -> write_cluster:(int64 -> Cstruct.t -> (unit, write_error) result Lwt.t)
+      -> flush:(unit -> (unit, write_error) result Lwt.t)
+      -> unit -> t
+    (** Construct a qcow metadata structure given a set of cluster read/write/flush
+        operations *)
+
+    type cluster = Cstruct.t
+
+    val read: t -> int64 -> (cluster -> ('a, error) result Lwt.t) -> ('a, error) result Lwt.t
+    (** Read the contents of the given cluster and provide them to the given function *)
+
+    val update: t -> int64 -> (cluster -> (unit, write_error) result Lwt.t) -> (unit, write_error) result Lwt.t
+    (** Read the contents of the given cluster, transform them through the given
+        function and write the results back to disk *)
+
+    val remove: t -> int64 -> (unit, error) result Lwt.t
+    (** Remove any in-memory cache associated with the given cluster *)
+  end)
 
   module Stats = struct
 
