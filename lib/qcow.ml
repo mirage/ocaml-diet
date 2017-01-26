@@ -159,6 +159,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let to_cstruct x = x
 
+    module Refcounts = struct
+      type t = cluster
+      let of_cluster x = x
+      let get t n = Cstruct.BE.get_uint16 t (2 * n)
+      let set t n v = Cstruct.BE.set_uint16 t (2 * n) v
+    end
+
     let make ~read_cluster ~write_cluster ~flush () =
       let m = Lwt_mutex.create () in
       let c = Lwt_condition.create () in
@@ -261,6 +268,20 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         operations *)
 
     type cluster
+
+    module Refcounts: sig
+      type t
+      (** A cluster full of 16bit refcounts *)
+
+      val of_cluster: cluster -> t
+      (** Interpret the given cluster as a refcount cluster *)
+
+      val get: t -> int -> int
+      (** [get t n] return the [n]th refcount within [t] *)
+
+      val set: t -> int -> int -> unit
+      (** [set t n v] set the [n]th refcount within [t] to [v] *)
+    end
 
     val to_cstruct: cluster -> Cstruct.t
 
@@ -497,7 +518,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
           Metadata.read t.cache cluster
             (fun c ->
-               Lwt.return (Ok (Cstruct.BE.get_uint16 (Metadata.to_cstruct c) (2 * within_cluster)))
+              let refcounts = Metadata.Refcounts.of_cluster c in
+              Lwt.return (Ok (Metadata.Refcounts.get refcounts within_cluster))
             )
         end
 
@@ -518,15 +540,15 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
           Metadata.update t.cache cluster
             (fun c ->
-               let buf = Metadata.to_cstruct c in
-               let current = Cstruct.BE.get_uint16 buf (2 * within_cluster) in
-               if current = 0 then begin
-                 Log.err (fun f -> f "Refcount.decr: cluster %Ld already has a refcount of 0" cluster);
-                 Lwt.return (Error (`Msg (Printf.sprintf "Refcount.decr: cluster %Ld already has a refcount of 0" cluster)))
-               end else begin
-                 Cstruct.BE.set_uint16 buf (2 * within_cluster) (current - 1);
-                 Lwt.return (Ok ())
-               end
+              let refcounts = Metadata.Refcounts.of_cluster c in
+              let current = Metadata.Refcounts.get refcounts within_cluster in
+              if current = 0 then begin
+                Log.err (fun f -> f "Refcount.decr: cluster %Ld already has a refcount of 0" cluster);
+                Lwt.return (Error (`Msg (Printf.sprintf "Refcount.decr: cluster %Ld already has a refcount of 0" cluster)))
+              end else begin
+                Metadata.Refcounts.set refcounts within_cluster (current - 1);
+                Lwt.return (Ok ())
+              end
             )
         end
 
@@ -670,12 +692,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         let refcount_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
         Metadata.update t.cache refcount_cluster
           (fun c ->
-             let buf = Metadata.to_cstruct c in
-             let current = Cstruct.BE.get_uint16 buf (2 * within_cluster) in
-             (* We don't support refcounts of more than 1 *)
-             assert (current == 0);
-             Cstruct.BE.set_uint16 buf (2 * within_cluster) (current + 1);
-             Lwt.return (Ok ())
+            let refcounts = Metadata.Refcounts.of_cluster c in
+            let current = Metadata.Refcounts.get refcounts within_cluster in
+            (* We don't support refcounts of more than 1 *)
+            assert (current == 0);
+            Metadata.Refcounts.set refcounts within_cluster (current + 1);
+            Lwt.return (Ok ())
           )
         >>= fun () ->
         let open Lwt.Infix in
