@@ -138,7 +138,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   module Int64Map = Map.Make(Int64)
   module Int64Set = Set.Make(Int64)
 
-  module ClusterCache = struct
+  module Metadata = struct
     (** An in-memory cache of metadata clusters used to speed up lookups.
 
         Cache entries may be `read` or `update`d with a lock held to block
@@ -265,7 +265,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     info: Mirage_block.info;
     mutable next_cluster: int64;
     next_cluster_m: Lwt_mutex.t;
-    cache: ClusterCache.t;
+    cache: Metadata.t;
     (* for convenience *)
     cluster_bits: int;
     sector_size: int;
@@ -322,7 +322,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   (* Mmarshal a disk physical address written at a given offset within the disk. *)
   let marshal_physical_address t offset v =
     let cluster, within = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
-    ClusterCache.update t.cache cluster
+    Metadata.update t.cache cluster
       (fun buf ->
          match Physical.write v (Cstruct.shift buf within) with
          | Error (`Msg m) -> Lwt.return (Error (`Msg m))
@@ -332,7 +332,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   (* Unmarshal a disk physical address written at a given offset within the disk. *)
   let unmarshal_physical_address t offset =
     let cluster, within = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
-    ClusterCache.read t.cache cluster
+    Metadata.read t.cache cluster
       (fun buf ->
          match Physical.read (Cstruct.shift buf within) with
          | Error (`Msg m) -> Lwt.return (Error (`Msg m))
@@ -408,7 +408,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
              (* `read` expects the function to be read-only, however we cheat and
                  perform write operations inside the read context *)
              let open Lwt_error.Infix in
-             ClusterCache.read t.cache Int64.(add cluster i)
+             Metadata.read t.cache Int64.(add cluster i)
                (fun buf ->
                   let rec loop i =
                     if i >= (Cstruct.len buf)
@@ -418,7 +418,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                       let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
                       ( if Physical.to_bytes addr <> 0L then begin
                             let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
-                            ClusterCache.update t.cache cluster
+                            Metadata.update t.cache cluster
                               (fun buf ->
                                  Cstruct.memset buf 0;
                                  Lwt.return (Ok ())
@@ -461,7 +461,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         then Lwt.return (Ok 0)
         else begin
           let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
-          ClusterCache.read t.cache cluster
+          Metadata.read t.cache cluster
             (fun buf ->
                Lwt.return (Ok (Cstruct.BE.get_uint16 buf (2 * within_cluster)))
             )
@@ -482,7 +482,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           Lwt.return (Error (`Msg (Printf.sprintf "Refcount.decr: cluster %Ld has no refcount cluster allocated" cluster)));
         end else begin
           let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
-          ClusterCache.update t.cache cluster
+          Metadata.update t.cache cluster
             (fun buf ->
                let current = Cstruct.BE.get_uint16 buf (2 * within_cluster) in
                if current = 0 then begin
@@ -633,7 +633,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             end else Lwt.return (Ok addr) )
         >>= fun offset ->
         let refcount_cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
-        ClusterCache.update t.cache refcount_cluster
+        Metadata.update t.cache refcount_cluster
           (fun buf ->
              let current = Cstruct.BE.get_uint16 buf (2 * within_cluster) in
              (* We don't support refcounts of more than 1 *)
@@ -688,7 +688,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           let l1_index_offset = Physical.shift l1_table_start (Int64.mul 8L l1_index) in
 
           let cluster, within = Physical.to_cluster ~cluster_bits:t.cluster_bits l1_index_offset in
-          ClusterCache.read t.cache cluster
+          Metadata.read t.cache cluster
             (fun buf ->
                let rec loop l1_index i : [ `Skip of int | `GotOne of int64 ]=
                  if i >= (Cstruct.len buf) then `Skip (i / 8) else begin
@@ -957,7 +957,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       then Lwt.return (Ok acc)
       else begin
         let refcount_cluster = Int64.(add refcount_start_cluster i) in
-        ClusterCache.read t.cache refcount_cluster
+        Metadata.read t.cache refcount_cluster
           (fun buf ->
             let rec loop acc i =
               if i >= (Cstruct.len buf)
@@ -981,7 +981,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       if i >= l1_table_clusters
       then Lwt.return (Ok acc)
       else begin
-        ClusterCache.read t.cache l1_table_cluster
+        Metadata.read t.cache l1_table_cluster
           (fun l1 ->
             Lwt.return (Ok l1)
           )
@@ -993,7 +993,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             let l2_table_cluster = parse (Cstruct.BE.get_uint64 l1 i) in
             if l2_table_cluster <> 0L then begin
               let acc = mark acc (l1_table_cluster, i) l2_table_cluster in
-              ClusterCache.read t.cache l2_table_cluster
+              Metadata.read t.cache l2_table_cluster
                 (fun l2 ->
                   Lwt.return (Ok l2)
                 )
@@ -1117,7 +1117,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
                     (* If these were metadata blocks (e.g. L2 table entries) then they might
                        be cached. Remove the overwritten block's cache entry just in case. *)
-                    ClusterCache.remove t.cache dst
+                    Metadata.remove t.cache dst
                     >>= fun () ->
                     update_progress ();
                     let substitutions = ClusterMap.add src dst substitutions in
@@ -1155,7 +1155,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                       if ClusterMap.mem ref_cluster substitutions
                       then ClusterMap.find ref_cluster substitutions
                       else ref_cluster in
-                    ClusterCache.update t.cache ref_cluster'
+                    Metadata.update t.cache ref_cluster'
                       (fun buf ->
                         (* Read the current value in the referencing cluster as a sanity check *)
                         ( match Physical.read (Cstruct.shift buf ref_cluster_within) with
@@ -1333,7 +1333,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () -> Lwt.return (Ok ()) in
-    let cache = ClusterCache.make ~read_cluster ~write_cluster ~flush () in
+    let cache = Metadata.make ~read_cluster ~write_cluster ~flush () in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true; _ } -> true | _ -> false in
     let stats = Stats.zero in
     let metadata_lock = Qcow_rwlock.make () in
@@ -1618,7 +1618,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             Cluster.Refcount.incr t (Int64.add cluster i)
             >>= fun () ->
             (* If any of the table entries point to a block, increase its refcount too *)
-            ClusterCache.read t.cache Int64.(add cluster i)
+            Metadata.read t.cache Int64.(add cluster i)
               (fun buf ->
                 Lwt.return (Ok buf)
               )
@@ -1664,7 +1664,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             Cluster.Refcount.incr t (Int64.add l1_table_cluster i)
             >>= fun () ->
             (* Increment clusters of L1 tables *)
-            ClusterCache.read t.cache Int64.(add l1_table_cluster i)
+            Metadata.read t.cache Int64.(add l1_table_cluster i)
               (fun buf ->
                 Lwt.return (Ok buf)
               )
