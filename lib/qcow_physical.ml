@@ -16,14 +16,11 @@
  *)
 
 open Sexplib.Std
-open Result
 
 let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right_logical
 
 type t = int64 (* the encoded form on the disk *)
-
-let sizeof _ = 8
 
 let make ?(is_mutable = true) ?(is_compressed = false) x =
   let bytes = (x <| 2) |> 2 in
@@ -56,12 +53,10 @@ let to_cluster ~cluster_bits t =
   Int64.(to_int (rem x (1L <| cluster_bits)))
 
 let read rest =
-  let x = Cstruct.BE.get_uint64 rest 0 in
-  Ok(x, Cstruct.shift rest 8)
+  Cstruct.BE.get_uint64 rest 0
 
 let write t rest =
-  Cstruct.BE.set_uint64 rest 0 t;
-  Ok(Cstruct.shift rest 8)
+  Cstruct.BE.set_uint64 rest 0 t
 
 type _t = {
   bytes: int64;

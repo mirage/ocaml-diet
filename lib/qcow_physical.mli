@@ -46,5 +46,10 @@ val to_bytes: t -> int64
 val to_cluster: cluster_bits:int -> t -> int64 * int
 (** Return the cluster offset on disk, plus a remainder within the cluster *)
 
+val read: Cstruct.t -> t
+(** Read a [t] from the given buffer *)
+
+val write: t -> Cstruct.t -> unit
+(** Write [t] to the buffer *)
+
 include Qcow_s.PRINTABLE with type t := t
-include Qcow_s.SERIALISABLE with type t := t

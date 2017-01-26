@@ -166,6 +166,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let set t n v = Cstruct.BE.set_uint16 t (2 * n) v
     end
 
+    module Physical = struct
+      type t = cluster
+      let of_cluster x = x
+      let get t n = Physical.read (Cstruct.shift t (8 * n))
+      let set t n v = Physical.write v (Cstruct.shift t (8 * n))
+    end
+
     let make ~read_cluster ~write_cluster ~flush () =
       let m = Lwt_mutex.create () in
       let c = Lwt_condition.create () in
@@ -283,6 +290,21 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       (** [set t n v] set the [n]th refcount within [t] to [v] *)
     end
 
+    module Physical: sig
+      type t
+      (** A cluster full of 64 bit cluster pointers *)
+
+      val of_cluster: cluster -> t
+      (** Interpret the given cluster as a cluster of 64 bit pointers *)
+
+      val get: t -> int -> Physical.t
+      (** [get t n] return the [n]th physical address within [t] *)
+
+      val set: t -> int -> Physical.t -> unit
+      (** [set t n v] set the [n]th physical address within [t] to [v] *)
+
+    end
+
     val to_cstruct: cluster -> Cstruct.t
 
     val read: t -> int64 -> (cluster -> ('a, error) result Lwt.t) -> ('a, error) result Lwt.t
@@ -377,9 +399,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster, within = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
     Metadata.update t.cache cluster
       (fun c ->
-         match Physical.write v (Cstruct.shift (Metadata.to_cstruct c) within) with
-         | Error (`Msg m) -> Lwt.return (Error (`Msg m))
-         | Ok _ -> Lwt.return (Ok ())
+        let addresses = Metadata.Physical.of_cluster c in
+        Metadata.Physical.set addresses (within / 8) v;
+        Lwt.return (Ok ())
       )
 
   (* Unmarshal a disk physical address written at a given offset within the disk. *)
@@ -387,9 +409,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster, within = Physical.to_cluster ~cluster_bits:t.cluster_bits offset in
     Metadata.read t.cache cluster
       (fun c ->
-         match Physical.read (Cstruct.shift (Metadata.to_cstruct c) within) with
-         | Error (`Msg m) -> Lwt.return (Error (`Msg m))
-         | Ok (x, _) -> Lwt.return (Ok x)
+        let addresses = Metadata.Physical.of_cluster c in
+        Lwt.return (Ok (Metadata.Physical.get addresses (within / 8)))
       )
 
   let update_header t h =
@@ -1219,12 +1240,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                       else ref_cluster in
                     Metadata.update t.cache ref_cluster'
                       (fun c ->
-                        let buf = Metadata.to_cstruct c in
+                        let addresses = Metadata.Physical.of_cluster c in
                         (* Read the current value in the referencing cluster as a sanity check *)
-                        ( match Physical.read (Cstruct.shift buf ref_cluster_within) with
-                          | Error (`Msg m) -> Lwt.return (Error (`Msg m))
-                          | Ok (old_reference, _) -> Lwt.return (Ok old_reference) )
-                        >>= fun old_reference ->
+                        let old_reference = Metadata.Physical.get addresses (ref_cluster_within / 8) in
                         let old_cluster, _ = Physical.to_cluster ~cluster_bits old_reference in
                         ( if old_cluster <> src then begin
                             Log.err (fun f -> f "Rewriting reference in %Ld (was %Ld) :%d from %Ld to %Ld, old reference actually pointing to %Ld" ref_cluster' ref_cluster ref_cluster_within src dst old_cluster);
@@ -1233,9 +1251,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                         >>= fun () ->
                         (* Preserve any flags but update the pointer *)
                         let new_reference = Physical.make ~is_mutable:(Physical.is_mutable old_reference) ~is_compressed:(Physical.is_compressed old_reference) (dst <| cluster_bits) in
-                        match Physical.write new_reference (Cstruct.shift buf ref_cluster_within) with
-                        | Error (`Msg m) -> Lwt.return (Error (`Msg m))
-                        | Ok _ -> Lwt.return (Ok ())
+                        Metadata.Physical.set addresses (ref_cluster_within / 8) new_reference;
+                        Lwt.return (Ok ())
                       )
                   ) () moves
                 >>= fun () ->
