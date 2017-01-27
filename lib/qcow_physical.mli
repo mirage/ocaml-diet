@@ -40,8 +40,14 @@ val make: ?is_mutable:bool -> ?is_compressed:bool -> int64 -> t
     which meand there are no snapshots implying that directly writing to this
     		offset is ok; and [is_compressed = false]. *)
 
+val add: t -> int64 -> t
+(** Add a byte offset to a physical address *)
+
 val to_sector: sector_size:int -> t -> int64 * int
 (** Return the sector on disk, plus a remainder within the sector *)
+
+val sector: sector_size:int -> t -> int64
+(** Return the sector on disk containing the address *)
 
 val to_bytes: t -> int64
 (** Return the byte offset on disk *)

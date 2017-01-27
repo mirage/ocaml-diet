@@ -40,6 +40,10 @@ let shift t bytes =
   let is_compressed = is_compressed t in
   make ~is_mutable ~is_compressed (Int64.add bytes' bytes)
 
+let sector ~sector_size t =
+  let x = (t <| 2) |> 2 in
+  Int64.(div x (of_int sector_size))
+
 (* Take an offset and round it down to the nearest physical sector, returning
    the sector number and an offset within the sector *)
 let to_sector ~sector_size t =
@@ -48,6 +52,8 @@ let to_sector ~sector_size t =
   Int64.(to_int (rem x (of_int sector_size)))
 
 let to_bytes t = (t <| 2) |> 2
+
+let add = Int64.add
 
 let cluster ~cluster_bits t =
   let x = (t <| 2) |> 2 in

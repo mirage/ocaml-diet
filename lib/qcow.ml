@@ -480,7 +480,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
       let zero_all t =
          (* Zero all clusters allocated in the refcount table *)
-         let cluster = Physical.cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
+         let cluster = Physical.cluster ~cluster_bits:t.cluster_bits t.h.Header.refcount_table_offset in
          let rec loop i =
            if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
            then Lwt.return (Ok ())
@@ -535,7 +535,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         let within_table = Int64.(div cluster (Header.refcounts_per_cluster t.h)) in
         let within_cluster = Int64.(to_int (rem cluster (Header.refcounts_per_cluster t.h))) in
 
-        let offset = Physical.make Int64.(add t.h.Header.refcount_table_offset (mul 8L within_table)) in
+        let offset = Physical.add t.h.Header.refcount_table_offset Int64.(mul 8L within_table) in
         let open Lwt_error.Infix in
         unmarshal_physical_address t offset
         >>= fun offset ->
@@ -556,7 +556,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         let within_table = Int64.(div cluster (Header.refcounts_per_cluster t.h)) in
         let within_cluster = Int64.(to_int (rem cluster (Header.refcounts_per_cluster t.h))) in
 
-        let offset = Physical.make Int64.(add t.h.Header.refcount_table_offset (mul 8L within_table)) in
+        let offset = Physical.add t.h.Header.refcount_table_offset Int64.(mul 8L within_table) in
         let open Lwt_write_error.Infix in
         unmarshal_physical_address t offset
         >>= fun offset ->
@@ -608,7 +608,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 if i >= Int32.to_int t.h.Header.refcount_table_clusters
                 then Lwt.return (Ok ())
                 else begin
-                  let physical = Physical.make Int64.(add t.h.Header.refcount_table_offset (of_int (i lsl t.cluster_bits))) in
+                  let physical = Physical.add t.h.Header.refcount_table_offset Int64.(of_int (i lsl t.cluster_bits)) in
                   let sector, _ = Physical.to_sector ~sector_size:t.sector_size physical in
                   let open Lwt.Infix in
                   read_base t.base sector buf
@@ -650,7 +650,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               loop (Int64.of_int32 t.h.Header.refcount_table_clusters)
               >>= fun () ->
               let h' = { t.h with
-                         Header.refcount_table_offset = start <| t.cluster_bits;
+                         Header.refcount_table_offset = Physical.make ~is_mutable:false (start <| t.cluster_bits);
                          refcount_table_clusters = Int64.to_int32 needed;
                        } in
               update_header t h'
@@ -670,7 +670,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           end )
         >>= fun () ->
 
-        let offset = Physical.make Int64.(add t.h.Header.refcount_table_offset (mul 8L within_table)) in
+        let offset = Physical.add t.h.Header.refcount_table_offset Int64.(mul 8L within_table) in
         unmarshal_physical_address t offset
         >>= fun addr ->
         ( if Physical.to_bytes addr = 0L then begin
@@ -1014,7 +1014,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       end;
       add m rf cluster;
       m in
-    let refcount_start_cluster = Physical.cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
+    let refcount_start_cluster = Physical.cluster ~cluster_bits:t.cluster_bits t.h.Header.refcount_table_offset in
     let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
     let l1_table_start_cluster = Physical.cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.l1_table_offset) in
     let l1_table_clusters = Int64.(div (round_up (of_int32 t.h.Header.l1_size) int64s_per_cluster) int64s_per_cluster) in
@@ -1606,7 +1606,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let crypt_method = `None in
     (* qemu-img places the refcount table next in the file and only
        qemu-img creates a tiny refcount table and grows it on demand *)
-    let refcount_table_offset = cluster_size in
+    let refcount_table_offset = Physical.make ~is_mutable:false cluster_size in
     let refcount_table_clusters = 1L in
 
     (* qemu-img places the L1 table after the refcount table *)
@@ -1654,7 +1654,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster = malloc t.h in
     Cstruct.memset cluster 0;
     let open Lwt.Infix in
-    B.write base Int64.(div refcount_table_offset (of_int t.base_info.Mirage_block.sector_size)) [ cluster ]
+    B.write base (Physical.sector ~sector_size:t.base_info.Mirage_block.sector_size refcount_table_offset) [ cluster ]
     >>= function
     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
@@ -1697,7 +1697,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Log.info (fun f -> f "Zeroing existing refcount table");
         Cluster.Refcount.zero_all t
         >>= fun () ->
-        let cluster = Physical.cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.refcount_table_offset) in
+        let cluster = Physical.cluster ~cluster_bits:t.cluster_bits t.h.Header.refcount_table_offset in
         let rec loop i =
           if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
           then Lwt.return (Ok ())
@@ -1818,8 +1818,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let l1_table_offset = Physical.make t.h.Header.l1_table_offset in
       let within = Physical.within_cluster ~cluster_bits:t.cluster_bits l1_table_offset in
       assert (within = 0);
-      let refcount_table_offset = Physical.make t.h.Header.refcount_table_offset in
-      let within = Physical.within_cluster ~cluster_bits:t.cluster_bits refcount_table_offset in
+      let within = Physical.within_cluster ~cluster_bits:t.cluster_bits t.h.Header.refcount_table_offset in
       assert (within = 0);
       Lwt.return (Ok ())
 

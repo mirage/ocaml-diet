@@ -16,6 +16,7 @@
  *)
 module Error = Qcow_error
 module Header = Qcow_header
+module Physical = Qcow_physical
 
 module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
   include Mirage_block_lwt.S
