@@ -171,6 +171,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let of_cluster x = x
       let get t n = Physical.read (Cstruct.shift t (8 * n))
       let set t n v = Physical.write v (Cstruct.shift t (8 * n))
+      let len t = Cstruct.len t / 8
     end
 
     let erase cluster = Cstruct.memset cluster 0
@@ -305,6 +306,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       val set: t -> int -> Physical.t -> unit
       (** [set t n v] set the [n]th physical address within [t] to [v] *)
 
+      val len: t -> int
+      (** [len t] returns the number of physical addresses within [t] *)
     end
 
     val erase: cluster -> unit
@@ -489,14 +492,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
              let open Lwt_error.Infix in
              Metadata.read t.cache Int64.(add cluster i)
                (fun c ->
-                  let buf = Metadata.to_cstruct c in
-                  let rec loop i =
-                    if i >= (Cstruct.len buf)
-                    then Lwt.return (Ok ())
-                    else begin
-                      let open Lwt_write_error.Infix in
-                      let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
-                      ( if Physical.to_bytes addr <> 0L then begin
+                 let addresses = Metadata.Physical.of_cluster c in
+                 let rec loop i =
+                   if i >= Metadata.Physical.len addresses
+                   then Lwt.return (Ok ())
+                   else begin
+                     let open Lwt_write_error.Infix in
+                     let addr = Metadata.Physical.get addresses i in
+                     ( if Physical.to_bytes addr <> 0L then begin
                             let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
                             Metadata.update t.cache cluster
                               (fun c ->
@@ -511,9 +514,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                              | Error `Disconnected -> Lwt.return (Error `Disconnected)
                              | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
                              | Ok () -> Lwt.return (Ok ())
-                          end else Lwt.return (Ok ()) )
+                          end else Lwt.return (Ok ())
+                      )
                       >>= fun () ->
-                      loop (8 + i)
+                      loop (i + 1)
                     end in
                   let open Lwt.Infix in
                   loop 0
