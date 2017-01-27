@@ -1707,16 +1707,16 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             (* If any of the table entries point to a block, increase its refcount too *)
             Metadata.read t.cache Int64.(add cluster i)
               (fun c ->
-                let buf = Metadata.to_cstruct c in
-                Lwt.return (Ok buf)
+                let addresses = Metadata.Physical.of_cluster c in
+                Lwt.return (Ok addresses)
               )
-            >>= fun buf ->
+            >>= fun addresses ->
             let rec inner i =
-              if i >= (Cstruct.len buf)
+              if i >= (Metadata.Physical.len addresses)
               then Lwt.return (Ok ())
               else begin
-                let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
-                ( if Physical.to_bytes addr <> 0L then begin
+                let addr = Metadata.Physical.get addresses i in
+                ( if addr <> Physical.unmapped then begin
                     let cluster', _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
                     Log.debug (fun f -> f "Refcount cluster %Ld has reference to cluster %Ld" cluster cluster');
                     (* It might have been incremented already by a previous `incr` *)
@@ -1728,7 +1728,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                       Lwt.return (Ok ())
                   end else Lwt.return (Ok ()) )
                 >>= fun () ->
-                inner (8 + i)
+                inner (i + 1)
               end in
             inner 0
             >>= fun () ->
