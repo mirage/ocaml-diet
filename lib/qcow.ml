@@ -915,7 +915,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
             t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
             let data_cluster = Physical.cluster ~cluster_bits:t.cluster_bits data_offset in
-            write_l2_table t l2_offset a.Virtual.l2_index (Physical.make 0L)
+            write_l2_table t l2_offset a.Virtual.l2_index Physical.unmapped
             >>= fun () ->
             Refcount.decr t data_cluster
           end
