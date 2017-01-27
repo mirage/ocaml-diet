@@ -764,7 +764,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       Lwt.return (Ok l2_table_offset)
 
     (* Find the first l1_index whose values satisfies [f] *)
-    let find_mapped_l1_table t l1_index f =
+    let find_mapped_l1_table t l1_index =
       let open Lwt_error.Infix in
       (* Read l1[l1_index] as a 64-bit offset *)
       let rec loop l1_index =
@@ -777,14 +777,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           let cluster, within = Physical.to_cluster ~cluster_bits:t.cluster_bits l1_index_offset in
           Metadata.read t.cache cluster
             (fun c ->
-               let buf = Metadata.to_cstruct c in
-               let rec loop l1_index i : [ `Skip of int | `GotOne of int64 ]=
-                 if i >= (Cstruct.len buf) then `Skip (i / 8) else begin
-                   if f (Cstruct.BE.get_uint64 buf i)
-                   then `GotOne l1_index
-                   else loop (Int64.succ l1_index) (i + 8)
-                 end in
-               Lwt.return (Ok (loop l1_index within)))
+              let addresses = Metadata.Physical.of_cluster c in
+              let rec loop l1_index i : [ `Skip of int | `GotOne of int64 ]=
+                if i >= (Metadata.Physical.len addresses) then `Skip i else begin
+                  if Metadata.Physical.get addresses i <> Physical.unmapped
+                  then `GotOne l1_index
+                  else loop (Int64.succ l1_index) (i + 1)
+                end in
+               Lwt.return (Ok (loop l1_index (within / 8))))
           >>= function
           | `GotOne l1_index' ->
             Lwt.return (Ok (Some l1_index'))
@@ -1310,7 +1310,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       if a.Virtual.l1_index >= Int64.of_int32 t.h.Header.l1_size
       then Lwt.return (Ok Int64.(mul t.info.Mirage_block.size_sectors (of_int t.sector_size)))
       else
-        Cluster.find_mapped_l1_table t a.Virtual.l1_index (fun x -> x <> 0L)
+        Cluster.find_mapped_l1_table t a.Virtual.l1_index
         >>= function
         | None -> Lwt.return (Ok Int64.(mul t.info.Mirage_block.size_sectors (of_int t.sector_size)))
         | Some l1_index ->

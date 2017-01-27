@@ -29,6 +29,9 @@ val is_mutable: t -> bool
 (** True if the offset is safe to mutate directly (i.e. is not referenced
     by a snapshot *)
 
+val unmapped: t
+(** An unmapped physical address *)
+
 val shift: t -> int64 -> t
 (** [shift t bytes] adds [bytes] to t, maintaining other properties *)
 
