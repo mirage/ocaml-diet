@@ -1081,7 +1081,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           else begin
             let l2_table_cluster = parse (Metadata.Physical.get l1 i) in
             if l2_table_cluster <> 0L then begin
-              let acc = mark acc (l1_table_cluster, i * 8) l2_table_cluster in
+              let acc = mark acc (l1_table_cluster, i) l2_table_cluster in
               Metadata.read t.cache l2_table_cluster
                 (fun c ->
                   let l2 = Metadata.Physical.of_cluster c in
@@ -1093,7 +1093,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 then Lwt.return (Ok acc)
                 else begin
                   let cluster = parse (Metadata.Physical.get l2 i) in
-                  let acc = mark acc (l2_table_cluster, i * 8) cluster in
+                  let acc = mark acc (l2_table_cluster, i) cluster in
                   data_iter acc (i + 1)
                 end in
               data_iter acc 0
@@ -1249,7 +1249,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                       (fun c ->
                         let addresses = Metadata.Physical.of_cluster c in
                         (* Read the current value in the referencing cluster as a sanity check *)
-                        let old_reference = Metadata.Physical.get addresses (ref_cluster_within / 8) in
+                        let old_reference = Metadata.Physical.get addresses ref_cluster_within in
                         let old_cluster = Physical.cluster ~cluster_bits old_reference in
                         ( if old_cluster <> src then begin
                             Log.err (fun f -> f "Rewriting reference in %Ld (was %Ld) :%d from %Ld to %Ld, old reference actually pointing to %Ld" ref_cluster' ref_cluster ref_cluster_within src dst old_cluster);
@@ -1258,7 +1258,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                         >>= fun () ->
                         (* Preserve any flags but update the pointer *)
                         let new_reference = Physical.make ~is_mutable:(Physical.is_mutable old_reference) ~is_compressed:(Physical.is_compressed old_reference) (dst <| cluster_bits) in
-                        Metadata.Physical.set addresses (ref_cluster_within / 8) new_reference;
+                        Metadata.Physical.set addresses ref_cluster_within new_reference;
                         Lwt.return (Ok ())
                       )
                   ) () moves

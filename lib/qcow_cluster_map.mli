@@ -22,7 +22,7 @@ type t
 
 type cluster = int64
 
-type reference = cluster * int (* cluster * offset within cluster *)
+type reference = cluster * int (* cluster * index within cluster *)
 
 module ClusterSet = Qcow_bitmap
 
