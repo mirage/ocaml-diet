@@ -157,8 +157,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     type cluster = Cstruct.t
 
-    let to_cstruct x = x
-
     module Refcounts = struct
       type t = cluster
       let of_cluster x = x
@@ -312,8 +310,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     val erase: cluster -> unit
     (** Set the cluster contents to zeroes *)
-
-    val to_cstruct: cluster -> Cstruct.t
 
     val read: t -> int64 -> (cluster -> ('a, error) result Lwt.t) -> ('a, error) result Lwt.t
     (** Read the contents of the given cluster and provide them to the given function *)
@@ -1754,22 +1750,22 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             (* Increment clusters of L1 tables *)
             Metadata.read t.cache Int64.(add l1_table_cluster i)
               (fun c ->
-                let buf = Metadata.to_cstruct c in
-                Lwt.return (Ok buf)
+                let addresses = Metadata.Physical.of_cluster c in
+                Lwt.return (Ok addresses)
               )
-            >>= fun buf ->
+            >>= fun addresses ->
             let rec inner i =
-              if i >= (Cstruct.len buf)
+              if i >= (Metadata.Physical.len addresses)
               then Lwt.return (Ok ())
               else begin
-                let addr = Physical.make (Cstruct.BE.get_uint64 buf i) in
-                ( if Physical.to_bytes addr <> 0L then begin
+                let addr = Metadata.Physical.get addresses i in
+                ( if addr <> Physical.unmapped then begin
                     let cluster', _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
                     Log.debug (fun f -> f "L1 cluster %Ld has reference to L2 cluster %Ld" cluster cluster');
                     Cluster.Refcount.incr t cluster'
                   end else Lwt.return (Ok ()) )
                 >>= fun () ->
-                inner (8 + i)
+                inner (i + 1)
               end in
             inner 0
             >>= fun () ->
