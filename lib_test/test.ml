@@ -89,7 +89,7 @@ let create_1K () =
   let expected = {
     Qcow.Header.version = `Three; backing_file_offset = 0L;
     backing_file_size = 0l; cluster_bits = 16l; size = 1024L;
-    crypt_method = `None; l1_size = 1l; l1_table_offset = 131072L;
+    crypt_method = `None; l1_size = 1l; l1_table_offset = Qcow.Physical.make ~is_mutable:false 131072L;
     refcount_table_offset = Qcow.Physical.make ~is_mutable:false 65536L; refcount_table_clusters = 1l;
     nb_snapshots = 0l; snapshots_offset = 0L; additional;
     extensions = [ `Feature_name_table Qcow.Header.Feature.understood ];
@@ -103,7 +103,7 @@ let create_1M () =
   let expected = {
     Qcow.Header.version = `Three; backing_file_offset = 0L;
     backing_file_size = 0l; cluster_bits = 16l; size = 1048576L;
-    crypt_method = `None; l1_size = 1l; l1_table_offset = 131072L;
+    crypt_method = `None; l1_size = 1l; l1_table_offset = Qcow.Physical.make ~is_mutable:false 131072L;
     refcount_table_offset = Qcow.Physical.make ~is_mutable:false 65536L; refcount_table_clusters = 1l;
     nb_snapshots = 0l; snapshots_offset = 0L; additional;
     extensions = [ `Feature_name_table Qcow.Header.Feature.understood ];
@@ -117,7 +117,7 @@ let create_1P () =
   let expected = {
     Qcow.Header.version = `Three; backing_file_offset = 0L;
     backing_file_size = 0l; cluster_bits = 16l; size = pib;
-    crypt_method = `None; l1_size = 2097152l; l1_table_offset = 131072L;
+    crypt_method = `None; l1_size = 2097152l; l1_table_offset = Qcow.Physical.make ~is_mutable:false 131072L;
     refcount_table_offset = Qcow.Physical.make ~is_mutable:false 65536L; refcount_table_clusters = 1l;
     nb_snapshots = 0l; snapshots_offset = 0L; additional;
     extensions = [ `Feature_name_table Qcow.Header.Feature.understood ];

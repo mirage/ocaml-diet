@@ -754,8 +754,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let read_l1_table t l1_index =
       (* Read l1[l1_index] as a 64-bit offset *)
-      let l1_table_start = Physical.make t.h.Header.l1_table_offset in
-      let l1_index_offset = Physical.shift l1_table_start (Int64.mul 8L l1_index) in
+      let l1_index_offset = Physical.shift t.h.Header.l1_table_offset (Int64.mul 8L l1_index) in
       let open Lwt_error.Infix in
       unmarshal_physical_address t l1_index_offset
       >>= fun l2_table_offset ->
@@ -769,8 +768,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         if l1_index >= Int64.of_int32 t.h.Header.l1_size
         then Lwt.return (Ok None)
         else begin
-          let l1_table_start = Physical.make t.h.Header.l1_table_offset in
-          let l1_index_offset = Physical.shift l1_table_start (Int64.mul 8L l1_index) in
+          let l1_index_offset = Physical.shift t.h.Header.l1_table_offset (Int64.mul 8L l1_index) in
 
           let cluster = Physical.cluster ~cluster_bits:t.cluster_bits l1_index_offset in
 
@@ -796,8 +794,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let write_l1_table t l1_index l2_table_offset =
       let open Lwt_write_error.Infix in
       (* Read l1[l1_index] as a 64-bit offset *)
-      let l1_table_start = Physical.make t.h.Header.l1_table_offset in
-      let l1_index_offset = Physical.shift l1_table_start (Int64.mul 8L l1_index) in
+      let l1_index_offset = Physical.shift t.h.Header.l1_table_offset (Int64.mul 8L l1_index) in
       marshal_physical_address t l1_index_offset l2_table_offset
       >>= fun () ->
       Log.debug (fun f -> f "Written l1_table[%Ld] <- %Ld" l1_index (Physical.cluster ~cluster_bits:t.cluster_bits l2_table_offset));
@@ -1016,7 +1013,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       m in
     let refcount_start_cluster = Physical.cluster ~cluster_bits:t.cluster_bits t.h.Header.refcount_table_offset in
     let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
-    let l1_table_start_cluster = Physical.cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.l1_table_offset) in
+    let l1_table_start_cluster = Physical.cluster ~cluster_bits:t.cluster_bits t.h.Header.l1_table_offset in
     let l1_table_clusters = Int64.(div (round_up (of_int32 t.h.Header.l1_size) int64s_per_cluster) int64s_per_cluster) in
     (* Assume all clusters are free *)
     let free = ClusterSet.make_full (Int64.to_int t.next_cluster) in
@@ -1610,7 +1607,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let refcount_table_clusters = 1L in
 
     (* qemu-img places the L1 table after the refcount table *)
-    let l1_table_offset = Int64.(mul (add 1L refcount_table_clusters) (1L <| cluster_bits)) in
+    let l1_table_offset = Physical.make ~is_mutable:false Int64.(mul (add 1L refcount_table_clusters) (1L <| cluster_bits)) in
     let l2_tables_required = Header.l2_tables_required ~cluster_bits size in
     let nb_snapshots = 0l in
     let snapshots_offset = 0L in
@@ -1635,7 +1632,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     (* Resize the underlying device to contain the header + refcount table
        + l1 table. Future allocations will enlarge the file. *)
     let l1_size_bytes = Int64.mul 8L l2_tables_required in
-    let next_free_byte = Int64.round_up (Int64.add l1_table_offset l1_size_bytes) cluster_size in
+    let next_free_byte = Int64.round_up (Int64.add (Physical.to_bytes l1_table_offset) l1_size_bytes) cluster_size in
     let open Lwt in
     B.get_info base
     >>= fun base_info ->
@@ -1673,7 +1670,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     >>= fun () ->
     (* Write an initial empty L1 table *)
     let open Lwt.Infix in
-    B.write base Int64.(div l1_table_offset (of_int t.base_info.Mirage_block.sector_size)) [ cluster ]
+    B.write base (Physical.sector ~sector_size:t.base_info.Mirage_block.sector_size l1_table_offset) [ cluster ]
     >>= function
     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
@@ -1744,7 +1741,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         let l1_table_clusters =
           let refs_per_cluster = 1L <| (t.cluster_bits - 3) in
           Int64.(div (round_up (of_int32 t.h.Header.l1_size) refs_per_cluster) refs_per_cluster) in
-        let l1_table_cluster = Physical.cluster ~cluster_bits:t.cluster_bits (Physical.make t.h.Header.l1_table_offset) in
+        let l1_table_cluster = Physical.cluster ~cluster_bits:t.cluster_bits t.h.Header.l1_table_offset in
         let rec loop i =
           if i >= l1_table_clusters
           then Lwt.return (Ok ())
@@ -1815,8 +1812,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     type t = t'
     type error = error'
     let check_no_overlaps t =
-      let l1_table_offset = Physical.make t.h.Header.l1_table_offset in
-      let within = Physical.within_cluster ~cluster_bits:t.cluster_bits l1_table_offset in
+      let within = Physical.within_cluster ~cluster_bits:t.cluster_bits t.h.Header.l1_table_offset in
       assert (within = 0);
       let within = Physical.within_cluster ~cluster_bits:t.cluster_bits t.h.Header.refcount_table_offset in
       assert (within = 0);
