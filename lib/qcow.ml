@@ -1031,9 +1031,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Not_found -> t.next_cluster in
 
     let parse x =
-      if x = 0L then 0L else begin
-        let addr = Physical.make x in
-        let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits addr in
+      if x = Physical.unmapped then 0L else begin
+        let cluster, _ = Physical.to_cluster ~cluster_bits:t.cluster_bits x in
         cluster
       end in
 
@@ -1047,14 +1046,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         let refcount_cluster = Int64.(add refcount_start_cluster i) in
         Metadata.read t.cache refcount_cluster
           (fun c ->
-            let buf = Metadata.to_cstruct c in
+            let addresses = Metadata.Physical.of_cluster c in
             let rec loop acc i =
-              if i >= (Cstruct.len buf)
+              if i >= (Metadata.Physical.len addresses)
               then Lwt.return (Ok acc)
               else begin
-                let cluster = parse (Cstruct.BE.get_uint64 buf i) in
+                let cluster = parse (Metadata.Physical.get addresses i) in
                 let acc = mark acc (refcount_cluster, i) cluster in
-                loop acc (8 + i)
+                loop acc (i + 1)
               end in
             loop acc 0
           )
@@ -1072,35 +1071,35 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       else begin
         Metadata.read t.cache l1_table_cluster
           (fun c ->
-            let l1 = Metadata.to_cstruct c in
+            let l1 = Metadata.Physical.of_cluster c in
             Lwt.return (Ok l1)
           )
         >>= fun l1 ->
         let rec l2_iter acc i =
-          if i >= (Cstruct.len l1)
+          if i >= (Metadata.Physical.len l1)
           then Lwt.return (Ok acc)
           else begin
-            let l2_table_cluster = parse (Cstruct.BE.get_uint64 l1 i) in
+            let l2_table_cluster = parse (Metadata.Physical.get l1 i) in
             if l2_table_cluster <> 0L then begin
-              let acc = mark acc (l1_table_cluster, i) l2_table_cluster in
+              let acc = mark acc (l1_table_cluster, i * 8) l2_table_cluster in
               Metadata.read t.cache l2_table_cluster
                 (fun c ->
-                  let l2 = Metadata.to_cstruct c in
+                  let l2 = Metadata.Physical.of_cluster c in
                   Lwt.return (Ok l2)
                 )
               >>= fun l2 ->
               let rec data_iter acc i =
-                if i >= (Cstruct.len l2)
+                if i >= (Metadata.Physical.len l2)
                 then Lwt.return (Ok acc)
                 else begin
-                  let cluster = parse (Cstruct.BE.get_uint64 l2 i) in
-                  let acc = mark acc (l2_table_cluster, i) cluster in
-                  data_iter acc (8 + i)
+                  let cluster = parse (Metadata.Physical.get l2 i) in
+                  let acc = mark acc (l2_table_cluster, i * 8) cluster in
+                  data_iter acc (i + 1)
                 end in
               data_iter acc 0
               >>= fun acc ->
-              l2_iter acc (8 + i)
-            end else l2_iter acc (8 + i)
+              l2_iter acc (i + 1)
+            end else l2_iter acc (i + 1)
           end in
         l2_iter acc 0
         >>= fun acc ->
