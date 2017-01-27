@@ -49,10 +49,13 @@ let to_sector ~sector_size t =
 
 let to_bytes t = (t <| 2) |> 2
 
-let to_cluster ~cluster_bits t =
+let cluster ~cluster_bits t =
   let x = (t <| 2) |> 2 in
-  Int64.(div x (1L <| cluster_bits)),
-  Int64.(to_int (rem x (1L <| cluster_bits)))
+  Int64.(div x (1L <| cluster_bits))
+
+let within_cluster ~cluster_bits t =
+  let x = (t <| 2) |> 2 in
+  Int64.(to_int (rem x (1L <| cluster_bits))) / 8
 
 let read rest =
   Cstruct.BE.get_uint64 rest 0

@@ -46,8 +46,11 @@ val to_sector: sector_size:int -> t -> int64 * int
 val to_bytes: t -> int64
 (** Return the byte offset on disk *)
 
-val to_cluster: cluster_bits:int -> t -> int64 * int
-(** Return the cluster offset on disk, plus a remainder within the cluster *)
+val cluster: cluster_bits:int -> t -> int64
+(** Return the cluster containing the address *)
+
+val within_cluster: cluster_bits:int -> t -> int
+(** Return the index within the cluster of the address *)
 
 val read: Cstruct.t -> t
 (** Read a [t] from the given buffer *)
