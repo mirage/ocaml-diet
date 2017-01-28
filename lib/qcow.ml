@@ -650,7 +650,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               loop (Int64.of_int32 t.h.Header.refcount_table_clusters)
               >>= fun () ->
               let h' = { t.h with
-                         Header.refcount_table_offset = Physical.make ~is_mutable:false (start <| t.cluster_bits);
+                         Header.refcount_table_offset = Physical.make (start <| t.cluster_bits);
                          refcount_table_clusters = Int64.to_int32 needed;
                        } in
               update_header t h'
@@ -679,7 +679,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               (* NB: the pointers in the refcount table are different from the pointers
                  in the cluster table: the high order bits are not used to encode extra
                  information and wil confuse qemu/qemu-img. *)
-              let addr = Physical.make ~is_mutable:false (cluster <| t.cluster_bits) in
+              let addr = Physical.make (cluster <| t.cluster_bits) in
               (* zero the cluster *)
               let buf = malloc t.h in
               Cstruct.memset buf 0;
@@ -793,7 +793,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let write_l1_table t l1_index l2_table_offset =
       let open Lwt_write_error.Infix in
-      (* Read l1[l1_index] as a 64-bit offset *)
+      (* Always set the mutable flag *)
+      let l2_table_offset = Physical.make ~is_mutable:true (Physical.to_bytes l2_table_offset) in
+      (* Write l1[l1_index] as a 64-bit offset *)
       let l1_index_offset = Physical.shift t.h.Header.l1_table_offset (Int64.mul 8L l1_index) in
       marshal_physical_address t l1_index_offset l2_table_offset
       >>= fun () ->
@@ -809,6 +811,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let write_l2_table t l2_table_offset l2_index cluster =
       let open Lwt_write_error.Infix in
+      (* Always set the mutable flag *)
+      let cluster = Physical.make ~is_mutable:true (Physical.to_bytes cluster) in
       let l2_index_offset = Physical.shift l2_table_offset (Int64.mul 8L l2_index) in
       marshal_physical_address t l2_index_offset cluster
       >>= fun _ ->
@@ -1603,11 +1607,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let crypt_method = `None in
     (* qemu-img places the refcount table next in the file and only
        qemu-img creates a tiny refcount table and grows it on demand *)
-    let refcount_table_offset = Physical.make ~is_mutable:false cluster_size in
+    let refcount_table_offset = Physical.make cluster_size in
     let refcount_table_clusters = 1L in
 
     (* qemu-img places the L1 table after the refcount table *)
-    let l1_table_offset = Physical.make ~is_mutable:false Int64.(mul (add 1L refcount_table_clusters) (1L <| cluster_bits)) in
+    let l1_table_offset = Physical.make Int64.(mul (add 1L refcount_table_clusters) (1L <| cluster_bits)) in
     let l2_tables_required = Header.l2_tables_required ~cluster_bits size in
     let nb_snapshots = 0l in
     let snapshots_offset = 0L in

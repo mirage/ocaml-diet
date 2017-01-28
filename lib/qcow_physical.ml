@@ -24,7 +24,7 @@ type t = int64 (* the encoded form on the disk *)
 
 let unmapped = 0L
 
-let make ?(is_mutable = true) ?(is_compressed = false) x =
+let make ?(is_mutable = false) ?(is_compressed = false) x =
   let bytes = (x <| 2) |> 2 in
   let is_mutable = if is_mutable then 1L <| 63 else 0L in
   let is_compressed = if is_compressed then 1L <| 62 else 0L in
