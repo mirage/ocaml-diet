@@ -45,6 +45,10 @@ val add: t -> reference -> cluster -> unit
 (** [add t ref cluster] marks [cluster] as in-use and notes the reference from
     [reference]. *)
 
+val remove: t -> cluster -> unit
+(** [remove t cluster] marks [cluster] as free and invalidates any reference
+    to it (e.g. in response to a discard) *)
+
 module Move: sig
   type t = { src: cluster; dst: cluster; update: reference }
   (** An instruction to move the contents from cluster [src] to cluster [dst]

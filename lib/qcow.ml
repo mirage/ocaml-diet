@@ -150,39 +150,57 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       write_cluster: int64 -> Cstruct.t -> (unit, write_error) result Lwt.t;
       mutable clusters: Cstruct.t Int64Map.t; (* cached metadata blocks *)
       mutable locked: Int64Set.t; (* locked against read and write *)
-      mutable cluster_map: Qcow_cluster_map.t; (* free/ used space map *)
+      mutable cluster_map: Qcow_cluster_map.t option; (* free/ used space map *)
+      cluster_bits: int;
       m: Lwt_mutex.t;
       c: unit Lwt_condition.t;
     }
 
-    type cluster = Cstruct.t
+    type cluster = {
+      t: t;
+      data: Cstruct.t;
+      cluster: int64;
+    }
 
     module Refcounts = struct
       type t = cluster
       let of_cluster x = x
-      let get t n = Cstruct.BE.get_uint16 t (2 * n)
-      let set t n v = Cstruct.BE.set_uint16 t (2 * n) v
+      let get t n = Cstruct.BE.get_uint16 t.data (2 * n)
+      let set t n v = Cstruct.BE.set_uint16 t.data (2 * n) v
     end
 
     module Physical = struct
       type t = cluster
       let of_cluster x = x
-      let get t n = Physical.read (Cstruct.shift t (8 * n))
-      let set t n v = Physical.write v (Cstruct.shift t (8 * n))
-      let len t = Cstruct.len t / 8
+      let get t n = Physical.read (Cstruct.shift t.data (8 * n))
+      let set t n v =
+        begin match t.t.cluster_map with
+          | Some m ->
+            let v' = Physical.cluster ~cluster_bits:t.t.cluster_bits v in
+            Log.debug (fun f -> f "Physical.set %Ld:%d -> %s" t.cluster n (if v = Physical.unmapped then "unmapped" else Int64.to_string v'));
+            (* Find the block currently being referenced so it can be marked
+               as free. *)
+            let existing = Physical.read (Cstruct.shift t.data (8 * n)) in
+            let cluster = Physical.cluster ~cluster_bits:t.t.cluster_bits existing in
+            if cluster <> 0L then Qcow_cluster_map.remove m cluster;
+            Qcow_cluster_map.add m (t.cluster, n) v'
+          | None -> ()
+        end;
+        Physical.write v (Cstruct.shift t.data (8 * n))
+      let len t = Cstruct.len t.data / 8
     end
 
-    let erase cluster = Cstruct.memset cluster 0
+    let erase cluster = Cstruct.memset cluster.data 0
 
-    let make ~read_cluster ~write_cluster () =
+    let make ~read_cluster ~write_cluster ~cluster_bits () =
       let m = Lwt_mutex.create () in
       let c = Lwt_condition.create () in
       let clusters = Int64Map.empty in
       let locked = Int64Set.empty in
-      let cluster_map = Qcow_cluster_map.zero in
-      { read_cluster; write_cluster; cluster_map; m; c; clusters; locked }
+      let cluster_map = None in
+      { read_cluster; write_cluster; cluster_map; cluster_bits; m; c; clusters; locked }
 
-    let set_cluster_map t cluster_map = t.cluster_map <- cluster_map
+    let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
 
     let with_lock t cluster f =
       let open Lwt in
@@ -225,13 +243,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let open Lwt_error.Infix in
       with_lock t cluster
         (fun () ->
-           ( if Int64Map.mem cluster t.clusters
-             then Lwt.return (Ok (Int64Map.find cluster t.clusters))
-             else begin
+           ( if Int64Map.mem cluster t.clusters then begin
+               let data = Int64Map.find cluster t.clusters in
+               Lwt.return (Ok { t; data; cluster })
+             end else begin
                t.read_cluster cluster
-               >>= fun buf ->
-               t.clusters <- Int64Map.add cluster buf t.clusters;
-               Lwt.return (Ok buf)
+               >>= fun data ->
+               t.clusters <- Int64Map.add cluster data t.clusters;
+               Lwt.return (Ok { t; data; cluster })
              end
            ) >>= fun buf ->
            f buf
@@ -243,18 +262,19 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let open Lwt_write_error.Infix in
       with_lock t cluster
         (fun () ->
-           ( if Int64Map.mem cluster t.clusters
-             then Lwt.return (Ok (Int64Map.find cluster t.clusters))
-             else begin
+           ( if Int64Map.mem cluster t.clusters then begin
+               let data = Int64Map.find cluster t.clusters in
+               Lwt.return (Ok { t; data; cluster })
+             end else begin
                t.read_cluster cluster
-               >>= fun buf ->
-               Lwt.return (Ok buf)
+               >>= fun data ->
+               Lwt.return (Ok { t; data; cluster })
              end
-           ) >>= fun buf ->
-           f buf
+           ) >>= fun x ->
+           f x
            >>= fun () ->
-           t.clusters <- Int64Map.add cluster buf t.clusters;
-           t.write_cluster cluster buf
+           t.clusters <- Int64Map.add cluster x.data t.clusters;
+           t.write_cluster cluster x.data
         )
 
     (** Remove a cluster from the cache *)
@@ -273,6 +293,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     val make:
       read_cluster:(int64 -> (Cstruct.t, error) result Lwt.t)
       -> write_cluster:(int64 -> Cstruct.t -> (unit, write_error) result Lwt.t)
+      -> cluster_bits:int
       -> unit -> t
     (** Construct a qcow metadata structure given a set of cluster read/write/flush
         operations *)
@@ -1430,7 +1451,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () -> Lwt.return (Ok ()) in
-    let cache = Metadata.make ~read_cluster ~write_cluster () in
+    let cache = Metadata.make ~read_cluster ~write_cluster ~cluster_bits () in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true; _ } -> true | _ -> false in
     let stats = Stats.zero in
     let metadata_lock = Qcow_rwlock.make () in

@@ -76,6 +76,10 @@ let add t rf cluster =
     ()
   end
 
+let remove t cluster =
+  ClusterSet.(add (Interval.make cluster cluster) t.free);
+  t.refs <- ClusterMap.remove cluster t.refs
+
 (* Fold over all free blocks *)
 let fold_over_free_s f t acc =
   let range i acc =
