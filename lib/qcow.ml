@@ -21,6 +21,8 @@ module Header = Qcow_header
 module Virtual = Qcow_virtual
 module Physical = Qcow_physical
 
+module FreeClusters = Qcow_diet.Make(Int64)
+
 let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right_logical
 
@@ -499,7 +501,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let open Lwt_write_error.Infix in
       resize_base t.base t.sector_size (Physical.make (t.next_cluster <| t.cluster_bits))
       >>= fun () ->
-      Lwt.return (Ok cluster)
+      if n = 0L
+      then Lwt.return (Ok FreeClusters.empty)
+      else begin
+        let free = FreeClusters.Interval.make cluster Int64.(add cluster (pred n)) in
+        let set = FreeClusters.(add free empty) in
+        Lwt.return (Ok set)
+      end
 
     module Refcount = struct
       (* The refcount table contains pointers to clusters which themselves
@@ -628,10 +636,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 then Int64.mul 2L current_size_clusters
                 else needed in
               allocate_clusters t needed
-              >>= fun start ->
+              >>= fun free ->
               (* Copy any existing refcounts into new table *)
               let buf = malloc t.h in
-              let rec loop i =
+              let rec loop free i =
                 if i >= Int32.to_int t.h.Header.refcount_table_clusters
                 then Lwt.return (Ok ())
                 else begin
@@ -643,7 +651,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                   | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
                   | Error `Disconnected -> Lwt.return (Error `Disconnected)
                   | Ok () ->
-                  let physical = Physical.make Int64.((add start (of_int i)) <| t.cluster_bits) in
+                  let first = FreeClusters.(Interval.x (min_elt free)) in
+                  let physical = Physical.make (first <| t.cluster_bits) in
                   let sector, _ = Physical.to_sector ~sector_size:t.sector_size physical in
                   let open Lwt.Infix in
                   B.write t.base sector [ buf ]
@@ -652,18 +661,20 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                   | Error `Disconnected -> Lwt.return (Error `Disconnected)
                   | Error `Is_read_only -> Lwt.return (Error (`Msg "Device is read only"))
                   | Ok () ->
-                  loop (i + 1)
+                  let free = FreeClusters.(remove (Interval.make first first) free) in
+                  loop free (i + 1)
                 end in
-              loop 0
+              loop free 0
               >>= fun () ->
               Log.debug (fun f -> f "Copied refcounts into new table");
               (* Zero new blocks *)
               Cstruct.memset buf 0;
-              let rec loop i =
+              let rec loop free i =
                 if i >= needed
                 then Lwt.return (Ok ())
                 else begin
-                  let physical = Physical.make Int64.((add start i) <| t.cluster_bits) in
+                  let first = FreeClusters.(Interval.x (min_elt free)) in
+                  let physical = Physical.make (first <| t.cluster_bits) in
                   let sector, _ = Physical.to_sector ~sector_size:t.sector_size physical in
                   let open Lwt.Infix in
                   B.write t.base sector [ buf ]
@@ -672,26 +683,31 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                   | Error `Disconnected -> Lwt.return (Error `Disconnected)
                   | Error `Is_read_only -> Lwt.return (Error (`Msg "Device is read only"))
                   | Ok () ->
-                  loop (Int64.succ i)
+                  let free = FreeClusters.(remove (Interval.make first first) free) in
+                  loop free (Int64.succ i)
                 end in
-              loop (Int64.of_int32 t.h.Header.refcount_table_clusters)
+              loop free (Int64.of_int32 t.h.Header.refcount_table_clusters)
               >>= fun () ->
+              let first = FreeClusters.(Interval.x (min_elt free)) in
+              let refcount_table_offset = Physical.make (first <| t.cluster_bits) in
               let h' = { t.h with
-                         Header.refcount_table_offset = Physical.make (start <| t.cluster_bits);
+                         Header.refcount_table_offset;
                          refcount_table_clusters = Int64.to_int32 needed;
                        } in
               update_header t h'
               >>= fun () ->
               (* increase the refcount of the clusters we just allocated *)
-              let rec loop i =
+              let rec loop free i =
                 if i >= needed
                 then Lwt.return (Ok ())
                 else begin
-                  really_incr t (Int64.add start i)
+                  let first = FreeClusters.(Interval.x (min_elt free)) in
+                  really_incr t first
                   >>= fun () ->
-                  loop (Int64.succ i)
+                  let free = FreeClusters.(remove (Interval.make first first) free) in
+                  loop free (Int64.succ i)
                 end in
-              loop 0L
+              loop free 0L
             end else begin
             Lwt.return (Ok ())
           end )
@@ -702,7 +718,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         >>= fun addr ->
         ( if Physical.to_bytes addr = 0L then begin
               allocate_clusters t 1L
-              >>= fun cluster ->
+              >>= fun free ->
+              let cluster = FreeClusters.(Interval.x (min_elt free)) in
               (* NB: the pointers in the refcount table are different from the pointers
                  in the cluster table: the high order bits are not used to encode extra
                  information and wil confuse qemu/qemu-img. *)
@@ -901,8 +918,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               at the same time to minimise I/O *)
            ( if Physical.to_bytes l2_offset = 0L then begin
                allocate_clusters t 2L
-               >>= fun l2_cluster ->
-               let data_cluster = Int64.succ l2_cluster in
+               >>= fun free ->
+               let l2_cluster = FreeClusters.(Interval.x (min_elt free)) in
+               let free = FreeClusters.(remove (Interval.make l2_cluster l2_cluster) free) in
+               let data_cluster = FreeClusters.(Interval.x (min_elt free)) in
                Refcount.incr t l2_cluster
                >>= fun () ->
                Refcount.incr t data_cluster
@@ -919,7 +938,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                >>= fun data_offset ->
                if Physical.to_bytes data_offset = 0L then begin
                  allocate_clusters t 1L
-                 >>= fun data_cluster ->
+                 >>= fun free ->
+                 let data_cluster = FreeClusters.(Interval.x (min_elt free)) in
                  Refcount.incr t data_cluster
                  >>= fun () ->
                  let data_offset = Physical.make (data_cluster <| t.cluster_bits) in
