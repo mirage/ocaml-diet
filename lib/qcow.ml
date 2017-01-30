@@ -148,8 +148,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     type t = {
       read_cluster: int64 -> (Cstruct.t, error) result Lwt.t;
       write_cluster: int64 -> Cstruct.t -> (unit, write_error) result Lwt.t;
-      mutable clusters: Cstruct.t Int64Map.t;
-      mutable locked: Int64Set.t;
+      mutable clusters: Cstruct.t Int64Map.t; (* cached metadata blocks *)
+      mutable locked: Int64Set.t; (* locked against read and write *)
+      mutable cluster_map: Qcow_cluster_map.t; (* free/ used space map *)
       m: Lwt_mutex.t;
       c: unit Lwt_condition.t;
     }
@@ -178,7 +179,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let c = Lwt_condition.create () in
       let clusters = Int64Map.empty in
       let locked = Int64Set.empty in
-      { read_cluster; write_cluster; m; c; clusters; locked }
+      let cluster_map = Qcow_cluster_map.zero in
+      { read_cluster; write_cluster; cluster_map; m; c; clusters; locked }
+
+    let set_cluster_map t cluster_map = t.cluster_map <- cluster_map
 
     let with_lock t cluster f =
       let open Lwt in
@@ -272,6 +276,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       -> unit -> t
     (** Construct a qcow metadata structure given a set of cluster read/write/flush
         operations *)
+
+    val set_cluster_map: t -> Qcow_cluster_map.t -> unit
+    (** Set the associated cluster map (which will be updated on every cluster
+        write) *)
 
     type cluster
 
@@ -1443,6 +1451,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     Lwt_error.or_fail_with @@ make_cluster_map t'
     >>= fun cluster_map ->
     t'.cluster_map <- cluster_map;
+    Metadata.set_cluster_map t'.cache cluster_map;
     ( if config.Config.discard && not(lazy_refcounts) then begin
         Log.info (fun f -> f "discard requested and lazy_refcounts is disabled: erasing refcount table and enabling lazy_refcounts");
         Lwt_error.or_fail_with @@ Cluster.Refcount.zero_all t'
