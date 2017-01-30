@@ -148,7 +148,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     type t = {
       read_cluster: int64 -> (Cstruct.t, error) result Lwt.t;
       write_cluster: int64 -> Cstruct.t -> (unit, write_error) result Lwt.t;
-      flush: unit -> (unit, write_error) result Lwt.t;
       mutable clusters: Cstruct.t Int64Map.t;
       mutable locked: Int64Set.t;
       m: Lwt_mutex.t;
@@ -174,12 +173,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let erase cluster = Cstruct.memset cluster 0
 
-    let make ~read_cluster ~write_cluster ~flush () =
+    let make ~read_cluster ~write_cluster () =
       let m = Lwt_mutex.create () in
       let c = Lwt_condition.create () in
       let clusters = Int64Map.empty in
       let locked = Int64Set.empty in
-      { read_cluster; write_cluster; flush; m; c; clusters; locked }
+      { read_cluster; write_cluster; m; c; clusters; locked }
 
     let with_lock t cluster f =
       let open Lwt in
@@ -270,7 +269,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     val make:
       read_cluster:(int64 -> (Cstruct.t, error) result Lwt.t)
       -> write_cluster:(int64 -> Cstruct.t -> (unit, write_error) result Lwt.t)
-      -> flush:(unit -> (unit, write_error) result Lwt.t)
       -> unit -> t
     (** Construct a qcow metadata structure given a set of cluster read/write/flush
         operations *)
@@ -1414,14 +1412,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () -> Lwt.return (Ok ()) in
-    let flush () =
-      B.flush base
-      >>= function
-      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-      | Error `Disconnected -> Lwt.return (Error `Disconnected)
-      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-      | Ok () -> Lwt.return (Ok ()) in
-    let cache = Metadata.make ~read_cluster ~write_cluster ~flush () in
+    let cache = Metadata.make ~read_cluster ~write_cluster () in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true; _ } -> true | _ -> false in
     let stats = Stats.zero in
     let metadata_lock = Qcow_rwlock.make () in
