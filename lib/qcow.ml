@@ -800,7 +800,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let write_l1_table t l1_index l2_table_offset =
       let open Lwt_write_error.Infix in
       (* Always set the mutable flag *)
-      let l2_table_offset = Physical.make ~is_mutable:true (Physical.to_bytes l2_table_offset) in
+      let l2_table_offset =
+        if l2_table_offset = Physical.unmapped
+        then Physical.unmapped (* don't set metadata bits for unmapped clusters *)
+        else Physical.make ~is_mutable:true (Physical.to_bytes l2_table_offset) in
       (* Write l1[l1_index] as a 64-bit offset *)
       let l1_index_offset = Physical.shift t.h.Header.l1_table_offset (Int64.mul 8L l1_index) in
       marshal_physical_address t l1_index_offset l2_table_offset
@@ -818,7 +821,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let write_l2_table t l2_table_offset l2_index cluster =
       let open Lwt_write_error.Infix in
       (* Always set the mutable flag *)
-      let cluster = Physical.make ~is_mutable:true (Physical.to_bytes cluster) in
+      let cluster =
+        if cluster = Physical.unmapped
+        then Physical.unmapped (* don't set metadata bits for unmapped clusters *)
+        else Physical.make ~is_mutable:true (Physical.to_bytes cluster) in
       let l2_index_offset = Physical.shift l2_table_offset (Int64.mul 8L l2_index) in
       marshal_physical_address t l2_index_offset cluster
       >>= fun _ ->
