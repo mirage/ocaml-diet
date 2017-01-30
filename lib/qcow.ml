@@ -1031,8 +1031,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
     let l1_table_start_cluster = Physical.cluster ~cluster_bits:t.cluster_bits t.h.Header.l1_table_offset in
     let l1_table_clusters = Int64.(div (round_up (of_int32 t.h.Header.l1_size) int64s_per_cluster) int64s_per_cluster) in
-    (* Assume all clusters are free *)
-    let free = ClusterSet.make_full (Int64.to_int t.next_cluster) in
+    (* Assume all clusters are free. Note when the file is sparse we can exceed the max
+       possible cluster. This is only a sanity check to catch crazily-wrong inputs. *)
+    let max_possible_cluster = t.h.Header.size |> (Int32.to_int t.h.Header.cluster_bits) in
+    let free = ClusterSet.make_full
+      ~initial_size:(Int64.to_int t.next_cluster)
+      ~maximum_size:(Int64.(to_int (mul 10L max_possible_cluster))) in
     (* Subtract the fixed structures at the beginning of the file *)
     ClusterSet.(remove (Interval.make l1_table_start_cluster (Int64.(pred @@ add l1_table_start_cluster l1_table_clusters))) free);
     ClusterSet.(remove (Interval.make refcount_start_cluster (Int64.(pred @@ add refcount_start_cluster (Int64.of_int32 t.h.Header.refcount_table_clusters)))) free);

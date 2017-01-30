@@ -37,11 +37,13 @@ end
 type t
 (** The type of sets *)
 
-val make_empty: int -> t
-(** [make_empty n] creates a set of maximum size [n], initially empty *)
+val make_empty: initial_size:int -> maximum_size:int -> t
+(** [make_empty n] creates a set of [initial_size] which can be resized up to
+    [maximum size], initially empty *)
 
-val make_full: int -> t
-(** [make_full n] creates a set of maximum size [n], initially full *)
+val make_full: initial_size:int -> maximum_size:int -> t
+(** [make_full n] creates a set of [initial_size] which can be resized up to
+    [maximum size], initially full *)
 
 val copy: t -> t
 (** [copy t] returns a duplicate of [t] *)

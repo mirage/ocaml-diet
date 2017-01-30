@@ -41,7 +41,9 @@ let make ~free ~first_movable_cluster =
   let refs = ClusterMap.empty in
   { free; refs; first_movable_cluster }
 
-let zero = make ~free:(ClusterSet.make_empty 0) ~first_movable_cluster:0L
+let zero =
+  let free = ClusterSet.make_empty ~initial_size:0 ~maximum_size:0 in
+  make ~free ~first_movable_cluster:0L
 
 let copy t =
   let free = ClusterSet.copy t.free in
