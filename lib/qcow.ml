@@ -184,12 +184,15 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let set t n v =
         begin match t.t.cluster_map with
           | Some m ->
-            let v' = Physical.cluster ~cluster_bits:t.t.cluster_bits v in
-            Log.debug (fun f -> f "Physical.set %Ld:%d -> %s" t.cluster n (if v = Physical.unmapped then "unmapped" else Int64.to_string v'));
             (* Find the block currently being referenced so it can be marked
                as free. *)
             let existing = Physical.read (Cstruct.shift t.data (8 * n)) in
             let cluster = Physical.cluster ~cluster_bits:t.t.cluster_bits existing in
+            let v' = Physical.cluster ~cluster_bits:t.t.cluster_bits v in
+            Log.debug (fun f -> f "Physical.set %Ld:%d -> %s%s" t.cluster n
+              (if v = Physical.unmapped then "unmapped" else Int64.to_string v')
+              (if cluster <> 0L then ", unmapping " ^ (Int64.to_string cluster) else "")
+            );
             if cluster <> 0L then Qcow_cluster_map.remove m cluster;
             Qcow_cluster_map.add m (t.cluster, n) v'
           | None -> ()
