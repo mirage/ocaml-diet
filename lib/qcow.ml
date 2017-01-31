@@ -521,8 +521,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             let free_clusters = Qcow_bitmap.fold (fun i acc ->
                 Qcow_bitmap.remove i bitmap;
                 let x, y = Qcow_bitmap.Interval.(x i, y i) in
-                let i' = FreeClusters.Interval.make x y in
-                FreeClusters.add i' acc
+                (* The bitmap can be larger than the file if the file has been shrunk *)
+                let y = min (Int64.pred t.next_cluster) y in
+                if x > y then acc else begin
+                  Log.debug (fun f -> f "Adding (%Ld, %Ld) to free list" x y);
+                  let i' = FreeClusters.Interval.make x y in
+                  FreeClusters.add i' acc
+                end
               ) bitmap t.free_clusters in
             t.free_clusters <- free_clusters;
             t.stats.Stats.nr_unmapped <- 0L;
