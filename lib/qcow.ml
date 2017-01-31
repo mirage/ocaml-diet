@@ -500,7 +500,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   module Cluster = struct
 
-    (** Allocate contiguous clusters, increasing the size of the underying device.
+    (** Allocate [n] clusters, return (set, already_zero) where [set] is a
+        a set of possibly non-contiguous physical clusters and [already_zero]
+        indicates whether the contents are guaranteed to contain zeroes.
+
         This must be called with next_cluster_m held, and the mutex must not be
         released until the allocation has been persisted so that concurrent threads
         will not allocate another cluster for the same purpose. *)
@@ -511,7 +514,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         resize_base t.base t.sector_size (Physical.make (t.next_cluster <| t.cluster_bits))
         >>= fun () ->
         Log.debug (fun f -> f "Resized file to %Ld clusters" t.next_cluster);
-        Lwt.return (Ok FreeClusters.empty)
+        Lwt.return (Ok (FreeClusters.empty, true))
       end else begin
         (* Consider repopulating the free list *)
         begin match t.config.Config.recycle_threshold with
@@ -555,7 +558,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         | Some (set, free) ->
           Log.debug (fun f -> f "Allocated %Ld clusters from free list" n);
           t.free_clusters <- free;
-          Lwt.return (Ok set)
+          Lwt.return (Ok (set, false))
         | None ->
           let cluster = t.next_cluster in
           t.next_cluster <- Int64.add t.next_cluster n;
@@ -565,7 +568,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           >>= fun () ->
           let free = FreeClusters.Interval.make cluster Int64.(add cluster (pred n)) in
           let set = FreeClusters.(add free empty) in
-          Lwt.return (Ok set)
+          Lwt.return (Ok (set, true))
       end
 
     module Refcount = struct
@@ -695,7 +698,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 then Int64.mul 2L current_size_clusters
                 else needed in
               allocate_clusters t needed
-              >>= fun free ->
+              >>= fun (free, _already_zero) ->
+              (* Erasing new blocks is handled after the copy *)
               (* Copy any existing refcounts into new table *)
               let buf = malloc t.h in
               let rec loop free i =
@@ -777,7 +781,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         >>= fun addr ->
         ( if Physical.to_bytes addr = 0L then begin
               allocate_clusters t 1L
-              >>= fun free ->
+              >>= fun (free, _already_zero) ->
               let cluster = FreeClusters.(Interval.x (min_elt free)) in
               (* NB: the pointers in the refcount table are different from the pointers
                  in the cluster table: the high order bits are not used to encode extra
@@ -965,6 +969,38 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
       Lwt.return (Ok (Some (Physical.shift cluster_offset a.Virtual.cluster)))
 
+    let erase_clusters t remaining =
+      let npages = 1 lsl (t.cluster_bits - 12) in
+      let pages = Io_page.(to_cstruct @@ get npages) in
+      let cluster = Cstruct.sub pages 0 (1 lsl t.cluster_bits) in
+      Cstruct.memset cluster 0;
+
+      let rec loop remaining =
+        match FreeClusters.min_elt remaining with
+        | i ->
+          let x, y = FreeClusters.Interval.(x i, y i) in
+          let rec per_cluster x =
+            if x > y
+            then Lwt.return (Ok ())
+            else begin
+              let sector = Int64.(div (x <| t.cluster_bits) (of_int t.sector_size)) in
+              let open Lwt.Infix in
+              B.write t.base sector [ cluster ]
+              >>= function
+              | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+              | Error `Disconnected -> Lwt.return (Error `Disconnected)
+              | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+              | Ok () ->
+                per_cluster (Int64.succ x)
+            end in
+          let open Lwt_write_error.Infix in
+          per_cluster x
+          >>= fun () ->
+          loop (FreeClusters.remove i remaining)
+        | exception Not_found ->
+          Lwt.return (Ok ()) in
+      loop remaining
+
     (* Walk the L1 and L2 tables to translate an address, allocating missing
        entries as we go. *)
     let walk_and_allocate t a =
@@ -977,7 +1013,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               at the same time to minimise I/O *)
            ( if Physical.to_bytes l2_offset = 0L then begin
                allocate_clusters t 2L
-               >>= fun free ->
+               >>= fun (free, already_zero) ->
+               (* FIXME: it's unnecessary to write to the data cluster if we're
+                  about to overwrite it with real data straight away *)
+               ( if not already_zero then erase_clusters t free else Lwt.return (Ok ()) )
+               >>= fun () ->
                let l2_cluster = FreeClusters.(Interval.x (min_elt free)) in
                let free = FreeClusters.(remove (Interval.make l2_cluster l2_cluster) free) in
                let data_cluster = FreeClusters.(Interval.x (min_elt free)) in
@@ -997,7 +1037,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                >>= fun data_offset ->
                if Physical.to_bytes data_offset = 0L then begin
                  allocate_clusters t 1L
-                 >>= fun free ->
+                 >>= fun (free, already_zero) ->
+                 ( if not already_zero then erase_clusters t free else Lwt.return (Ok ()) )
+                 >>= fun () ->
                  let data_cluster = FreeClusters.(Interval.x (min_elt free)) in
                  Refcount.incr t data_cluster
                  >>= fun () ->
@@ -1395,6 +1437,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 let last_block = get_last_block map in
                 Log.debug (fun f -> f "Shrink file so that last cluster was %Ld, now %Ld" start_last_block last_block);
                 t.next_cluster <- Int64.succ last_block;
+                (* The free list has been partially overwritten. *)
+                t.free_clusters <- FreeClusters.empty;
                 Cluster.allocate_clusters t 0L (* takes care of the file size *)
                 >>= fun _ ->
 
