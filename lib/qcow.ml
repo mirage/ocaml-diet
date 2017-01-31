@@ -146,6 +146,80 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   module Int64Map = Map.Make(Int64)
   module Int64Set = Set.Make(Int64)
 
+  module Scrubber = struct
+    (* Securely erase and then recycle clusters *)
+    type t = {
+      base: B.t;
+      sector_size: int;
+      cluster_bits: int;
+      mutable available: FreeClusters.t; (* guaranteed to have been scrubbled *)
+      mutable erased: FreeClusters.t; (* zeroed but not yet flushed *)
+      mutable pending: FreeClusters.t; (* to be erased in future *)
+      cluster: Cstruct.t; (* a zero cluster for erasing *)
+      m: Lwt_mutex.t;
+    }
+
+    let create ~base ~sector_size ~cluster_bits =
+      let available = FreeClusters.empty in
+      let erased = FreeClusters.empty in
+      let pending = FreeClusters.empty in
+      let npages = 1 lsl (cluster_bits - 12) in
+      let pages = Io_page.(to_cstruct @@ get npages) in
+      let cluster = Cstruct.sub pages 0 (1 lsl cluster_bits) in
+      Cstruct.memset cluster 0;
+      let m = Lwt_mutex.create () in
+      { base; sector_size; cluster_bits; available; erased; pending; cluster; m }
+
+    (* Called after a full compact to reset everything. Otherwise we may try to
+       erase blocks which nolonger exist. *)
+    let reset t =
+      t.available <- FreeClusters.empty;
+      t.erased <- FreeClusters.empty;
+      t.pending <- FreeClusters.empty
+
+    let erase t remaining =
+      let rec loop remaining =
+        match FreeClusters.min_elt remaining with
+        | i ->
+          let x, y = FreeClusters.Interval.(x i, y i) in
+          Log.debug (fun f -> f "erasing clusters (%Ld -> %Ld)" x y);
+          let rec per_cluster x =
+            if x > y
+            then Lwt.return (Ok ())
+            else begin
+              let sector = Int64.(div (x <| t.cluster_bits) (of_int t.sector_size)) in
+              let open Lwt.Infix in
+              B.write t.base sector [ t.cluster ]
+              >>= function
+              | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+              | Error `Disconnected -> Lwt.return (Error `Disconnected)
+              | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+              | Ok () ->
+                per_cluster (Int64.succ x)
+            end in
+          let open Lwt_write_error.Infix in
+          per_cluster x
+          >>= fun () ->
+          loop (FreeClusters.remove i remaining)
+        | exception Not_found ->
+          Lwt.return (Ok ()) in
+      loop remaining
+
+    let erase_all t =
+      let batch = t.pending in
+      t.pending <- FreeClusters.empty;
+      let open Lwt_write_error.Infix in
+      erase t batch
+      >>= fun () ->
+      t.erased <- FreeClusters.union batch t.erased;
+      Lwt.return (Ok ())
+
+    let after_flush t =
+      t.available <- FreeClusters.union t.available t.erased;
+      t.erased <- FreeClusters.empty
+
+  end
+
   module Metadata = (struct
     (** An in-memory cache of metadata clusters used to speed up lookups.
 
@@ -159,6 +233,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       mutable clusters: Cstruct.t Int64Map.t; (* cached metadata blocks *)
       mutable locked: Int64Set.t; (* locked against read and write *)
       mutable cluster_map: Qcow_cluster_map.t option; (* free/ used space map *)
+      scrubber: Scrubber.t;
       cluster_bits: int;
       m: Lwt_mutex.t;
       c: unit Lwt_condition.t;
@@ -193,7 +268,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               (if v = Physical.unmapped then "unmapped" else Int64.to_string v')
               (if cluster <> 0L then ", unmapping " ^ (Int64.to_string cluster) else "")
             );
-            if cluster <> 0L then Qcow_cluster_map.remove m cluster;
+            if cluster <> 0L then begin
+              let i = FreeClusters.Interval.make cluster cluster in
+              t.t.scrubber.Scrubber.pending <- FreeClusters.add i t.t.scrubber.Scrubber.pending;
+              Qcow_cluster_map.remove m cluster;
+            end;
             Qcow_cluster_map.add m (t.cluster, n) v'
           | None -> ()
         end;
@@ -203,13 +282,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let erase cluster = Cstruct.memset cluster.data 0
 
-    let make ~read_cluster ~write_cluster ~cluster_bits () =
+    let make ~read_cluster ~write_cluster ~scrubber ~cluster_bits () =
       let m = Lwt_mutex.create () in
       let c = Lwt_condition.create () in
       let clusters = Int64Map.empty in
       let locked = Int64Set.empty in
       let cluster_map = None in
-      { read_cluster; write_cluster; cluster_map; cluster_bits; m; c; clusters; locked }
+      { read_cluster; write_cluster; cluster_map; scrubber; cluster_bits; m; c; clusters; locked }
 
     let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
 
@@ -304,6 +383,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     val make:
       read_cluster:(int64 -> (Cstruct.t, error) result Lwt.t)
       -> write_cluster:(int64 -> Cstruct.t -> (unit, write_error) result Lwt.t)
+      -> scrubber:Scrubber.t
       -> cluster_bits:int
       -> unit -> t
     (** Construct a qcow metadata structure given a set of cluster read/write/flush
@@ -370,72 +450,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       nr_erased = 0L;
       nr_unmapped = 0L;
     }
-  end
-
-  module Scrubber = struct
-    (* Securely erase and then recycle clusters *)
-    type t = {
-      base: B.t;
-      sector_size: int;
-      cluster_bits: int;
-      mutable available: FreeClusters.t; (* guaranteed to have been scrubbled *)
-      mutable erased: FreeClusters.t; (* zeroed but not yet flushed *)
-      mutable pending: FreeClusters.t; (* to be erased in future *)
-      cluster: Cstruct.t; (* a zero cluster for erasing *)
-      m: Lwt_mutex.t;
-    }
-
-    let create ~base ~sector_size ~cluster_bits =
-      let available = FreeClusters.empty in
-      let erased = FreeClusters.empty in
-      let pending = FreeClusters.empty in
-      let npages = 1 lsl (cluster_bits - 12) in
-      let pages = Io_page.(to_cstruct @@ get npages) in
-      let cluster = Cstruct.sub pages 0 (1 lsl cluster_bits) in
-      Cstruct.memset cluster 0;
-      let m = Lwt_mutex.create () in
-      { base; sector_size; cluster_bits; available; erased; pending; cluster; m }
-
-    let erase t remaining =
-      let rec loop remaining =
-        match FreeClusters.min_elt remaining with
-        | i ->
-          let x, y = FreeClusters.Interval.(x i, y i) in
-          let rec per_cluster x =
-            if x > y
-            then Lwt.return (Ok ())
-            else begin
-              let sector = Int64.(div (x <| t.cluster_bits) (of_int t.sector_size)) in
-              let open Lwt.Infix in
-              B.write t.base sector [ t.cluster ]
-              >>= function
-              | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-              | Error `Disconnected -> Lwt.return (Error `Disconnected)
-              | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-              | Ok () ->
-                per_cluster (Int64.succ x)
-            end in
-          let open Lwt_write_error.Infix in
-          per_cluster x
-          >>= fun () ->
-          loop (FreeClusters.remove i remaining)
-        | exception Not_found ->
-          Lwt.return (Ok ()) in
-      loop remaining
-
-    let erase_all t =
-      let batch = t.pending in
-      t.pending <- FreeClusters.empty;
-      let open Lwt_write_error.Infix in
-      erase t batch
-      >>= fun () ->
-      t.erased <- FreeClusters.union batch t.erased;
-      Lwt.return (Ok ())
-
-    let after_flush t =
-      t.available <- FreeClusters.union t.available t.erased;
-      t.erased <- FreeClusters.empty
-
   end
 
   module Timer = Qcow_timer.Make(Time)
@@ -1480,7 +1494,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 Log.debug (fun f -> f "Shrink file so that last cluster was %Ld, now %Ld" start_last_block last_block);
                 t.next_cluster <- Int64.succ last_block;
                 (* The free list has been partially overwritten. *)
-                t.scrubber.Scrubber.available <- FreeClusters.empty;
+                Scrubber.reset t.scrubber;
                 Cluster.allocate_clusters t 0L (* takes care of the file size *)
                 >>= fun _ ->
 
@@ -1618,7 +1632,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () -> Lwt.return (Ok ()) in
-    let cache = Metadata.make ~read_cluster ~write_cluster ~cluster_bits () in
+    let cache = Metadata.make ~read_cluster ~write_cluster ~scrubber ~cluster_bits () in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true; _ } -> true | _ -> false in
     let stats = Stats.zero in
     let metadata_lock = Qcow_rwlock.make () in
