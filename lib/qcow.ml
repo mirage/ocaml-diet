@@ -377,7 +377,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     base_info: Mirage_block.info;
     config: Config.t;
     info: Mirage_block.info;
-    mutable next_cluster: int64;
+    mutable free_clusters: FreeClusters.t; (* when the file has holes in it *)
+    mutable next_cluster: int64; (* when the file is extended *)
     next_cluster_m: Lwt_mutex.t;
     cache: Metadata.t;
     (* for convenience *)
@@ -501,18 +502,45 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         released until the allocation has been persisted so that concurrent threads
         will not allocate another cluster for the same purpose. *)
     let allocate_clusters t n =
-      let cluster = t.next_cluster in
-      t.next_cluster <- Int64.add t.next_cluster n;
-      Log.debug (fun f -> f "Soft allocated span of clusters from %Ld (length %Ld)" cluster n);
-      let open Lwt_write_error.Infix in
-      resize_base t.base t.sector_size (Physical.make (t.next_cluster <| t.cluster_bits))
-      >>= fun () ->
-      if n = 0L
-      then Lwt.return (Ok FreeClusters.empty)
-      else begin
-        let free = FreeClusters.Interval.make cluster Int64.(add cluster (pred n)) in
-        let set = FreeClusters.(add free empty) in
-        Lwt.return (Ok set)
+      if n = 0L then begin
+        (* Resync the file size only *)
+        let open Lwt_write_error.Infix in
+        resize_base t.base t.sector_size (Physical.make (t.next_cluster <| t.cluster_bits))
+        >>= fun () ->
+        Log.debug (fun f -> f "Resized file to %Ld clusters" t.next_cluster);
+        Lwt.return (Ok FreeClusters.empty)
+      end else begin
+        (* Take them from the free list if they are available *)
+        let rec take acc free n =
+          if n = 0L
+          then Some (acc, free)
+          else begin
+            try
+              let i = FreeClusters.min_elt free in
+              let x, y = FreeClusters.Interval.(x i, y i) in
+              let len = Int64.(succ @@ sub y x) in
+              let will_use = min n len in
+              let i' = FreeClusters.Interval.(make (x i) Int64.(add (x i) will_use)) in
+              let free = FreeClusters.remove i' free in
+              take (FreeClusters.add i' acc) free Int64.(sub n will_use)
+            with
+            | Not_found -> None
+          end in
+        match take FreeClusters.empty t.free_clusters n with
+        | Some (set, free) ->
+          Log.debug (fun f -> f "Allocated %Ld clusters from free list" n);
+          t.free_clusters <- free;
+          Lwt.return (Ok set)
+        | None ->
+          let cluster = t.next_cluster in
+          t.next_cluster <- Int64.add t.next_cluster n;
+          Log.debug (fun f -> f "Soft allocated span of clusters from %Ld (length %Ld)" cluster n);
+          let open Lwt_write_error.Infix in
+          resize_base t.base t.sector_size (Physical.make (t.next_cluster <| t.cluster_bits))
+          >>= fun () ->
+          let free = FreeClusters.Interval.make cluster Int64.(add cluster (pred n)) in
+          let set = FreeClusters.(add free empty) in
+          Lwt.return (Ok set)
       end
 
     module Refcount = struct
@@ -1460,6 +1488,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     (* qemu-img will allocate a cluster by writing only a single sector to the end
        of the file. Therefore we must round up: *)
     let next_cluster = Int64.(div (round_up size_bytes cluster_size) cluster_size) in
+    let free_clusters = FreeClusters.empty in
     let next_cluster_m = Lwt_mutex.create () in
     let read_cluster i =
       let buf = malloc h in
@@ -1502,7 +1531,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster_map = Qcow_cluster_map.zero in
     let cluster_map_m = Lwt_mutex.create () in
     let t' = {
-      h; base; info = info'; config; base_info; next_cluster; next_cluster_m;
+      h; base; info = info'; config; base_info;
+      free_clusters; next_cluster; next_cluster_m;
       cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock;
       background_compact_timer; cluster_map; cluster_map_m
     } in
