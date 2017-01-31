@@ -510,6 +510,23 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Log.debug (fun f -> f "Resized file to %Ld clusters" t.next_cluster);
         Lwt.return (Ok FreeClusters.empty)
       end else begin
+        (* Consider repopulating the free list *)
+        begin match t.config.Config.recycle_threshold with
+          | Some sectors when t.stats.Stats.nr_unmapped > sectors ->
+            Log.info (fun f -> f "Repopulating free list since nr_unmapped (%Ld) > recycle_threshold (%Ld)" t.stats.Stats.nr_unmapped sectors);
+            let bitmap = Qcow_cluster_map.free t.cluster_map in
+            let free_clusters = Qcow_bitmap.fold (fun i acc ->
+                Qcow_bitmap.remove i bitmap;
+                let x, y = Qcow_bitmap.Interval.(x i, y i) in
+                let i' = FreeClusters.Interval.make x y in
+                FreeClusters.add i' acc
+              ) bitmap t.free_clusters in
+            t.free_clusters <- free_clusters;
+            t.stats.Stats.nr_unmapped <- 0L;
+            (* All free clusters have been transferred from the cluster map bitmap
+               to the free list for reallocation *)
+          | _ -> ()
+        end;
         (* Take them from the free list if they are available *)
         let rec take acc free n =
           if n = 0L

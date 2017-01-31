@@ -63,6 +63,8 @@ let total_free t =
       Int64.add size acc
     ) t.free 0L
 
+let free t = t.free
+
 let add t rf cluster =
   let c, w = rf in
   if cluster = 0L then () else begin
