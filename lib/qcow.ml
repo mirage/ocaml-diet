@@ -432,6 +432,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       t.erased <- FreeClusters.union batch t.erased;
       Lwt.return (Ok ())
 
+    let after_flush t =
+      t.available <- FreeClusters.union t.available t.erased;
+      t.erased <- FreeClusters.empty
+
   end
 
   module Timer = Qcow_timer.Make(Time)
@@ -538,6 +542,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
         | Ok () ->
         Log.debug (fun f -> f "Written header");
+        Scrubber.after_flush t.scrubber;
         t.h <- h;
         Lwt.return (Ok ())
       end
@@ -670,7 +675,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                              | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
                              | Error `Disconnected -> Lwt.return (Error `Disconnected)
                              | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-                             | Ok () -> Lwt.return (Ok ())
+                             | Ok () ->
+                               Scrubber.after_flush t.scrubber;
+                               Lwt.return (Ok ())
                           end else Lwt.return (Ok ())
                       )
                       >>= fun () ->
@@ -868,6 +875,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               | Error `Disconnected -> Lwt.return (Error `Disconnected)
               | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
               | Ok () ->
+              Scrubber.after_flush t.scrubber;
               Log.debug (fun f -> f "Allocated new refcount cluster %Ld" cluster);
               let open Lwt_write_error.Infix in
               marshal_physical_address t offset addr
@@ -879,6 +887,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               | Error `Disconnected -> Lwt.return (Error `Disconnected)
               | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
               | Ok () ->
+              Scrubber.after_flush t.scrubber;
               let open Lwt_write_error.Infix in
               really_incr t cluster
               >>= fun () ->
@@ -903,6 +912,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         | Error `Disconnected -> Lwt.return (Error `Disconnected)
         | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
         | Ok () ->
+        Scrubber.after_flush t.scrubber;
         Log.debug (fun f -> f "Incremented refcount of cluster %Ld" cluster);
         Lwt.return (Ok ())
 
@@ -1415,6 +1425,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 | Error `Disconnected -> Lwt.return (Error `Disconnected)
                 | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
                 | Ok () ->
+                Scrubber.after_flush t.scrubber;
                 let open Lwt_write_error.Infix in
 
                 (* fold_left_s over Block.error Lwt.t values *)
@@ -1462,6 +1473,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 | Error `Disconnected -> Lwt.return (Error `Disconnected)
                 | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
                 | Ok () ->
+                Scrubber.after_flush t.scrubber;
                 let open Lwt_write_error.Infix in
 
                 let last_block = get_last_block map in
@@ -1873,6 +1885,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
     | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
     | Ok () ->
+    Scrubber.after_flush t.scrubber;
     Lwt.return (Ok t)
 
   let rebuild_refcount_table t =
