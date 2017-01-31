@@ -372,6 +372,31 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     }
   end
 
+  module Scrubber = struct
+    (* Securely erase and then recycle clusters *)
+    type t = {
+      base: B.t;
+      mutable available: FreeClusters.t; (* guaranteed to have been scrubbled *)
+      mutable erased: FreeClusters.t; (* zeroed but not yet flushed *)
+      mutable pending: FreeClusters.t; (* to be erased in future *)
+      cluster: Cstruct.t; (* a zero cluster for erasing *)
+      m: Lwt_mutex.t;
+    }
+
+    let create base cluster_bits =
+      let available = FreeClusters.empty in
+      let erased = FreeClusters.empty in
+      let pending = FreeClusters.empty in
+      let npages = 1 lsl (cluster_bits - 12) in
+      let pages = Io_page.(to_cstruct @@ get npages) in
+      let cluster = Cstruct.sub pages 0 (1 lsl cluster_bits) in
+      Cstruct.memset cluster 0;
+      let m = Lwt_mutex.create () in
+      { base; available; erased; pending; cluster; m }
+
+
+  end
+
   module Timer = Qcow_timer.Make(Time)
 
   type t = {
@@ -380,7 +405,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     base_info: Mirage_block.info;
     config: Config.t;
     info: Mirage_block.info;
-    mutable free_clusters: FreeClusters.t; (* when the file has holes in it *)
+    scrubber: Scrubber.t;
     mutable next_cluster: int64; (* when the file is extended *)
     next_cluster_m: Lwt_mutex.t;
     cache: Metadata.t;
@@ -531,8 +556,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                   let i' = FreeClusters.Interval.make x y in
                   FreeClusters.add i' acc
                 end
-              ) bitmap t.free_clusters in
-            t.free_clusters <- free_clusters;
+              ) bitmap t.scrubber.Scrubber.available in
+            t.scrubber.Scrubber.available <- free_clusters;
             t.stats.Stats.nr_unmapped <- 0L;
             (* All free clusters have been transferred from the cluster map bitmap
                to the free list for reallocation *)
@@ -554,10 +579,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             with
             | Not_found -> None
           end in
-        match take FreeClusters.empty t.free_clusters n with
+        match take FreeClusters.empty t.scrubber.Scrubber.available n with
         | Some (set, free) ->
           Log.debug (fun f -> f "Allocated %Ld clusters from free list" n);
-          t.free_clusters <- free;
+          t.scrubber.Scrubber.available <- free;
           Lwt.return (Ok (set, false))
         | None ->
           let cluster = t.next_cluster in
@@ -1438,7 +1463,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 Log.debug (fun f -> f "Shrink file so that last cluster was %Ld, now %Ld" start_last_block last_block);
                 t.next_cluster <- Int64.succ last_block;
                 (* The free list has been partially overwritten. *)
-                t.free_clusters <- FreeClusters.empty;
+                t.scrubber.Scrubber.available <- FreeClusters.empty;
                 Cluster.allocate_clusters t 0L (* takes care of the file size *)
                 >>= fun _ ->
 
@@ -1557,7 +1582,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     (* qemu-img will allocate a cluster by writing only a single sector to the end
        of the file. Therefore we must round up: *)
     let next_cluster = Int64.(div (round_up size_bytes cluster_size) cluster_size) in
-    let free_clusters = FreeClusters.empty in
+    let scrubber = Scrubber.create base cluster_bits in
     let next_cluster_m = Lwt_mutex.create () in
     let read_cluster i =
       let buf = malloc h in
@@ -1601,7 +1626,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster_map_m = Lwt_mutex.create () in
     let t' = {
       h; base; info = info'; config; base_info;
-      free_clusters; next_cluster; next_cluster_m;
+      scrubber; next_cluster; next_cluster_m;
       cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock;
       background_compact_timer; cluster_map; cluster_map_m
     } in
