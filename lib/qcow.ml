@@ -545,7 +545,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               let x, y = FreeClusters.Interval.(x i, y i) in
               let len = Int64.(succ @@ sub y x) in
               let will_use = min n len in
-              let i' = FreeClusters.Interval.(make (x i) Int64.(add (x i) will_use)) in
+              let i' = FreeClusters.Interval.make x Int64.(pred @@ add x will_use) in
               let free = FreeClusters.remove i' free in
               take (FreeClusters.add i' acc) free Int64.(sub n will_use)
             with
