@@ -376,6 +376,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     (* Securely erase and then recycle clusters *)
     type t = {
       base: B.t;
+      sector_size: int;
+      cluster_bits: int;
       mutable available: FreeClusters.t; (* guaranteed to have been scrubbled *)
       mutable erased: FreeClusters.t; (* zeroed but not yet flushed *)
       mutable pending: FreeClusters.t; (* to be erased in future *)
@@ -383,7 +385,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       m: Lwt_mutex.t;
     }
 
-    let create base cluster_bits =
+    let create ~base ~sector_size ~cluster_bits =
       let available = FreeClusters.empty in
       let erased = FreeClusters.empty in
       let pending = FreeClusters.empty in
@@ -392,8 +394,34 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let cluster = Cstruct.sub pages 0 (1 lsl cluster_bits) in
       Cstruct.memset cluster 0;
       let m = Lwt_mutex.create () in
-      { base; available; erased; pending; cluster; m }
+      { base; sector_size; cluster_bits; available; erased; pending; cluster; m }
 
+    let erase t remaining =
+      let rec loop remaining =
+        match FreeClusters.min_elt remaining with
+        | i ->
+          let x, y = FreeClusters.Interval.(x i, y i) in
+          let rec per_cluster x =
+            if x > y
+            then Lwt.return (Ok ())
+            else begin
+              let sector = Int64.(div (x <| t.cluster_bits) (of_int t.sector_size)) in
+              let open Lwt.Infix in
+              B.write t.base sector [ t.cluster ]
+              >>= function
+              | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+              | Error `Disconnected -> Lwt.return (Error `Disconnected)
+              | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+              | Ok () ->
+                per_cluster (Int64.succ x)
+            end in
+          let open Lwt_write_error.Infix in
+          per_cluster x
+          >>= fun () ->
+          loop (FreeClusters.remove i remaining)
+        | exception Not_found ->
+          Lwt.return (Ok ()) in
+      loop remaining
 
   end
 
@@ -994,38 +1022,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
       Lwt.return (Ok (Some (Physical.shift cluster_offset a.Virtual.cluster)))
 
-    let erase_clusters t remaining =
-      let npages = 1 lsl (t.cluster_bits - 12) in
-      let pages = Io_page.(to_cstruct @@ get npages) in
-      let cluster = Cstruct.sub pages 0 (1 lsl t.cluster_bits) in
-      Cstruct.memset cluster 0;
-
-      let rec loop remaining =
-        match FreeClusters.min_elt remaining with
-        | i ->
-          let x, y = FreeClusters.Interval.(x i, y i) in
-          let rec per_cluster x =
-            if x > y
-            then Lwt.return (Ok ())
-            else begin
-              let sector = Int64.(div (x <| t.cluster_bits) (of_int t.sector_size)) in
-              let open Lwt.Infix in
-              B.write t.base sector [ cluster ]
-              >>= function
-              | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-              | Error `Disconnected -> Lwt.return (Error `Disconnected)
-              | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-              | Ok () ->
-                per_cluster (Int64.succ x)
-            end in
-          let open Lwt_write_error.Infix in
-          per_cluster x
-          >>= fun () ->
-          loop (FreeClusters.remove i remaining)
-        | exception Not_found ->
-          Lwt.return (Ok ()) in
-      loop remaining
-
     (* Walk the L1 and L2 tables to translate an address, allocating missing
        entries as we go. *)
     let walk_and_allocate t a =
@@ -1041,7 +1037,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                >>= fun (free, already_zero) ->
                (* FIXME: it's unnecessary to write to the data cluster if we're
                   about to overwrite it with real data straight away *)
-               ( if not already_zero then erase_clusters t free else Lwt.return (Ok ()) )
+               ( if not already_zero then Scrubber.erase t.scrubber free else Lwt.return (Ok ()) )
                >>= fun () ->
                let l2_cluster = FreeClusters.(Interval.x (min_elt free)) in
                let free = FreeClusters.(remove (Interval.make l2_cluster l2_cluster) free) in
@@ -1063,7 +1059,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                if Physical.to_bytes data_offset = 0L then begin
                  allocate_clusters t 1L
                  >>= fun (free, already_zero) ->
-                 ( if not already_zero then erase_clusters t free else Lwt.return (Ok ()) )
+                 ( if not already_zero then Scrubber.erase t.scrubber free else Lwt.return (Ok ()) )
                  >>= fun () ->
                  let data_cluster = FreeClusters.(Interval.x (min_elt free)) in
                  Refcount.incr t data_cluster
@@ -1582,7 +1578,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     (* qemu-img will allocate a cluster by writing only a single sector to the end
        of the file. Therefore we must round up: *)
     let next_cluster = Int64.(div (round_up size_bytes cluster_size) cluster_size) in
-    let scrubber = Scrubber.create base cluster_bits in
+    let scrubber = Scrubber.create ~base ~sector_size ~cluster_bits in
     let next_cluster_m = Lwt_mutex.create () in
     let read_cluster i =
       let buf = malloc h in
