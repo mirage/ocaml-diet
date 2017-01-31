@@ -597,28 +597,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Log.debug (fun f -> f "Resized file to %Ld clusters" t.next_cluster);
         Lwt.return (Ok (FreeClusters.empty, true))
       end else begin
-        (* Consider repopulating the free list *)
-        begin match t.config.Config.recycle_threshold with
-          | Some sectors when t.stats.Stats.nr_unmapped > sectors ->
-            Log.info (fun f -> f "Repopulating free list since nr_unmapped (%Ld) > recycle_threshold (%Ld)" t.stats.Stats.nr_unmapped sectors);
-            let bitmap = Qcow_cluster_map.free t.cluster_map in
-            let free_clusters = Qcow_bitmap.fold (fun i acc ->
-                Qcow_bitmap.remove i bitmap;
-                let x, y = Qcow_bitmap.Interval.(x i, y i) in
-                (* The bitmap can be larger than the file if the file has been shrunk *)
-                let y = min (Int64.pred t.next_cluster) y in
-                if x > y then acc else begin
-                  Log.debug (fun f -> f "Adding (%Ld, %Ld) to free list" x y);
-                  let i' = FreeClusters.Interval.make x y in
-                  FreeClusters.add i' acc
-                end
-              ) bitmap t.scrubber.Scrubber.available in
-            t.scrubber.Scrubber.available <- free_clusters;
-            t.stats.Stats.nr_unmapped <- 0L;
-            (* All free clusters have been transferred from the cluster map bitmap
-               to the free list for reallocation *)
-          | _ -> ()
-        end;
         (* Take them from the free list if they are available *)
         let rec take acc free n =
           if n = 0L
@@ -2038,5 +2016,18 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let set_next_cluster t x = t.next_cluster <- x
 
     let erase_all t = Scrubber.erase_all t.scrubber
+
+    let flush t =
+      let open Lwt.Infix in
+      B.flush t.base
+      >>= function
+      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+      | Error `Disconnected -> Lwt.return (Error `Disconnected)
+      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+      | Ok () ->
+      Log.debug (fun f -> f "Written header");
+      Scrubber.after_flush t.scrubber;
+      Lwt.return (Ok ())
+
   end
 end

@@ -76,6 +76,8 @@ module type DEBUG = sig
   val set_next_cluster: t -> int64 -> unit
 
   val erase_all: t -> (unit, error) result Lwt.t
+
+  val flush: t -> (unit, error) result Lwt.t
 end
 
 module type INTERVAL_SET = sig
