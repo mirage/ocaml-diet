@@ -74,6 +74,8 @@ module type DEBUG = sig
   val check_no_overlaps: t -> (unit, error) result Lwt.t
 
   val set_next_cluster: t -> int64 -> unit
+
+  val erase_all: t -> (unit, error) result Lwt.t
 end
 
 module type INTERVAL_SET = sig

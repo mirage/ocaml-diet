@@ -311,6 +311,7 @@ let compact common_options_t unsafe_buffering filename =
     end;
     B.Debug.check_no_overlaps x
     >>= function
+    | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
     | Ok () -> Lwt.return (Ok ()) in
@@ -338,6 +339,7 @@ let repair unsafe_buffering filename =
     >>*= fun () ->
     B.Debug.check_no_overlaps x
     >>= function
+    | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
     | Ok () -> Lwt.return (Ok ()) in

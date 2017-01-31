@@ -124,5 +124,5 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
 
   module Debug: Qcow_s.DEBUG
     with type t = t
-     and type error = error
+     and type error = write_error
 end

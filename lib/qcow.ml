@@ -423,6 +423,15 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           Lwt.return (Ok ()) in
       loop remaining
 
+    let erase_all t =
+      let batch = t.pending in
+      t.pending <- FreeClusters.empty;
+      let open Lwt_write_error.Infix in
+      erase t batch
+      >>= fun () ->
+      t.erased <- FreeClusters.union batch t.erased;
+      Lwt.return (Ok ())
+
   end
 
   module Timer = Qcow_timer.Make(Time)
@@ -1989,10 +1998,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   let header t = t.h
 
   type t' = t
-  type error' = error
   module Debug = struct
     type t = t'
-    type error = error'
+    type error = write_error
     let check_no_overlaps t =
       let within = Physical.within_cluster ~cluster_bits:t.cluster_bits t.h.Header.l1_table_offset in
       assert (within = 0);
@@ -2001,5 +2009,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       Lwt.return (Ok ())
 
     let set_next_cluster t x = t.next_cluster <- x
+
+    let erase_all t = Scrubber.erase_all t.scrubber
   end
 end
