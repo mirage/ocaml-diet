@@ -40,7 +40,7 @@ let random_write_discard_compact nr_clusters stop_after =
     >>= fun () ->
     Block.connect path
     >>= fun block ->
-    let config = B.Config.create ~discard:true () in
+    let config = B.Config.create ~recycle_threshold:2048L ~discard:true () in
     B.create block ~size ~lazy_refcounts:false ~config ()
     >>= function
     | Error _ -> failwith "B.create failed"
