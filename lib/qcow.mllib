@@ -7,6 +7,7 @@ Qcow_s
 Qcow_diet
 Qcow_bitmap
 Qcow_rwlock
+Qcow_cluster
 Qcow_timer
 Qcow_cluster_map
 Qcow

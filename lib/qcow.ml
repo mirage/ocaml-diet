@@ -231,7 +231,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       read_cluster: int64 -> (Cstruct.t, error) result Lwt.t;
       write_cluster: int64 -> Cstruct.t -> (unit, write_error) result Lwt.t;
       mutable clusters: Cstruct.t Int64Map.t; (* cached metadata blocks *)
-      mutable locked: Int64Set.t; (* locked against read and write *)
+      locks: Qcow_cluster.t;
       mutable cluster_map: Qcow_cluster_map.t option; (* free/ used space map *)
       scrubber: Scrubber.t;
       cluster_bits: int;
@@ -286,52 +286,17 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let m = Lwt_mutex.create () in
       let c = Lwt_condition.create () in
       let clusters = Int64Map.empty in
-      let locked = Int64Set.empty in
+      let locks = Qcow_cluster.make () in
       let cluster_map = None in
-      { read_cluster; write_cluster; cluster_map; scrubber; cluster_bits; m; c; clusters; locked }
+      { read_cluster; write_cluster; cluster_map; scrubber; cluster_bits; m; c; clusters; locks }
 
     let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
-
-    let with_lock t cluster f =
-      let open Lwt in
-      let lock cluster =
-        Lwt_mutex.with_lock t.m
-          (fun () ->
-             let rec loop () =
-               if Int64Set.mem cluster t.locked then begin
-                 Lwt_condition.wait t.c ~mutex:t.m
-                 >>= fun () ->
-                 loop ()
-               end else begin
-                 t.locked <- Int64Set.add cluster t.locked;
-                 Lwt.return ()
-               end in
-             loop ()
-          ) in
-      let unlock cluster =
-        Lwt_mutex.with_lock t.m
-          (fun () ->
-             t.locked <- Int64Set.remove cluster t.locked;
-             Lwt.return ()
-          )
-        >>= fun () ->
-        Lwt_condition.signal t.c ();
-        Lwt.return () in
-      Lwt.catch
-        (fun () ->
-           lock cluster >>= fun () ->
-           f () >>= fun r ->
-           unlock cluster >>= fun () ->
-           Lwt.return r)
-        (fun e ->
-           unlock cluster >>= fun () ->
-           Lwt.fail e)
 
     (** Read the contents of [cluster] and apply the function [f] with the
         lock held. *)
     let read t cluster f =
       let open Lwt_error.Infix in
-      with_lock t cluster
+      Qcow_cluster.with_read_lock t.locks cluster
         (fun () ->
            ( if Int64Map.mem cluster t.clusters then begin
                let data = Int64Map.find cluster t.clusters in
@@ -350,7 +315,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         back the results, all with the lock held. *)
     let update t cluster f =
       let open Lwt_write_error.Infix in
-      with_lock t cluster
+      Qcow_cluster.with_write_lock t.locks cluster
         (fun () ->
            ( if Int64Map.mem cluster t.clusters then begin
                let data = Int64Map.find cluster t.clusters in
@@ -369,7 +334,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     (** Remove a cluster from the cache *)
     let remove t cluster =
-      with_lock t cluster
+      Qcow_cluster.with_write_lock t.locks cluster
         (fun () ->
           t.clusters <- Int64Map.remove cluster t.clusters;
           Lwt.return (Ok ())
