@@ -146,6 +146,34 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   module Int64Map = Map.Make(Int64)
   module Int64Set = Set.Make(Int64)
 
+  module Cache = struct
+    (* Cache of metadata blocks to speed up lookups *)
+    type t = {
+      read_cluster: int64 -> (Cstruct.t, error) result Lwt.t;
+      write_cluster: int64 -> Cstruct.t -> (unit, write_error) result Lwt.t;
+      mutable clusters: Cstruct.t Int64Map.t;
+    }
+    let create ~read_cluster ~write_cluster () =
+      let clusters = Int64Map.empty in
+      { read_cluster; write_cluster; clusters }
+    let read t cluster =
+      if Int64Map.mem cluster t.clusters then begin
+        let data = Int64Map.find cluster t.clusters in
+        Lwt.return (Ok data)
+      end else begin
+        let open Lwt_error.Infix in
+        t.read_cluster cluster
+        >>= fun data ->
+        t.clusters <- Int64Map.add cluster data t.clusters;
+        Lwt.return (Ok data)
+      end
+    let write t cluster data =
+      t.clusters <- Int64Map.add cluster data t.clusters;
+      t.write_cluster cluster data
+    let remove t cluster =
+      t.clusters <- Int64Map.remove cluster t.clusters
+  end
+
   module Scrubber = struct
     (* Securely erase and then recycle clusters *)
     type t = {
@@ -228,9 +256,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
        *)
 
     type t = {
-      read_cluster: int64 -> (Cstruct.t, error) result Lwt.t;
-      write_cluster: int64 -> Cstruct.t -> (unit, write_error) result Lwt.t;
-      mutable clusters: Cstruct.t Int64Map.t; (* cached metadata blocks *)
+      cache: Cache.t;
       locks: Qcow_cluster.t;
       mutable cluster_map: Qcow_cluster_map.t option; (* free/ used space map *)
       scrubber: Scrubber.t;
@@ -282,13 +308,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let erase cluster = Cstruct.memset cluster.data 0
 
-    let make ~read_cluster ~write_cluster ~scrubber ~cluster_bits () =
+    let make ~cache ~scrubber ~cluster_bits () =
       let m = Lwt_mutex.create () in
       let c = Lwt_condition.create () in
-      let clusters = Int64Map.empty in
       let locks = Qcow_cluster.make () in
       let cluster_map = None in
-      { read_cluster; write_cluster; cluster_map; scrubber; cluster_bits; m; c; clusters; locks }
+      { cache; cluster_map; scrubber; cluster_bits; m; c; locks }
 
     let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
 
@@ -298,17 +323,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let open Lwt_error.Infix in
       Qcow_cluster.with_read_lock t.locks cluster
         (fun () ->
-           ( if Int64Map.mem cluster t.clusters then begin
-               let data = Int64Map.find cluster t.clusters in
-               Lwt.return (Ok { t; data; cluster })
-             end else begin
-               t.read_cluster cluster
-               >>= fun data ->
-               t.clusters <- Int64Map.add cluster data t.clusters;
-               Lwt.return (Ok { t; data; cluster })
-             end
-           ) >>= fun buf ->
-           f buf
+          Cache.read t.cache cluster
+          >>= fun data ->
+          f { t; data; cluster }
         )
 
     (** Read the contents of [cluster], transform it via function [f] and write
@@ -317,26 +334,18 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let open Lwt_write_error.Infix in
       Qcow_cluster.with_write_lock t.locks cluster
         (fun () ->
-           ( if Int64Map.mem cluster t.clusters then begin
-               let data = Int64Map.find cluster t.clusters in
-               Lwt.return (Ok { t; data; cluster })
-             end else begin
-               t.read_cluster cluster
-               >>= fun data ->
-               Lwt.return (Ok { t; data; cluster })
-             end
-           ) >>= fun x ->
-           f x
-           >>= fun () ->
-           t.clusters <- Int64Map.add cluster x.data t.clusters;
-           t.write_cluster cluster x.data
+          Cache.read t.cache cluster
+          >>= fun data ->
+          f { t; data; cluster }
+          >>= fun () ->
+          Cache.write t.cache cluster data
         )
 
     (** Remove a cluster from the cache *)
     let remove t cluster =
       Qcow_cluster.with_write_lock t.locks cluster
         (fun () ->
-          t.clusters <- Int64Map.remove cluster t.clusters;
+          Cache.remove t.cache cluster;
           Lwt.return (Ok ())
         )
   end: sig
@@ -346,8 +355,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         reference counts. *)
 
     val make:
-      read_cluster:(int64 -> (Cstruct.t, error) result Lwt.t)
-      -> write_cluster:(int64 -> Cstruct.t -> (unit, write_error) result Lwt.t)
+      cache:Cache.t
       -> scrubber:Scrubber.t
       -> cluster_bits:int
       -> unit -> t
@@ -1575,7 +1583,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () -> Lwt.return (Ok ()) in
-    let cache = Metadata.make ~read_cluster ~write_cluster ~scrubber ~cluster_bits () in
+    let cache = Cache.create ~read_cluster ~write_cluster () in
+    let cache = Metadata.make ~cache ~scrubber ~cluster_bits () in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true; _ } -> true | _ -> false in
     let stats = Stats.zero in
     let metadata_lock = Qcow_rwlock.make () in
