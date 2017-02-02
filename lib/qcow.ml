@@ -266,19 +266,20 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       base: B.t;
       sector_size: int;
       cluster_bits: int;
+      locks: Qcow_cluster.t;
       mutable state: state;
       cluster: Cstruct.t; (* a zero cluster for erasing *)
       m: Lwt_mutex.t;
     }
 
-    let create ~base ~sector_size ~cluster_bits =
+    let create ~base ~sector_size ~cluster_bits ~locks =
       let state = nothing in
       let npages = 1 lsl (cluster_bits - 12) in
       let pages = Io_page.(to_cstruct @@ get npages) in
       let cluster = Cstruct.sub pages 0 (1 lsl cluster_bits) in
       Cstruct.memset cluster 0;
       let m = Lwt_mutex.create () in
-      { base; sector_size; cluster_bits; state; cluster; m }
+      { base; sector_size; cluster_bits; locks; state; cluster; m }
 
     (* Called after a full compact to reset everything. Otherwise we may try to
        erase blocks which nolonger exist. *)
@@ -376,7 +377,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     type t
     (** A cluster recycling engine *)
 
-    val create: base:B.t -> sector_size:int -> cluster_bits:int -> t
+    val create: base:B.t -> sector_size:int -> cluster_bits:int
+      -> locks:Qcow_cluster.t -> t
     (** Initialise a cluster recycler over the given block device *)
 
     val reset: t -> unit
@@ -464,12 +466,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let erase cluster = Cstruct.memset cluster.data 0
 
-    let make ~cache ~recycler ~cluster_bits () =
+    let make ~cache ~recycler ~cluster_bits ~locks () =
       let m = Lwt_mutex.create () in
       let c = Lwt_condition.create () in
-      let locks = Qcow_cluster.make () in
       let cluster_map = None in
-      { cache; cluster_map; recycler; cluster_bits; m; c; locks }
+      { cache; cluster_map; recycler; cluster_bits; locks; m; c }
 
     let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
 
@@ -514,6 +515,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       cache:Cache.t
       -> recycler:Recycler.t
       -> cluster_bits:int
+      -> locks:Qcow_cluster.t
       -> unit -> t
     (** Construct a qcow metadata structure given a set of cluster read/write/flush
         operations *)
@@ -589,6 +591,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     base_info: Mirage_block.info;
     config: Config.t;
     info: Mirage_block.info;
+    locks: Qcow_cluster.t;
     recycler: Recycler.t;
     mutable next_cluster: int64; (* when the file is extended *)
     next_cluster_m: Lwt_mutex.t;
@@ -1652,7 +1655,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     (* qemu-img will allocate a cluster by writing only a single sector to the end
        of the file. Therefore we must round up: *)
     let next_cluster = Int64.(div (round_up size_bytes cluster_size) cluster_size) in
-    let recycler = Recycler.create ~base ~sector_size ~cluster_bits in
+    let locks = Qcow_cluster.make () in
+    let recycler = Recycler.create ~base ~sector_size ~cluster_bits ~locks in
     let next_cluster_m = Lwt_mutex.create () in
     let read_cluster i =
       let buf = malloc h in
@@ -1672,7 +1676,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () -> Lwt.return (Ok ()) in
     let cache = Cache.create ~read_cluster ~write_cluster () in
-    let cache = Metadata.make ~cache ~recycler ~cluster_bits () in
+    let cache = Metadata.make ~cache ~recycler ~cluster_bits ~locks () in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true; _ } -> true | _ -> false in
     let stats = Stats.zero in
     let metadata_lock = Qcow_rwlock.make () in
@@ -1697,7 +1701,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster_map_m = Lwt_mutex.create () in
     let t' = {
       h; base; info = info'; config; base_info;
-      recycler; next_cluster; next_cluster_m;
+      locks; recycler; next_cluster; next_cluster_m;
       cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock;
       background_compact_timer; cluster_map; cluster_map_m
     } in
