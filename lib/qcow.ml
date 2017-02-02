@@ -201,33 +201,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Ok () -> Lwt.return (Ok ())
     end
 
-  module Cache = struct
-    (* Cache of metadata blocks to speed up lookups *)
-    type t = {
-      read_cluster: int64 -> (Cstruct.t, error) result Lwt.t;
-      write_cluster: int64 -> Cstruct.t -> (unit, write_error) result Lwt.t;
-      mutable clusters: Cstruct.t Int64Map.t;
-    }
-    let create ~read_cluster ~write_cluster () =
-      let clusters = Int64Map.empty in
-      { read_cluster; write_cluster; clusters }
-    let read t cluster =
-      if Int64Map.mem cluster t.clusters then begin
-        let data = Int64Map.find cluster t.clusters in
-        Lwt.return (Ok data)
-      end else begin
-        let open Lwt_error.Infix in
-        t.read_cluster cluster
-        >>= fun data ->
-        t.clusters <- Int64Map.add cluster data t.clusters;
-        Lwt.return (Ok data)
-      end
-    let write t cluster data =
-      t.clusters <- Int64Map.add cluster data t.clusters;
-      t.write_cluster cluster data
-    let remove t cluster =
-      t.clusters <- Int64Map.remove cluster t.clusters
-  end
+  module Cache = Qcow_cache
 
   module Recycler = (struct
     (* Securely erase and then recycle clusters *)
@@ -555,7 +529,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           >>= fun data ->
           f { t; data; cluster }
           >>= fun () ->
+          let open Lwt.Infix in
           Cache.write t.cache cluster data
+          >>= function
+          | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+          | Error `Disconnected -> Lwt.return (Error `Disconnected)
+          | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+          | Ok () -> Lwt.return (Ok ())
         )
 
     (** Remove a cluster from the cache *)
@@ -1725,10 +1705,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let buf = malloc h in
       let offset = i <| cluster_bits in
       let sector = Int64.(div offset (of_int sector_size)) in
-      let open Lwt_error.Infix in
+      let open Lwt.Infix in
       read_base base sector buf
-      >>= fun () ->
-      Lwt.return (Ok buf) in
+      >>= function
+      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+      | Error `Disconnected -> Lwt.return (Error `Disconnected)
+      | Ok () -> Lwt.return (Ok buf) in
     let write_cluster i buf =
       let offset = i <| cluster_bits in
       let sector = Int64.(div offset (of_int sector_size)) in
