@@ -322,7 +322,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
               | Error `Disconnected -> Lwt.return (Error `Disconnected)
               | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-              | Ok () -> Lwt.return (Ok ())
+              | Ok () ->
+                t.state <- { t.state with copied_to = Int64Map.add src dst t.state.copied_to };
+                Lwt.return (Ok ())
             )
           )
 
@@ -376,9 +378,16 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () ->
+        (* Everything in state 'copied_to' has now been flushed to disk so it's
+           safe to rewrite the metadata pointers next. *)
+        let copied_from =
+          Int64Map.fold (fun src dst acc ->
+            Int64Map.add dst src acc
+          ) state.copied_to state.copied_from in
         t.state <- { t.state with
           available = FreeClusters.union t.state.available state.erased;
           erased = FreeClusters.diff t.state.erased state.erased;
+          copied_from;
         };
         Lwt.return (Ok ())
 
