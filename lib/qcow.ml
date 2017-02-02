@@ -300,25 +300,31 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         None
 
     let copy t src dst =
-      Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
-      let npages = 1 lsl (t.cluster_bits - 12) in
-      let pages = Io_page.(to_cstruct @@ get npages) in
-      let cluster = Cstruct.sub pages 0 (1 lsl t.cluster_bits) in
+      Qcow_cluster.with_read_lock t.locks src
+        (fun () ->
+          Qcow_cluster.with_write_lock t.locks dst
+            (fun () ->
+              Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
+              let npages = 1 lsl (t.cluster_bits - 12) in
+              let pages = Io_page.(to_cstruct @@ get npages) in
+              let cluster = Cstruct.sub pages 0 (1 lsl t.cluster_bits) in
 
-      let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
+              let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
 
-      let src_sector = Int64.mul src sectors_per_cluster in
-      let dst_sector = Int64.mul dst sectors_per_cluster in
-      let open Lwt_error.Infix in
-      read_base t.base src_sector cluster
-      >>= fun () ->
-      let open Lwt.Infix in
-      B.write t.base dst_sector [ cluster ]
-      >>= function
-      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-      | Error `Disconnected -> Lwt.return (Error `Disconnected)
-      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-      | Ok () -> Lwt.return (Ok ())
+              let src_sector = Int64.mul src sectors_per_cluster in
+              let dst_sector = Int64.mul dst sectors_per_cluster in
+              let open Lwt_error.Infix in
+              read_base t.base src_sector cluster
+              >>= fun () ->
+              let open Lwt.Infix in
+              B.write t.base dst_sector [ cluster ]
+              >>= function
+              | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+              | Error `Disconnected -> Lwt.return (Error `Disconnected)
+              | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+              | Ok () -> Lwt.return (Ok ())
+            )
+          )
 
     let erase t remaining =
       let rec loop remaining =
@@ -849,21 +855,16 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 then Lwt.return (Ok ())
                 else begin
                   let physical = Physical.add t.h.Header.refcount_table_offset Int64.(of_int (i lsl t.cluster_bits)) in
-                  let sector, _ = Physical.to_sector ~sector_size:t.sector_size physical in
-                  let open Lwt.Infix in
-                  read_base t.base sector buf
-                  >>= function
-                  | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-                  | Error `Disconnected -> Lwt.return (Error `Disconnected)
-                  | Ok () ->
+                  let src = Physical.cluster ~cluster_bits:t.cluster_bits physical in
                   let first = FreeClusters.(Interval.x (min_elt free)) in
                   let physical = Physical.make (first <| t.cluster_bits) in
-                  let sector, _ = Physical.to_sector ~sector_size:t.sector_size physical in
+                  let dst = Physical.cluster ~cluster_bits:t.cluster_bits physical in
                   let open Lwt.Infix in
-                  B.write t.base sector [ buf ]
+                  Recycler.copy t.recycler src dst
                   >>= function
                   | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
                   | Error `Disconnected -> Lwt.return (Error `Disconnected)
+                  | Error (`Msg m) -> Lwt.return (Error (`Msg m))
                   | Error `Is_read_only -> Lwt.return (Error (`Msg "Device is read only"))
                   | Ok () ->
                   let free = FreeClusters.(remove (Interval.make first first) free) in
@@ -1227,7 +1228,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               (* Qemu-img will 'allocate' the last cluster by writing only the last sector.
                  Cope with this by assuming all later sectors are full of zeroes *)
               let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
-              read_base t.base base_sector buf
+              let cluster = Physical.cluster ~cluster_bits:t.cluster_bits offset' in
+              Qcow_cluster.with_read_lock t.locks cluster
+                (fun () ->
+                  read_base t.base base_sector buf
+                )
           ) (chop_into_aligned cluster_size byte bufs)
       )
 
@@ -1251,15 +1256,19 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 Lwt.return (Ok offset') )
             >>= fun offset' ->
             let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
+            let cluster = Physical.cluster ~cluster_bits:t.cluster_bits offset' in
             let open Lwt.Infix in
-            B.write t.base base_sector [ buf ]
-            >>= function
-            | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-            | Error `Disconnected -> Lwt.return (Error `Disconnected)
-            | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-            | Ok () ->
-            Log.debug (fun f -> f "Written user data to cluster %Ld" (Physical.cluster ~cluster_bits:t.cluster_bits offset'));
-            Lwt.return (Ok ())
+            Qcow_cluster.with_write_lock t.locks cluster
+              (fun () ->
+                B.write t.base base_sector [ buf ]
+                >>= function
+                | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+                | Error `Disconnected -> Lwt.return (Error `Disconnected)
+                | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+                | Ok () ->
+                Log.debug (fun f -> f "Written user data to cluster %Ld" (Physical.cluster ~cluster_bits:t.cluster_bits offset'));
+                Lwt.return (Ok ())
+              )
           ) (chop_into_aligned cluster_size byte bufs)
       )
 
