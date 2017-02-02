@@ -21,7 +21,30 @@ module Header = Qcow_header
 module Virtual = Qcow_virtual
 module Physical = Qcow_physical
 
-module FreeClusters = Qcow_diet.Make(Int64)
+module FreeClusters = struct
+  include Qcow_diet.Make(Int64)
+
+  let take t n =
+    let rec loop acc free n =
+      if n = 0L
+      then Some (acc, free)
+      else begin
+        match (
+          try
+            let i = min_elt free in
+            let x, y = Interval.(x i, y i) in
+            let len = Int64.(succ @@ sub y x) in
+            let will_use = min n len in
+            let i' = Interval.make x Int64.(pred @@ add x will_use) in
+            Some ((add i' acc), (remove i' free), Int64.(sub n will_use))
+          with
+          | Not_found -> None
+        ) with
+        | Some (acc', free', n') -> loop acc' free' n'
+        | None -> None
+      end in
+    loop empty t n
+end
 
 let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right_logical
@@ -174,16 +197,33 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       t.clusters <- Int64Map.remove cluster t.clusters
   end
 
-  module Recycler = struct
+  module Recycler = (struct
     (* Securely erase and then recycle clusters *)
 
     type t = {
       base: B.t;
       sector_size: int;
       cluster_bits: int;
-      mutable available: FreeClusters.t; (* guaranteed to have been scrubbled *)
-      mutable erased: FreeClusters.t; (* zeroed but not yet flushed *)
-      mutable pending: FreeClusters.t; (* to be erased in future *)
+      mutable available: FreeClusters.t;
+      (** guaranteed to contain zeroes even after a crash *)
+
+      mutable erased: FreeClusters.t;
+      (** zeroed but not yet flushed so the old data may come back after a crash *)
+
+      mutable junk: FreeClusters.t;
+      (** unused clusters containing arbitrary data *)
+
+      mutable copied_to: int64 Int64Map.t;
+      (** contents of this cluster have been copied once to another cluster.
+          If this cluster is modified then the copy should be demoted back to
+          junk status. Once flushed, we should rewrite the pointer and switch to
+          copied from. *)
+
+      mutable copied_from: int64 Int64Map.t;
+      (** This cluster is a copy of an original, and the reference now pointers
+          here. After the next flush we can set the original cluster to junk
+          status for scrubbing or reallocation. *)
+
       cluster: Cstruct.t; (* a zero cluster for erasing *)
       m: Lwt_mutex.t;
     }
@@ -191,20 +231,37 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let create ~base ~sector_size ~cluster_bits =
       let available = FreeClusters.empty in
       let erased = FreeClusters.empty in
-      let pending = FreeClusters.empty in
+      let junk = FreeClusters.empty in
+      let copied_to = Int64Map.empty in
+      let copied_from = Int64Map.empty in
       let npages = 1 lsl (cluster_bits - 12) in
       let pages = Io_page.(to_cstruct @@ get npages) in
       let cluster = Cstruct.sub pages 0 (1 lsl cluster_bits) in
       Cstruct.memset cluster 0;
       let m = Lwt_mutex.create () in
-      { base; sector_size; cluster_bits; available; erased; pending; cluster; m }
+      { base; sector_size; cluster_bits;
+        available; erased; junk; copied_to; copied_from;
+        cluster; m }
 
     (* Called after a full compact to reset everything. Otherwise we may try to
        erase blocks which nolonger exist. *)
     let reset t =
       t.available <- FreeClusters.empty;
       t.erased <- FreeClusters.empty;
-      t.pending <- FreeClusters.empty
+      t.junk <- FreeClusters.empty
+
+    let add_to_junk t cluster =
+      let i = FreeClusters.Interval.make cluster cluster in
+      t.junk <- FreeClusters.add i t.junk
+
+    let allocate t n =
+      match FreeClusters.take t.available n with
+      | Some (set, free) ->
+        Log.debug (fun f -> f "Allocated %Ld clusters from free list" n);
+        t.available <- free;
+        Some set
+      | None ->
+        None
 
     let erase t remaining =
       let rec loop remaining =
@@ -235,8 +292,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       loop remaining
 
     let erase_all t =
-      let batch = t.pending in
-      t.pending <- FreeClusters.empty;
+      let batch = t.junk in
+      t.junk <- FreeClusters.empty;
       let open Lwt_write_error.Infix in
       erase t batch
       >>= fun () ->
@@ -247,7 +304,36 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       t.available <- FreeClusters.union t.available t.erased;
       t.erased <- FreeClusters.empty
 
-  end
+  end: sig
+    type t
+    (** A cluster recycling engine *)
+
+    val create: base:B.t -> sector_size:int -> cluster_bits:int -> t
+    (** Initialise a cluster recycler over the given block device *)
+
+    val reset: t -> unit
+    (** Drop all state: useful when some other function has made untracked
+        changes to the used/free blocks. Eventually this probably should be
+        removed the compact function should be rewritten *)
+
+    val add_to_junk: t -> int64 -> unit
+    (** Input the given cluster (with arbitrary contents) to the recycler *)
+
+    val allocate: t -> int64 -> FreeClusters.t option
+    (** [allocate t n] returns [n] clusters which are ready for re-use. If there
+        are not enough clusters free then this returns None. *)
+
+    val erase: t -> FreeClusters.t -> (unit, write_error) result Lwt.t
+    (** Write zeroes over the specified set of clusters *)
+
+    val erase_all: t -> (unit, write_error) result Lwt.t
+    (** Erase all junk clusters *)
+
+    val after_flush: t -> unit
+    (** Notify the recycler that a flush has happened. FIXME: I need to hold
+        a lock while the flush is happening. *)
+
+  end)
 
   module Metadata = (struct
     (** An in-memory cache of metadata clusters used to speed up lookups.
@@ -296,8 +382,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               (if cluster <> 0L then ", unmapping " ^ (Int64.to_string cluster) else "")
             );
             if cluster <> 0L then begin
-              let i = FreeClusters.Interval.make cluster cluster in
-              t.t.scrubber.Recycler.pending <- FreeClusters.add i t.t.scrubber.Recycler.pending;
+              Recycler.add_to_junk t.t.scrubber cluster;
               Qcow_cluster_map.remove m cluster;
             end;
             Qcow_cluster_map.add m (t.cluster, n) v'
@@ -572,26 +657,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Lwt.return (Ok (FreeClusters.empty, true))
       end else begin
         (* Take them from the free list if they are available *)
-        let rec take acc free n =
-          if n = 0L
-          then Some (acc, free)
-          else begin
-            try
-              let i = FreeClusters.min_elt free in
-              let x, y = FreeClusters.Interval.(x i, y i) in
-              let len = Int64.(succ @@ sub y x) in
-              let will_use = min n len in
-              let i' = FreeClusters.Interval.make x Int64.(pred @@ add x will_use) in
-              let free = FreeClusters.remove i' free in
-              take (FreeClusters.add i' acc) free Int64.(sub n will_use)
-            with
-            | Not_found -> None
-          end in
-        match take FreeClusters.empty t.scrubber.Recycler.available n with
-        | Some (set, free) ->
+        match Recycler.allocate t.scrubber n with
+        | Some set ->
           Log.debug (fun f -> f "Allocated %Ld clusters from free list" n);
-          t.scrubber.Recycler.available <- free;
-          Lwt.return (Ok (set, false))
+          Lwt.return (Ok (set, true))
         | None ->
           let cluster = t.next_cluster in
           t.next_cluster <- Int64.add t.next_cluster n;
