@@ -338,7 +338,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             else begin
               let sector = Int64.(div (x <| t.cluster_bits) (of_int t.sector_size)) in
               let open Lwt.Infix in
-              B.write t.base sector [ t.cluster ]
+              Qcow_cluster.with_write_lock t.locks x
+                (fun () ->
+                  B.write t.base sector [ t.cluster ]
+                )
               >>= function
               | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
               | Error `Disconnected -> Lwt.return (Error `Disconnected)
