@@ -300,9 +300,19 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       t.erased <- FreeClusters.union batch t.erased;
       Lwt.return (Ok ())
 
-    let after_flush t =
-      t.available <- FreeClusters.union t.available t.erased;
-      t.erased <- FreeClusters.empty
+    let flush t =
+      (* Anything erased right now will become available *)
+      let erased = t.erased in
+      let open Lwt.Infix in
+      B.flush t.base
+      >>= function
+      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+      | Error `Disconnected -> Lwt.return (Error `Disconnected)
+      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+      | Ok () ->
+        t.available <- FreeClusters.union t.available erased;
+        t.erased <- FreeClusters.diff t.erased erased;
+        Lwt.return (Ok ())
 
   end: sig
     type t
@@ -329,9 +339,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     val erase_all: t -> (unit, write_error) result Lwt.t
     (** Erase all junk clusters *)
 
-    val after_flush: t -> unit
-    (** Notify the recycler that a flush has happened. FIXME: I need to hold
-        a lock while the flush is happening. *)
+    val flush: t -> (unit, B.write_error) result Lwt.t
+    (** Issue a flush to the block device, update internal recycler state. *)
 
   end)
 
@@ -346,7 +355,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       cache: Cache.t;
       locks: Qcow_cluster.t;
       mutable cluster_map: Qcow_cluster_map.t option; (* free/ used space map *)
-      scrubber: Recycler.t;
+      recycler: Recycler.t;
       cluster_bits: int;
       m: Lwt_mutex.t;
       c: unit Lwt_condition.t;
@@ -382,7 +391,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               (if cluster <> 0L then ", unmapping " ^ (Int64.to_string cluster) else "")
             );
             if cluster <> 0L then begin
-              Recycler.add_to_junk t.t.scrubber cluster;
+              Recycler.add_to_junk t.t.recycler cluster;
               Qcow_cluster_map.remove m cluster;
             end;
             Qcow_cluster_map.add m (t.cluster, n) v'
@@ -394,12 +403,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let erase cluster = Cstruct.memset cluster.data 0
 
-    let make ~cache ~scrubber ~cluster_bits () =
+    let make ~cache ~recycler ~cluster_bits () =
       let m = Lwt_mutex.create () in
       let c = Lwt_condition.create () in
       let locks = Qcow_cluster.make () in
       let cluster_map = None in
-      { cache; cluster_map; scrubber; cluster_bits; m; c; locks }
+      { cache; cluster_map; recycler; cluster_bits; m; c; locks }
 
     let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
 
@@ -442,7 +451,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     val make:
       cache:Cache.t
-      -> scrubber:Recycler.t
+      -> recycler:Recycler.t
       -> cluster_bits:int
       -> unit -> t
     (** Construct a qcow metadata structure given a set of cluster read/write/flush
@@ -519,7 +528,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     base_info: Mirage_block.info;
     config: Config.t;
     info: Mirage_block.info;
-    scrubber: Recycler.t;
+    recycler: Recycler.t;
     mutable next_cluster: int64; (* when the file is extended *)
     next_cluster_m: Lwt_mutex.t;
     cache: Metadata.t;
@@ -608,14 +617,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         | Error `Disconnected -> Lwt.return (Error `Disconnected)
         | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
         | Ok () ->
-        B.flush t.base
+        Recycler.flush t.recycler
         >>= function
         | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
         | Error `Disconnected -> Lwt.return (Error `Disconnected)
         | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
         | Ok () ->
         Log.debug (fun f -> f "Written header");
-        Recycler.after_flush t.scrubber;
         t.h <- h;
         Lwt.return (Ok ())
       end
@@ -657,7 +665,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Lwt.return (Ok (FreeClusters.empty, true))
       end else begin
         (* Take them from the free list if they are available *)
-        match Recycler.allocate t.scrubber n with
+        match Recycler.allocate t.recycler n with
         | Some set ->
           Log.debug (fun f -> f "Allocated %Ld clusters from free list" n);
           Lwt.return (Ok (set, true))
@@ -705,14 +713,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                               )
                              >>= fun () ->
                              let open Lwt.Infix in
-                             B.flush t.base
+                             Recycler.flush t.recycler
                              >>= function
                              | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
                              | Error `Disconnected -> Lwt.return (Error `Disconnected)
                              | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-                             | Ok () ->
-                               Recycler.after_flush t.scrubber;
-                               Lwt.return (Ok ())
+                             | Ok () -> Lwt.return (Ok ())
                           end else Lwt.return (Ok ())
                       )
                       >>= fun () ->
@@ -904,25 +910,23 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               | Ok () ->
               (* Ensure the new zeroed cluster has been persisted before we reference
                  it via `marshal_physical_address` *)
-              B.flush t.base
+              Recycler.flush t.recycler
               >>= function
               | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
               | Error `Disconnected -> Lwt.return (Error `Disconnected)
               | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
               | Ok () ->
-              Recycler.after_flush t.scrubber;
               Log.debug (fun f -> f "Allocated new refcount cluster %Ld" cluster);
               let open Lwt_write_error.Infix in
               marshal_physical_address t offset addr
               >>= fun () ->
               let open Lwt.Infix in
-              B.flush t.base
+              Recycler.flush t.recycler
               >>= function
               | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
               | Error `Disconnected -> Lwt.return (Error `Disconnected)
               | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
               | Ok () ->
-              Recycler.after_flush t.scrubber;
               let open Lwt_write_error.Infix in
               really_incr t cluster
               >>= fun () ->
@@ -941,13 +945,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           )
         >>= fun () ->
         let open Lwt.Infix in
-        B.flush t.base
+        Recycler.flush t.recycler
         >>= function
         | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
         | Error `Disconnected -> Lwt.return (Error `Disconnected)
         | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
         | Ok () ->
-        Recycler.after_flush t.scrubber;
         Log.debug (fun f -> f "Incremented refcount of cluster %Ld" cluster);
         Lwt.return (Ok ())
 
@@ -1091,7 +1094,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                >>= fun (free, already_zero) ->
                (* FIXME: it's unnecessary to write to the data cluster if we're
                   about to overwrite it with real data straight away *)
-               ( if not already_zero then Recycler.erase t.scrubber free else Lwt.return (Ok ()) )
+               ( if not already_zero then Recycler.erase t.recycler free else Lwt.return (Ok ()) )
                >>= fun () ->
                let l2_cluster = FreeClusters.(Interval.x (min_elt free)) in
                let free = FreeClusters.(remove (Interval.make l2_cluster l2_cluster) free) in
@@ -1113,7 +1116,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                if Physical.to_bytes data_offset = 0L then begin
                  allocate_clusters t 1L
                  >>= fun (free, already_zero) ->
-                 ( if not already_zero then Recycler.erase t.scrubber free else Lwt.return (Ok ()) )
+                 ( if not already_zero then Recycler.erase t.recycler free else Lwt.return (Ok ()) )
                  >>= fun () ->
                  let data_cluster = FreeClusters.(Interval.x (min_elt free)) in
                  Refcount.incr t data_cluster
@@ -1454,13 +1457,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 (* Flush now so that if we crash after updating some of the references, the
                    destination blocks will contain the correct data. *)
                 let open Lwt.Infix in
-                B.flush t.base
+                Recycler.flush t.recycler
                 >>= function
                 | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
                 | Error `Disconnected -> Lwt.return (Error `Disconnected)
                 | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
                 | Ok () ->
-                Recycler.after_flush t.scrubber;
                 let open Lwt_write_error.Infix in
 
                 (* fold_left_s over Block.error Lwt.t values *)
@@ -1502,20 +1504,19 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
                 (* Flush now so that the pointers are persisted before we truncate the file *)
                 let open Lwt.Infix in
-                B.flush t.base
+                Recycler.flush t.recycler
                 >>= function
                 | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
                 | Error `Disconnected -> Lwt.return (Error `Disconnected)
                 | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
                 | Ok () ->
-                Recycler.after_flush t.scrubber;
                 let open Lwt_write_error.Infix in
 
                 let last_block = get_last_block map in
                 Log.debug (fun f -> f "Shrink file so that last cluster was %Ld, now %Ld" start_last_block last_block);
                 t.next_cluster <- Int64.succ last_block;
                 (* The free list has been partially overwritten. *)
-                Recycler.reset t.scrubber;
+                Recycler.reset t.recycler;
                 Cluster.allocate_clusters t 0L (* takes care of the file size *)
                 >>= fun _ ->
 
@@ -1634,7 +1635,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     (* qemu-img will allocate a cluster by writing only a single sector to the end
        of the file. Therefore we must round up: *)
     let next_cluster = Int64.(div (round_up size_bytes cluster_size) cluster_size) in
-    let scrubber = Recycler.create ~base ~sector_size ~cluster_bits in
+    let recycler = Recycler.create ~base ~sector_size ~cluster_bits in
     let next_cluster_m = Lwt_mutex.create () in
     let read_cluster i =
       let buf = malloc h in
@@ -1654,7 +1655,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () -> Lwt.return (Ok ()) in
     let cache = Cache.create ~read_cluster ~write_cluster () in
-    let cache = Metadata.make ~cache ~scrubber ~cluster_bits () in
+    let cache = Metadata.make ~cache ~recycler ~cluster_bits () in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true; _ } -> true | _ -> false in
     let stats = Stats.zero in
     let metadata_lock = Qcow_rwlock.make () in
@@ -1679,7 +1680,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster_map_m = Lwt_mutex.create () in
     let t' = {
       h; base; info = info'; config; base_info;
-      scrubber; next_cluster; next_cluster_m;
+      recycler; next_cluster; next_cluster_m;
       cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock;
       background_compact_timer; cluster_map; cluster_map_m
     } in
@@ -1915,13 +1916,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
     | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
     | Ok () ->
-    B.flush base
+    Recycler.flush t.recycler
     >>= function
     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
     | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
     | Ok () ->
-    Recycler.after_flush t.scrubber;
     Lwt.return (Ok t)
 
   let rebuild_refcount_table t =
@@ -2059,18 +2059,17 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let set_next_cluster t x = t.next_cluster <- x
 
-    let erase_all t = Recycler.erase_all t.scrubber
+    let erase_all t = Recycler.erase_all t.recycler
 
     let flush t =
       let open Lwt.Infix in
-      B.flush t.base
+      Recycler.flush t.recycler
       >>= function
       | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () ->
       Log.debug (fun f -> f "Written header");
-      Recycler.after_flush t.scrubber;
       Lwt.return (Ok ())
 
   end
