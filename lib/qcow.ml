@@ -232,7 +232,29 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   module Recycler = (struct
     (* Securely erase and then recycle clusters *)
 
-    type state = {
+    type move_state =
+      | Copying
+        (** a background copy is in progress. If this cluster is modified then
+            the copy should be aborted. *)
+      | Copied
+        (** contents of this cluster have been copied once to another cluster.
+            If this cluster is modified then the copy should be aborted. *)
+      | Flushed
+        (** contents of this cluster have been copied and flushed to disk: it
+            is now safe to rewrite the pointer. If this cluster is modified then
+            the copy should be aborted. *)
+      | Referenced
+        (** the reference has been rewritten; it is now safe to write to this
+            cluster again. On the next flush, the copy is complete and the original
+            block can be recycled. *)
+
+    type move = {
+      move: Qcow_cluster_map.Move.t;
+      state: move_state;
+    }
+    (** describes the state of an in-progress block move *)
+
+    type clusters = {
       available: FreeClusters.t;
       (** guaranteed to contain zeroes even after a crash *)
 
@@ -242,24 +264,15 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       junk: FreeClusters.t;
       (** unused clusters containing arbitrary data *)
 
-      copied_to: int64 Int64Map.t;
-      (** contents of this cluster have been copied once to another cluster.
-          If this cluster is modified then the copy should be demoted back to
-          junk status. Once flushed, we should rewrite the pointer and switch to
-          copied from. *)
-
-      copied_from: int64 Int64Map.t;
-      (** This cluster is a copy of an original, and the reference now pointers
-          here. After the next flush we can set the original cluster to junk
-          status for scrubbing or reallocation. *)
+      moves: move Int64Map.t;
+      (** all in-progress block moves, indexed by the source cluster *)
     }
 
     let nothing = {
       available = FreeClusters.empty;
       erased = FreeClusters.empty;
       junk = FreeClusters.empty;
-      copied_to = Int64Map.empty;
-      copied_from = Int64Map.empty;
+      moves = Int64Map.empty;
     }
 
     type t = {
@@ -267,34 +280,34 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       sector_size: int;
       cluster_bits: int;
       locks: Qcow_cluster.t;
-      mutable state: state;
+      mutable clusters: clusters;
       cluster: Cstruct.t; (* a zero cluster for erasing *)
       m: Lwt_mutex.t;
     }
 
     let create ~base ~sector_size ~cluster_bits ~locks =
-      let state = nothing in
+      let clusters = nothing in
       let npages = 1 lsl (cluster_bits - 12) in
       let pages = Io_page.(to_cstruct @@ get npages) in
       let cluster = Cstruct.sub pages 0 (1 lsl cluster_bits) in
       Cstruct.memset cluster 0;
       let m = Lwt_mutex.create () in
-      { base; sector_size; cluster_bits; locks; state; cluster; m }
+      { base; sector_size; cluster_bits; locks; clusters; cluster; m }
 
     (* Called after a full compact to reset everything. Otherwise we may try to
        erase blocks which nolonger exist. *)
     let reset t =
-      t.state <- nothing
+      t.clusters <- nothing
 
     let add_to_junk t cluster =
       let i = FreeClusters.Interval.make cluster cluster in
-      t.state <- { t.state with junk = FreeClusters.add i t.state.junk }
+      t.clusters <- { t.clusters with junk = FreeClusters.add i t.clusters.junk }
 
     let allocate t n =
-      match FreeClusters.take t.state.available n with
+      match FreeClusters.take t.clusters.available n with
       | Some (set, free) ->
         Log.debug (fun f -> f "Allocated %Ld clusters from free list" n);
-        t.state <- { t.state with available = free };
+        t.clusters <- { t.clusters with available = free };
         Some set
       | None ->
         None
@@ -322,11 +335,24 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
               | Error `Disconnected -> Lwt.return (Error `Disconnected)
               | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-              | Ok () ->
-                t.state <- { t.state with copied_to = Int64Map.add src dst t.state.copied_to };
-                Lwt.return (Ok ())
+              | Ok () -> Lwt.return (Ok ())
             )
           )
+
+    let move t move =
+      let m = { move; state = Copying } in
+      let src, dst = Qcow_cluster_map.Move.(move.src, move.dst) in
+      t.clusters <- { t.clusters with moves = Int64Map.add src m t.clusters.moves };
+      let open Lwt_write_error.Infix in
+      copy t src dst
+      >>= fun () ->
+      (* FIXME: make a concurrent write remove the entry *)
+      t.clusters <- { t.clusters with moves =
+        if Int64Map.mem src t.clusters.moves
+        then Int64Map.add src { m with state = Copied } t.clusters.moves
+        else t.clusters.moves
+      };
+      Lwt.return (Ok ())
 
     let erase t remaining =
       let rec loop remaining =
@@ -360,17 +386,17 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       loop remaining
 
     let erase_all t =
-      let batch = t.state.junk in
-      t.state <- { t.state with junk = FreeClusters.empty };
+      let batch = t.clusters.junk in
+      t.clusters <- { t.clusters with junk = FreeClusters.empty };
       let open Lwt_write_error.Infix in
       erase t batch
       >>= fun () ->
-      t.state <- { t.state with erased = FreeClusters.union batch t.state.erased };
+      t.clusters <- { t.clusters with erased = FreeClusters.union batch t.clusters.erased };
       Lwt.return (Ok ())
 
     let flush t =
       (* Anything erased right now will become available *)
-      let state = t.state in
+      let clusters = t.clusters in
       let open Lwt.Infix in
       B.flush t.base
       >>= function
@@ -378,16 +404,29 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () ->
-        (* Everything in state 'copied_to' has now been flushed to disk so it's
-           safe to rewrite the metadata pointers next. *)
-        let copied_from =
-          Int64Map.fold (fun src dst acc ->
-            Int64Map.add dst src acc
-          ) state.copied_to state.copied_from in
-        t.state <- { t.state with
-          available = FreeClusters.union t.state.available state.erased;
-          erased = FreeClusters.diff t.state.erased state.erased;
-          copied_from;
+        (* Walk over the moves in the map from before the flush, and accumulate
+           changes on the current state of moves. If a move started while we
+           were flushing, then it should be preserved as-is until the next flush. *)
+        let moves, junk = Int64Map.fold (fun src (move: move) (acc, junk) ->
+          if not(Int64Map.mem src acc) then begin
+            (* This move appeared while the flush was happening: next time *)
+            acc, junk
+          end else begin
+            match move.state with
+              | Copied ->
+                Int64Map.add src { move with state = Flushed } acc, junk
+              | Flushed ->
+                (* FIXME: who rewrites the references *)
+                Int64Map.add src { move with state = Flushed } acc, junk
+              | Referenced ->
+                Int64Map.remove src acc, FreeClusters.(add (Interval.make src src) junk)
+          end
+        ) clusters.moves (t.clusters.moves, FreeClusters.empty) in
+        t.clusters <- {
+          available = FreeClusters.union t.clusters.available clusters.erased;
+          erased = FreeClusters.diff t.clusters.erased clusters.erased;
+          junk = FreeClusters.union t.clusters.junk junk;
+          moves;
         };
         Lwt.return (Ok ())
 
@@ -416,6 +455,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     val copy: t -> int64 -> int64 -> (unit, write_error) result Lwt.t
     (** [copy src dst] copies the cluster [src] to [dst] *)
+
+    val move: t -> Qcow_cluster_map.Move.t -> (unit, write_error) result Lwt.t
+    (** [move t mv] perform the initial data copy of the move operation [mv] *)
 
     val erase_all: t -> (unit, write_error) result Lwt.t
     (** Erase all junk clusters *)
