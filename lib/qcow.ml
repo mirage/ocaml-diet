@@ -200,65 +200,68 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   module Recycler = (struct
     (* Securely erase and then recycle clusters *)
 
-    type t = {
-      base: B.t;
-      sector_size: int;
-      cluster_bits: int;
-      mutable available: FreeClusters.t;
+    type state = {
+      available: FreeClusters.t;
       (** guaranteed to contain zeroes even after a crash *)
 
-      mutable erased: FreeClusters.t;
+      erased: FreeClusters.t;
       (** zeroed but not yet flushed so the old data may come back after a crash *)
 
-      mutable junk: FreeClusters.t;
+      junk: FreeClusters.t;
       (** unused clusters containing arbitrary data *)
 
-      mutable copied_to: int64 Int64Map.t;
+      copied_to: int64 Int64Map.t;
       (** contents of this cluster have been copied once to another cluster.
           If this cluster is modified then the copy should be demoted back to
           junk status. Once flushed, we should rewrite the pointer and switch to
           copied from. *)
 
-      mutable copied_from: int64 Int64Map.t;
+      copied_from: int64 Int64Map.t;
       (** This cluster is a copy of an original, and the reference now pointers
           here. After the next flush we can set the original cluster to junk
           status for scrubbing or reallocation. *)
+    }
 
+    let nothing = {
+      available = FreeClusters.empty;
+      erased = FreeClusters.empty;
+      junk = FreeClusters.empty;
+      copied_to = Int64Map.empty;
+      copied_from = Int64Map.empty;
+    }
+
+    type t = {
+      base: B.t;
+      sector_size: int;
+      cluster_bits: int;
+      mutable state: state;
       cluster: Cstruct.t; (* a zero cluster for erasing *)
       m: Lwt_mutex.t;
     }
 
     let create ~base ~sector_size ~cluster_bits =
-      let available = FreeClusters.empty in
-      let erased = FreeClusters.empty in
-      let junk = FreeClusters.empty in
-      let copied_to = Int64Map.empty in
-      let copied_from = Int64Map.empty in
+      let state = nothing in
       let npages = 1 lsl (cluster_bits - 12) in
       let pages = Io_page.(to_cstruct @@ get npages) in
       let cluster = Cstruct.sub pages 0 (1 lsl cluster_bits) in
       Cstruct.memset cluster 0;
       let m = Lwt_mutex.create () in
-      { base; sector_size; cluster_bits;
-        available; erased; junk; copied_to; copied_from;
-        cluster; m }
+      { base; sector_size; cluster_bits; state; cluster; m }
 
     (* Called after a full compact to reset everything. Otherwise we may try to
        erase blocks which nolonger exist. *)
     let reset t =
-      t.available <- FreeClusters.empty;
-      t.erased <- FreeClusters.empty;
-      t.junk <- FreeClusters.empty
+      t.state <- nothing
 
     let add_to_junk t cluster =
       let i = FreeClusters.Interval.make cluster cluster in
-      t.junk <- FreeClusters.add i t.junk
+      t.state <- { t.state with junk = FreeClusters.add i t.state.junk }
 
     let allocate t n =
-      match FreeClusters.take t.available n with
+      match FreeClusters.take t.state.available n with
       | Some (set, free) ->
         Log.debug (fun f -> f "Allocated %Ld clusters from free list" n);
-        t.available <- free;
+        t.state <- { t.state with available = free };
         Some set
       | None ->
         None
@@ -292,17 +295,17 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       loop remaining
 
     let erase_all t =
-      let batch = t.junk in
-      t.junk <- FreeClusters.empty;
+      let batch = t.state.junk in
+      t.state <- { t.state with junk = FreeClusters.empty };
       let open Lwt_write_error.Infix in
       erase t batch
       >>= fun () ->
-      t.erased <- FreeClusters.union batch t.erased;
+      t.state <- { t.state with erased = FreeClusters.union batch t.state.erased };
       Lwt.return (Ok ())
 
     let flush t =
       (* Anything erased right now will become available *)
-      let erased = t.erased in
+      let state = t.state in
       let open Lwt.Infix in
       B.flush t.base
       >>= function
@@ -310,8 +313,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () ->
-        t.available <- FreeClusters.union t.available erased;
-        t.erased <- FreeClusters.diff t.erased erased;
+        t.state <- { t.state with
+          available = FreeClusters.union t.state.available state.erased;
+          erased = FreeClusters.diff t.state.erased state.erased;
+        };
         Lwt.return (Ok ())
 
   end: sig
