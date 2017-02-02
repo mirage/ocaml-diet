@@ -169,6 +169,38 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   module Int64Map = Map.Make(Int64)
   module Int64Set = Set.Make(Int64)
 
+  (* Another way to achieve this would be to create a virtual block device
+     with a little bit of padding on the end *)
+  let read_base base base_sector buf =
+    (* Qemu-img will 'allocate' the last cluster by writing only the last sector.
+       Cope with this by assuming all later sectors are full of zeroes *)
+    let open Lwt in
+    B.get_info base
+    >>= fun base_info ->
+    let buf_len = Int64.of_int (Cstruct.len buf) in
+    let missing_sectors =
+      Int64.sub
+        Int64.(add base_sector (div buf_len (of_int base_info.Mirage_block.sector_size)))
+        base_info.Mirage_block.size_sectors in
+    if missing_sectors > 0L then begin
+      let available_sectors = Int64.(sub (div buf_len (of_int base_info.Mirage_block.sector_size)) missing_sectors) in
+      let bytes = Int64.(to_int (mul available_sectors (of_int base_info.Mirage_block.sector_size))) in
+      let open Lwt.Infix in
+      B.read base base_sector [ Cstruct.sub buf 0 bytes ]
+      >>= function
+      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+      | Error `Disconnected -> Lwt.return (Error `Disconnected)
+      | Ok () ->
+      Cstruct.(memset (shift buf bytes) 0);
+      Lwt.return (Ok ())
+    end else begin
+      B.read base base_sector [ buf ]
+      >>= function
+      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+      | Error `Disconnected -> Lwt.return (Error `Disconnected)
+      | Ok () -> Lwt.return (Ok ())
+    end
+
   module Cache = struct
     (* Cache of metadata blocks to speed up lookups *)
     type t = {
@@ -266,6 +298,27 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | None ->
         None
 
+    let copy t src dst =
+      Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
+      let npages = 1 lsl (t.cluster_bits - 12) in
+      let pages = Io_page.(to_cstruct @@ get npages) in
+      let cluster = Cstruct.sub pages 0 (1 lsl t.cluster_bits) in
+
+      let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
+
+      let src_sector = Int64.mul src sectors_per_cluster in
+      let dst_sector = Int64.mul dst sectors_per_cluster in
+      let open Lwt_error.Infix in
+      read_base t.base src_sector cluster
+      >>= fun () ->
+      let open Lwt.Infix in
+      B.write t.base dst_sector [ cluster ]
+      >>= function
+      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+      | Error `Disconnected -> Lwt.return (Error `Disconnected)
+      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+      | Ok () -> Lwt.return (Ok ())
+
     let erase t remaining =
       let rec loop remaining =
         match FreeClusters.min_elt remaining with
@@ -340,6 +393,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     val erase: t -> FreeClusters.t -> (unit, write_error) result Lwt.t
     (** Write zeroes over the specified set of clusters *)
+
+    val copy: t -> int64 -> int64 -> (unit, write_error) result Lwt.t
+    (** [copy src dst] copies the cluster [src] to [dst] *)
 
     val erase_all: t -> (unit, write_error) result Lwt.t
     (** Erase all junk clusters *)
@@ -551,38 +607,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   let get_info t = Lwt.return t.info
   let to_config t = t.config
   let get_stats t = t.stats
-
-  (* Another way to achieve this would be to create a virtual block device
-     with a little bit of padding on the end *)
-  let read_base base base_sector buf =
-    (* Qemu-img will 'allocate' the last cluster by writing only the last sector.
-       Cope with this by assuming all later sectors are full of zeroes *)
-    let open Lwt in
-    B.get_info base
-    >>= fun base_info ->
-    let buf_len = Int64.of_int (Cstruct.len buf) in
-    let missing_sectors =
-      Int64.sub
-        Int64.(add base_sector (div buf_len (of_int base_info.Mirage_block.sector_size)))
-        base_info.Mirage_block.size_sectors in
-    if missing_sectors > 0L then begin
-      let available_sectors = Int64.(sub (div buf_len (of_int base_info.Mirage_block.sector_size)) missing_sectors) in
-      let bytes = Int64.(to_int (mul available_sectors (of_int base_info.Mirage_block.sector_size))) in
-      let open Lwt.Infix in
-      B.read base base_sector [ Cstruct.sub buf 0 bytes ]
-      >>= function
-      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-      | Error `Disconnected -> Lwt.return (Error `Disconnected)
-      | Ok () ->
-      Cstruct.(memset (shift buf bytes) 0);
-      Lwt.return (Ok ())
-    end else begin
-      B.read base base_sector [ buf ]
-      >>= function
-      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-      | Error `Disconnected -> Lwt.return (Error `Disconnected)
-      | Ok () -> Lwt.return (Ok ())
-    end
 
   let malloc t =
     let cluster_bits = Int32.to_int t.Header.cluster_bits in
@@ -1405,7 +1429,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 Log.debug (fun f -> f "Total free blocks discovered: %Ld" (total_free map));
                 let start_last_block = get_last_block map in
 
-                let one_cluster = malloc t.h in
                 let sector_size = Int64.of_int t.base_info.Mirage_block.sector_size in
                 let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
                 let sectors_per_cluster = Int64.div (1L <| cluster_bits) sector_size in
@@ -1434,20 +1457,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                    only to find it has also been moved) *)
                 compact_s
                   (fun ({ Move.src; dst; _ } as move) new_map (moves, _, substitutions) ->
-                    Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
-                    let src_sector = Int64.mul src sectors_per_cluster in
-                    let dst_sector = Int64.mul dst sectors_per_cluster in
-                    read_base t.base src_sector one_cluster
-                    >>= fun () ->
-                    let open Lwt.Infix in
-                    B.write t.base dst_sector [ one_cluster ]
-                    >>= function
-                    | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-                    | Error `Disconnected -> Lwt.return (Error `Disconnected)
-                    | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-                    | Ok () ->
                     let open Lwt_write_error.Infix in
-
+                    Recycler.copy t.recycler src dst
+                    >>= fun () ->
                     (* If these were metadata blocks (e.g. L2 table entries) then they might
                        be cached. Remove the overwritten block's cache entry just in case. *)
                     Metadata.remove t.cache dst
