@@ -56,7 +56,7 @@ let src =
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
+module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   type 'a io = 'a Lwt.t
 
@@ -80,6 +80,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   module Config = Qcow_config
 
+  (* Qemu-img will 'allocate' the last cluster by writing only the last sector.
+     Cope with this by assuming all later sectors are full of zeroes *)
+  module B = Qcow_padded.Make(Base)
+
   type page_aligned_buffer = B.page_aligned_buffer
 
   (* Run all threads in parallel, wait for all to complete, then iterate through
@@ -95,37 +99,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   module Int64Map = Map.Make(Int64)
   module Int64Set = Set.Make(Int64)
 
-  (* Another way to achieve this would be to create a virtual block device
-     with a little bit of padding on the end *)
-  let read_base base base_sector buf =
-    (* Qemu-img will 'allocate' the last cluster by writing only the last sector.
-       Cope with this by assuming all later sectors are full of zeroes *)
-    let open Lwt in
-    B.get_info base
-    >>= fun base_info ->
-    let buf_len = Int64.of_int (Cstruct.len buf) in
-    let missing_sectors =
-      Int64.sub
-        Int64.(add base_sector (div buf_len (of_int base_info.Mirage_block.sector_size)))
-        base_info.Mirage_block.size_sectors in
-    if missing_sectors > 0L then begin
-      let available_sectors = Int64.(sub (div buf_len (of_int base_info.Mirage_block.sector_size)) missing_sectors) in
-      let bytes = Int64.(to_int (mul available_sectors (of_int base_info.Mirage_block.sector_size))) in
-      let open Lwt.Infix in
-      B.read base base_sector [ Cstruct.sub buf 0 bytes ]
-      >>= function
-      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-      | Error `Disconnected -> Lwt.return (Error `Disconnected)
-      | Ok () ->
-      Cstruct.(memset (shift buf bytes) 0);
-      Lwt.return (Ok ())
-    end else begin
-      B.read base base_sector [ buf ]
-      >>= function
-      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-      | Error `Disconnected -> Lwt.return (Error `Disconnected)
-      | Ok () -> Lwt.return (Ok ())
-    end
 
   module Cache = Qcow_cache
 
@@ -227,10 +200,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
               let src_sector = Int64.mul src sectors_per_cluster in
               let dst_sector = Int64.mul dst sectors_per_cluster in
-              let open Lwt_error.Infix in
-              read_base t.base src_sector cluster
-              >>= fun () ->
               let open Lwt.Infix in
+              B.read t.base src_sector [ cluster ]
+              >>= function
+              | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+              | Error `Disconnected -> Lwt.return (Error `Disconnected)
+              | Ok () ->
               B.write t.base dst_sector [ cluster ]
               >>= function
               | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
@@ -1185,10 +1160,15 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                  Cope with this by assuming all later sectors are full of zeroes *)
               let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
               let cluster = Physical.cluster ~cluster_bits:t.cluster_bits offset' in
+              let open Lwt.Infix in
               Qcow_cluster.with_read_lock t.locks cluster
                 (fun () ->
-                  read_base t.base base_sector buf
+                  B.read t.base base_sector [ buf ]
                 )
+              >>= function
+              | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+              | Error `Disconnected -> Lwt.return (Error `Disconnected)
+              | Ok () -> Lwt.return (Ok ())
           ) (chop_into_aligned cluster_size byte bufs)
       )
 
@@ -1625,7 +1605,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let offset = i <| cluster_bits in
       let sector = Int64.(div offset (of_int sector_size)) in
       let open Lwt.Infix in
-      read_base base sector buf
+      B.read base sector [ buf ]
       >>= function
       | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
@@ -1703,12 +1683,15 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     Lwt.return t'
 
   let connect ?(config=Config.default) base =
-    let open Lwt in
+    let open Lwt.Infix in
     B.get_info base
     >>= fun base_info ->
     let sector = Cstruct.sub Io_page.(to_cstruct (get 1)) 0 base_info.Mirage_block.sector_size in
-    Lwt_error.or_fail_with @@ read_base base 0L sector
-    >>= fun () ->
+    B.read base 0L [ sector ]
+    >>= function
+    | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
+    | Error `Disconnected -> Lwt.fail_with "Disconnected"
+    | Ok () ->
       match Header.read sector with
       | Error (`Msg m) -> Lwt.fail_with m
       | Ok (h, _) ->
