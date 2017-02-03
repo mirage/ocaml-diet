@@ -223,9 +223,13 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let m = { move; state = Copying } in
       let src, dst = Qcow_cluster_map.Move.(move.src, move.dst) in
       t.clusters <- { t.clusters with moves = Int64Map.add src m t.clusters.moves };
-      let open Lwt_write_error.Infix in
+      let open Lwt.Infix in
       copy t src dst
-      >>= fun () ->
+      >>= function
+      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+      | Error `Disconnected -> Lwt.return (Error `Disconnected)
+      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+      | Ok () ->
       (* FIXME: make a concurrent write remove the entry *)
       t.clusters <- { t.clusters with moves =
         if Int64Map.mem src t.clusters.moves
@@ -340,10 +344,10 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     val erase: t -> FreeClusters.t -> (unit, B.write_error) result Lwt.t
     (** Write zeroes over the specified set of clusters *)
 
-    val copy: t -> int64 -> int64 -> (unit, write_error) result Lwt.t
+    val copy: t -> int64 -> int64 -> (unit, B.write_error) result Lwt.t
     (** [copy src dst] copies the cluster [src] to [dst] *)
 
-    val move: t -> Qcow_cluster_map.Move.t -> (unit, write_error) result Lwt.t
+    val move: t -> Qcow_cluster_map.Move.t -> (unit, B.write_error) result Lwt.t
     (** [move t mv] perform the initial data copy of the move operation [mv] *)
 
     val erase_all: t -> (unit, B.write_error) result Lwt.t
@@ -802,7 +806,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                   >>= function
                   | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
                   | Error `Disconnected -> Lwt.return (Error `Disconnected)
-                  | Error (`Msg m) -> Lwt.return (Error (`Msg m))
                   | Error `Is_read_only -> Lwt.return (Error (`Msg "Device is read only"))
                   | Ok () ->
                   let free = FreeClusters.(remove (Interval.make first first) free) in
@@ -1424,9 +1427,13 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                    only to find it has also been moved) *)
                 compact_s
                   (fun ({ Move.src; dst; _ } as move) new_map (moves, _, substitutions) ->
-                    let open Lwt_write_error.Infix in
+                    let open Lwt.Infix in
                     Recycler.copy t.recycler src dst
-                    >>= fun () ->
+                    >>= function
+                    | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+                    | Error `Disconnected -> Lwt.return (Error `Disconnected)
+                    | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+                    | Ok () ->
                     (* If these were metadata blocks (e.g. L2 table entries) then they might
                        be cached. Remove the overwritten block's cache entry just in case. *)
                     Cache.remove t.cache dst;
