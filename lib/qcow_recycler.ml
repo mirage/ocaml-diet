@@ -192,14 +192,21 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   let erase_all t =
     let batch = t.clusters.junk in
     t.clusters <- { t.clusters with junk = Qcow_clusterset.empty };
+    (* The file may have been truncated, so we must truncate too *)
     let open Lwt.Infix in
-    erase t batch
+    B.get_info t.base
+    >>= fun info ->
+    let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
+    let size_clusters = Int64.div info.Mirage_block.size_sectors sectors_per_cluster in
+    let full_file = Qcow_clusterset.(add (Interval.make 0L (Int64.pred size_clusters)) empty) in
+    let batch' = Qcow_clusterset.inter batch full_file in
+    erase t batch'
     >>= function
     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
     | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
     | Ok () ->
-      t.clusters <- { t.clusters with erased = Qcow_clusterset.union batch t.clusters.erased };
+      t.clusters <- { t.clusters with erased = Qcow_clusterset.union batch' t.clusters.erased };
       Lwt.return (Ok ())
 
   (* Run all threads in parallel, wait for all to complete, then iterate through
