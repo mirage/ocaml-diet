@@ -235,6 +235,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       Lwt.return (Ok ())
 
     let erase t remaining =
+      let open Lwt.Infix in
       let rec loop remaining =
         match FreeClusters.min_elt remaining with
         | i ->
@@ -245,7 +246,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             then Lwt.return (Ok ())
             else begin
               let sector = Int64.(div (x <| t.cluster_bits) (of_int t.sector_size)) in
-              let open Lwt.Infix in
               Qcow_cluster.with_write_lock t.locks x
                 (fun () ->
                   B.write t.base sector [ t.cluster ]
@@ -257,10 +257,13 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               | Ok () ->
                 per_cluster (Int64.succ x)
             end in
-          let open Lwt_write_error.Infix in
-          per_cluster x
-          >>= fun () ->
-          loop (FreeClusters.remove i remaining)
+          ( per_cluster x
+            >>= function
+            | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+            | Error `Disconnected -> Lwt.return (Error `Disconnected)
+            | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+            | Ok () ->
+            loop (FreeClusters.remove i remaining) )
         | exception Not_found ->
           Lwt.return (Ok ()) in
       loop remaining
@@ -330,7 +333,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     (** [allocate t n] returns [n] clusters which are ready for re-use. If there
         are not enough clusters free then this returns None. *)
 
-    val erase: t -> FreeClusters.t -> (unit, write_error) result Lwt.t
+    val erase: t -> FreeClusters.t -> (unit, B.write_error) result Lwt.t
     (** Write zeroes over the specified set of clusters *)
 
     val copy: t -> int64 -> int64 -> (unit, write_error) result Lwt.t
@@ -1058,8 +1061,14 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                >>= fun (free, already_zero) ->
                (* FIXME: it's unnecessary to write to the data cluster if we're
                   about to overwrite it with real data straight away *)
+               let open Lwt.Infix in
                ( if not already_zero then Recycler.erase t.recycler free else Lwt.return (Ok ()) )
-               >>= fun () ->
+               >>= function
+               | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+               | Error `Disconnected -> Lwt.return (Error `Disconnected)
+               | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+               | Ok () ->
+               let open Lwt_write_error.Infix in
                let l2_cluster = FreeClusters.(Interval.x (min_elt free)) in
                let free = FreeClusters.(remove (Interval.make l2_cluster l2_cluster) free) in
                let data_cluster = FreeClusters.(Interval.x (min_elt free)) in
@@ -1080,8 +1089,14 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                if Physical.to_bytes data_offset = 0L then begin
                  allocate_clusters t 1L
                  >>= fun (free, already_zero) ->
+                 let open Lwt.Infix in
                  ( if not already_zero then Recycler.erase t.recycler free else Lwt.return (Ok ()) )
-                 >>= fun () ->
+                 >>= function
+                 | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+                 | Error `Disconnected -> Lwt.return (Error `Disconnected)
+                 | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+                 | Ok () ->
+                 let open Lwt_write_error.Infix in
                  let data_cluster = FreeClusters.(Interval.x (min_elt free)) in
                  Refcount.incr t data_cluster
                  >>= fun () ->
