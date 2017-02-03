@@ -955,8 +955,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             Qcow_rwlock.with_write_lock t.metadata_lock
               (fun () ->
                 let open Qcow_cluster_map in
-                make_cluster_map t
-                >>= fun map ->
+                let map = t.cluster_map in
 
                 Log.debug (fun f -> f "Physical blocks discovered: %Ld" (total_free map));
                 Log.debug (fun f -> f "Total free blocks discovered: %Ld" (total_free map));
@@ -985,27 +984,18 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                       last_percent := percent
                     end in
 
-                (* Copy the blocks and build up a substitution map so we know where the referring
-                   block has been copied to. (Otherwise we may go to adjust the referring block
-                   only to find it has also been moved) *)
                 compact_s
-                  (fun ({ Move.src; dst; _ } as move) new_map (moves, _, substitutions) ->
+                  (fun move _ () ->
                     let open Lwt.Infix in
-                    Recycler.copy t.recycler src dst
+                    update_progress ();
+                    Recycler.move t.recycler move
                     >>= function
                     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
                     | Error `Disconnected -> Lwt.return (Error `Disconnected)
                     | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-                    | Ok () ->
-                    (* If these were metadata blocks (e.g. L2 table entries) then they might
-                       be cached. Remove the overwritten block's cache entry just in case. *)
-                    Cache.remove t.cache dst;
-                    update_progress ();
-                    let substitutions = ClusterMap.add src dst substitutions in
-                    let acc = move :: moves, new_map, substitutions in
-                    Lwt.return (Ok (not !cancel_requested, acc))
-                  ) map ([], map, ClusterMap.empty)
-                >>= fun (moves, map, substitutions) ->
+                    | Ok () -> Lwt.return (Ok (not !cancel_requested, ()))
+                  ) map ()
+                >>= fun () ->
 
                 (* Flush now so that if we crash after updating some of the references, the
                    destination blocks will contain the correct data. *)
@@ -1018,42 +1008,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 | Ok () ->
                 let open Lwt_write_error.Infix in
 
-                (* fold_left_s over Block.error Lwt.t values *)
-                let rec fold_left_s f acc =
-                  let open Lwt.Infix in function
-                  | [] -> Lwt.return (Ok acc)
-                  | x :: xs ->
-                    begin f acc x >>= function
-                    | Ok acc -> fold_left_s f acc xs
-                    | Error e -> Lwt.return (Error e)
-                    end in
-
-                (* Rewrite the block references, taking care to follow the substitutions map *)
-                fold_left_s
-                  (fun () { Move.src; dst; update = ref_cluster, ref_cluster_within } ->
-                    update_progress ();
-                    let ref_cluster' =
-                      if ClusterMap.mem ref_cluster substitutions
-                      then ClusterMap.find ref_cluster substitutions
-                      else ref_cluster in
-                    Metadata.update t.metadata ref_cluster'
-                      (fun c ->
-                        let addresses = Metadata.Physical.of_cluster c in
-                        (* Read the current value in the referencing cluster as a sanity check *)
-                        let old_reference = Metadata.Physical.get addresses ref_cluster_within in
-                        let old_cluster = Physical.cluster ~cluster_bits old_reference in
-                        ( if old_cluster <> src then begin
-                            Log.err (fun f -> f "Rewriting reference in %Ld (was %Ld) :%d from %Ld to %Ld, old reference actually pointing to %Ld" ref_cluster' ref_cluster ref_cluster_within src dst old_cluster);
-                            Lwt.return (Error (`Msg "Failed to rewrite cluster reference"))
-                          end else Lwt.return (Ok ()) )
-                        >>= fun () ->
-                        (* Preserve any flags but update the pointer *)
-                        let new_reference = Physical.make ~is_mutable:(Physical.is_mutable old_reference) ~is_compressed:(Physical.is_compressed old_reference) (dst <| cluster_bits) in
-                        Metadata.Physical.set addresses ref_cluster_within new_reference;
-                        Lwt.return (Ok ())
-                      )
-                  ) () moves
-                >>= fun () ->
+                Recycler.update_references t.recycler
+                >>= fun refs_updated ->
 
                 (* Flush now so that the pointers are persisted before we truncate the file *)
                 let open Lwt.Infix in
@@ -1063,19 +1019,17 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 | Error `Disconnected -> Lwt.return (Error `Disconnected)
                 | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
                 | Ok () ->
-                let open Lwt_write_error.Infix in
 
                 let last_block = get_last_block map in
                 Log.debug (fun f -> f "Shrink file so that last cluster was %Ld, now %Ld" start_last_block last_block);
                 t.next_cluster <- Int64.succ last_block;
-                (* The free list has been partially overwritten. *)
-                Recycler.reset t.recycler;
+
+                let open Lwt_write_error.Infix in
                 Cluster.allocate_clusters t 0L (* takes care of the file size *)
                 >>= fun _ ->
 
                 progress_cb ~percent:100;
 
-                let refs_updated = Int64.of_int (List.length moves) in
                 let copied = Int64.mul refs_updated sectors_per_cluster in (* one ref per block *)
                 let old_size = Int64.mul start_last_block sectors_per_cluster in
                 let new_size = Int64.mul last_block sectors_per_cluster in

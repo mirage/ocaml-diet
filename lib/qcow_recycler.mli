@@ -49,9 +49,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK): sig
   val move: t -> Qcow_cluster_map.Move.t -> (unit, B.write_error) result Lwt.t
   (** [move t mv] perform the initial data copy of the move operation [mv] *)
 
-  val update_references: t -> (unit, Qcow_metadata.write_error) result Lwt.t
+  val update_references: t -> (int64, Qcow_metadata.write_error) result Lwt.t
   (** [update_references t] rewrites references to any recently copied and
-      flushed block. *)
+      flushed block, returning the number of writes completed. *)
 
   val erase_all: t -> (unit, B.write_error) result Lwt.t
   (** Erase all junk clusters *)

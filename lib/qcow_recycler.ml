@@ -223,6 +223,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let cluster_map = match t.cluster_map with
       | None -> assert false (* by construction, see `make` *)
       | Some x -> x in
+    let nr_updated = ref 0L in
+    let open Lwt.Infix in
     iter_p
       (fun ({ move = { Move.src; dst; update }; _ } as move) ->
         let ref_cluster, ref_cluster_within = match Qcow_cluster_map.find cluster_map src with
@@ -234,7 +236,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
             );
             assert false
           | a, b -> a, b in
-        let open Lwt.Infix in
         Metadata.update t.metadata ref_cluster
           (fun c ->
             let addresses = Metadata.Physical.of_cluster c in
@@ -250,11 +251,17 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
             Metadata.Physical.set addresses ref_cluster_within new_reference;
             Lwt.return (Ok ())
           )
-        >>= fun result ->
-        if Int64Map.mem src t.clusters.moves
-        then t.clusters <- { t.clusters with moves = Int64Map.add src { move with state = Referenced } t.clusters.moves };
-        Lwt.return result
+        >>= function
+        | Ok () ->
+          if Int64Map.mem src t.clusters.moves
+          then t.clusters <- { t.clusters with moves = Int64Map.add src { move with state = Referenced } t.clusters.moves };
+          nr_updated := Int64.add !nr_updated (Int64.of_int (List.length flushed));
+          Lwt.return (Ok ())
+        | Error e -> Lwt.return (Error e)
       ) flushed
+    >>= function
+    | Ok () -> Lwt.return (Ok !nr_updated)
+    | Error e -> Lwt.return (Error e)
 
   let flush t =
     (* Anything erased right now will become available *)
