@@ -271,9 +271,13 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let erase_all t =
       let batch = t.clusters.junk in
       t.clusters <- { t.clusters with junk = FreeClusters.empty };
-      let open Lwt_write_error.Infix in
+      let open Lwt.Infix in
       erase t batch
-      >>= fun () ->
+      >>= function
+      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+      | Error `Disconnected -> Lwt.return (Error `Disconnected)
+      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+      | Ok () ->
       t.clusters <- { t.clusters with erased = FreeClusters.union batch t.clusters.erased };
       Lwt.return (Ok ())
 
@@ -342,7 +346,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     val move: t -> Qcow_cluster_map.Move.t -> (unit, write_error) result Lwt.t
     (** [move t mv] perform the initial data copy of the move operation [mv] *)
 
-    val erase_all: t -> (unit, write_error) result Lwt.t
+    val erase_all: t -> (unit, B.write_error) result Lwt.t
     (** Erase all junk clusters *)
 
     val flush: t -> (unit, B.write_error) result Lwt.t
@@ -2045,7 +2049,14 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let set_next_cluster t x = t.next_cluster <- x
 
-    let erase_all t = Recycler.erase_all t.recycler
+    let erase_all t =
+      let open Lwt.Infix in
+      Recycler.erase_all t.recycler
+      >>= function
+      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+      | Error `Disconnected -> Lwt.return (Error `Disconnected)
+      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+      | Ok () -> Lwt.return (Ok ())
 
     let flush t =
       let open Lwt.Infix in
