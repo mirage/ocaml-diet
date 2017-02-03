@@ -14,4 +14,6 @@ Qcow_timer
 Qcow_cluster_map
 Qcow_padded
 Qcow_cstructs
+Qcow_recycler
+Qcow_clusterset
 Qcow
