@@ -16,4 +16,5 @@ Qcow_padded
 Qcow_cstructs
 Qcow_recycler
 Qcow_clusterset
+Qcow_metadata
 Qcow
