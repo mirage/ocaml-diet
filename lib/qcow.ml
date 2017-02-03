@@ -63,47 +63,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   (* samoht: `Msg should be the list of all possible exceptions *)
   type error = [ Mirage_block.error | `Msg of string ]
 
-  module Lwt_error = struct
-    open Lwt.Infix
-    module Infix = struct
-      let ( >>= ) m f = m >>= function
-        | Ok x -> f x
-        | Error (`Msg s) -> Lwt.return (Error (`Msg s))
-        | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-        | Error `Disconnected -> Lwt.return (Error `Disconnected)
-    end
-
-    let or_fail_with m =
-      let open Lwt in
-      m >>= function
-      | Error (`Msg s) -> Lwt.fail_with s
-      | Error `Unimplemented -> Lwt.fail_with "unimplemented"
-      | Error `Disconnected -> Lwt.fail_with "disconnected"
-      | Ok x -> Lwt.return x
-  end
+  module Lwt_error = Qcow_error.Lwt_error
 
   (* samoht: `Msg should be the list of all possible exceptions *)
   type write_error = [ Mirage_block.write_error | `Msg of string ]
 
-  module Lwt_write_error = struct
-    module Infix = struct
-      open Lwt.Infix
-      let ( >>= ) m f = m >>= function
-        | Ok x -> f x
-        | Error (`Msg s) -> Lwt.return (Error (`Msg s))
-        | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-        | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-        | Error `Disconnected -> Lwt.return (Error `Disconnected)
-    end
-    let or_fail_with m =
-      let open Lwt in
-      m >>= function
-      | Error (`Msg s) -> Lwt.fail_with s
-      | Error `Unimplemented -> Lwt.fail_with "unimplemented"
-      | Error `Is_read_only -> Lwt.fail_with "is read only"
-      | Error `Disconnected -> Lwt.fail_with "disconnected"
-      | Ok x -> Lwt.return x
-  end
+  module Lwt_write_error = Qcow_error.Lwt_write_error
 
   let pp_error ppf = function
     | #Mirage_block.error as e -> Mirage_block.pp_error ppf e
