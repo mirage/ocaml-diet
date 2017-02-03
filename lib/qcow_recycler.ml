@@ -253,6 +253,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
               Log.err (fun f -> f "Rewriting reference in %Ld :%d from %Ld to %Ld, old reference actually pointing to %Ld" ref_cluster ref_cluster_within src dst old_cluster);
               assert false
             end;
+            Log.debug (fun f -> f "Rewriting reference in %Ld :%d from %Ld to %Ld" ref_cluster ref_cluster_within src dst);
             (* Preserve any flags but update the pointer *)
             let new_reference = Qcow_physical.make ~is_mutable:(Qcow_physical.is_mutable old_reference) ~is_compressed:(Qcow_physical.is_compressed old_reference) (dst <| t.cluster_bits) in
             Metadata.Physical.set addresses ref_cluster_within new_reference;
