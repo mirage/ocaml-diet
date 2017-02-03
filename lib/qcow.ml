@@ -457,7 +457,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       cache: Cache.t;
       locks: Qcow_cluster.t;
       mutable cluster_map: Qcow_cluster_map.t option; (* free/ used space map *)
-      recycler: Recycler.t;
+      on_unmap: int64 -> unit; (* called whenever a block is unmapped *)
       cluster_bits: int;
       m: Lwt_mutex.t;
       c: unit Lwt_condition.t;
@@ -493,7 +493,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               (if cluster <> 0L then ", unmapping " ^ (Int64.to_string cluster) else "")
             );
             if cluster <> 0L then begin
-              Recycler.add_to_junk t.t.recycler cluster;
+              t.t.on_unmap cluster;
               Qcow_cluster_map.remove m cluster;
             end;
             Qcow_cluster_map.add m (t.cluster, n) v'
@@ -505,11 +505,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let erase cluster = Cstruct.memset cluster.data 0
 
-    let make ~cache ~recycler ~cluster_bits ~locks () =
+    let make ~cache ~on_unmap ~cluster_bits ~locks () =
       let m = Lwt_mutex.create () in
       let c = Lwt_condition.create () in
       let cluster_map = None in
-      { cache; cluster_map; recycler; cluster_bits; locks; m; c }
+      { cache; cluster_map; on_unmap; cluster_bits; locks; m; c }
 
     let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
 
@@ -551,7 +551,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     val make:
       cache:Cache.t
-      -> recycler:Recycler.t
+      -> on_unmap:(int64 -> unit)
       -> cluster_bits:int
       -> locks:Qcow_cluster.t
       -> unit -> t
@@ -1715,8 +1715,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Ok () -> Lwt.return (Ok ()) in
     let cache = Cache.create ~read_cluster ~write_cluster () in
     let recycler = Recycler.create ~base ~sector_size ~cluster_bits ~cache ~locks in
+    let on_unmap x = Recycler.add_to_junk recycler x in
     let next_cluster_m = Lwt_mutex.create () in
-    let metadata = Metadata.make ~cache ~recycler ~cluster_bits ~locks () in
+    let metadata = Metadata.make ~cache ~on_unmap ~cluster_bits ~locks () in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true; _ } -> true | _ -> false in
     let stats = Stats.zero in
     let metadata_lock = Qcow_rwlock.make () in
