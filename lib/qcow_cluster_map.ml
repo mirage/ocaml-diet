@@ -45,6 +45,8 @@ let zero =
   let free = ClusterSet.make_empty ~initial_size:0 ~maximum_size:0 in
   make ~free ~first_movable_cluster:0L
 
+let find t cluster = ClusterMap.find cluster t.refs
+
 let copy t =
   let free = ClusterSet.copy t.free in
   let refs = t.refs in

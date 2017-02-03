@@ -55,6 +55,7 @@ let nothing = {
 }
 
 module Cache = Qcow_cache
+module Metadata = Qcow_metadata
 
 module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
@@ -62,26 +63,32 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     base: B.t;
     sector_size: int;
     cluster_bits: int;
+    mutable cluster_map: Qcow_cluster_map.t option; (* free/ used space map *)
     cache: Cache.t;
     locks: Qcow_cluster.t;
+    metadata: Metadata.t;
     mutable clusters: clusters;
     cluster: Cstruct.t; (* a zero cluster for erasing *)
     m: Lwt_mutex.t;
   }
 
-  let create ~base ~sector_size ~cluster_bits ~cache ~locks =
+  let create ~base ~sector_size ~cluster_bits ~cache ~locks ~metadata =
     let clusters = nothing in
     let npages = 1 lsl (cluster_bits - 12) in
     let pages = Io_page.(to_cstruct @@ get npages) in
     let cluster = Cstruct.sub pages 0 (1 lsl cluster_bits) in
     Cstruct.memset cluster 0;
     let m = Lwt_mutex.create () in
-    { base; sector_size; cluster_bits; cache; locks; clusters; cluster; m }
+    let cluster_map = None in
+    { base; sector_size; cluster_bits; cluster_map; cache; locks; metadata; clusters; cluster; m }
 
   (* Called after a full compact to reset everything. Otherwise we may try to
      erase blocks which nolonger exist. *)
   let reset t =
     t.clusters <- nothing
+
+  let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
+
 
   let add_to_junk t cluster =
     let i = Qcow_clusterset.Interval.make cluster cluster in
@@ -195,6 +202,60 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       t.clusters <- { t.clusters with erased = Qcow_clusterset.union batch t.clusters.erased };
       Lwt.return (Ok ())
 
+  (* Run all threads in parallel, wait for all to complete, then iterate through
+     the results and return the first failure we discover. *)
+  let iter_p f xs =
+    let threads = List.map f xs in
+    Lwt_list.fold_left_s (fun acc t ->
+        match acc with
+        | Error x -> Lwt.return (Error x) (* first error wins *)
+        | Ok () -> t
+      ) (Ok ()) threads
+
+  let update_references t =
+    let open Qcow_cluster_map in
+    let flushed =
+      Int64Map.fold (fun _src move acc ->
+        match move.state with
+        | Flushed -> move :: acc
+        | _ -> acc
+      ) t.clusters.moves [] in
+    let cluster_map = match t.cluster_map with
+      | None -> assert false (* by construction, see `make` *)
+      | Some x -> x in
+    iter_p
+      (fun ({ move = { Move.src; dst; update }; _ } as move) ->
+        let ref_cluster, ref_cluster_within = match Qcow_cluster_map.find cluster_map src with
+          | exception Not_found ->
+            (* FIXME: block was probably discarded, but we'd like to avoid this case
+               by construction *)
+            Log.err (fun f -> f "Not_found reference to cluster %Ld (moving to %Ld) (reference used to be in %Ld:%d)"
+              src dst (fst update) (snd update)
+            );
+            assert false
+          | a, b -> a, b in
+        let open Lwt.Infix in
+        Metadata.update t.metadata ref_cluster
+          (fun c ->
+            let addresses = Metadata.Physical.of_cluster c in
+            (* Read the current value in the referencing cluster as a sanity check *)
+            let old_reference = Metadata.Physical.get addresses ref_cluster_within in
+            let old_cluster = Qcow_physical.cluster ~cluster_bits:t.cluster_bits old_reference in
+            if old_cluster <> src then begin
+              Log.err (fun f -> f "Rewriting reference in %Ld :%d from %Ld to %Ld, old reference actually pointing to %Ld" ref_cluster ref_cluster_within src dst old_cluster);
+              assert false
+            end;
+            (* Preserve any flags but update the pointer *)
+            let new_reference = Qcow_physical.make ~is_mutable:(Qcow_physical.is_mutable old_reference) ~is_compressed:(Qcow_physical.is_compressed old_reference) (dst <| t.cluster_bits) in
+            Metadata.Physical.set addresses ref_cluster_within new_reference;
+            Lwt.return (Ok ())
+          )
+        >>= fun result ->
+        if Int64Map.mem src t.clusters.moves
+        then t.clusters <- { t.clusters with moves = Int64Map.add src { move with state = Referenced } t.clusters.moves };
+        Lwt.return result
+      ) flushed
+
   let flush t =
     (* Anything erased right now will become available *)
     let clusters = t.clusters in
@@ -214,6 +275,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
             acc, junk
           end else begin
             match move.state with
+            | Copying ->
+              acc, junk
             | Copied ->
               Int64Map.add src { move with state = Flushed } acc, junk
             | Flushed ->

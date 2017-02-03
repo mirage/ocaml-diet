@@ -20,8 +20,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK): sig
   (** A cluster recycling engine *)
 
   val create: base:B.t -> sector_size:int -> cluster_bits:int
-    -> cache:Qcow_cache.t -> locks:Qcow_cluster.t -> t
+    -> cache:Qcow_cache.t -> locks:Qcow_cluster.t
+    -> metadata:Qcow_metadata.t -> t
   (** Initialise a cluster recycler over the given block device *)
+
+  val set_cluster_map: t -> Qcow_cluster_map.t -> unit
+  (** Set the associated cluster map (which will be updated on every cluster
+      write) *)
 
   val reset: t -> unit
   (** Drop all state: useful when some other function has made untracked
@@ -43,6 +48,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK): sig
 
   val move: t -> Qcow_cluster_map.Move.t -> (unit, B.write_error) result Lwt.t
   (** [move t mv] perform the initial data copy of the move operation [mv] *)
+
+  val update_references: t -> (unit, Qcow_metadata.write_error) result Lwt.t
+  (** [update_references t] rewrites references to any recently copied and
+      flushed block. *)
 
   val erase_all: t -> (unit, B.write_error) result Lwt.t
   (** Erase all junk clusters *)

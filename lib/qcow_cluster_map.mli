@@ -52,6 +52,9 @@ val remove: t -> cluster -> unit
 (** [remove t cluster] marks [cluster] as free and invalidates any reference
     to it (e.g. in response to a discard) *)
 
+val find: t -> cluster -> reference
+(** [find t cluster] returns the reference to [cluster], or raises [Not_found] *)
+
 module Move: sig
   type t = { src: cluster; dst: cluster; update: reference }
   (** An instruction to move the contents from cluster [src] to cluster [dst]

@@ -1209,10 +1209,13 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () -> Lwt.return (Ok ()) in
     let cache = Cache.create ~read_cluster ~write_cluster () in
-    let recycler = Recycler.create ~base ~sector_size ~cluster_bits ~cache ~locks in
-    let on_unmap x = Recycler.add_to_junk recycler x in
-    let next_cluster_m = Lwt_mutex.create () in
+    let recycler' = ref None in
+    let on_unmap x = match !recycler' with
+      | None -> ()
+      | Some recycler -> Recycler.add_to_junk recycler x in
     let metadata = Metadata.make ~cache ~on_unmap ~cluster_bits ~locks () in
+    let recycler = Recycler.create ~base ~sector_size ~cluster_bits ~cache ~locks ~metadata in
+    let next_cluster_m = Lwt_mutex.create () in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true; _ } -> true | _ -> false in
     let stats = Stats.zero in
     let metadata_lock = Qcow_rwlock.make () in
@@ -1245,6 +1248,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     >>= fun cluster_map ->
     t'.cluster_map <- cluster_map;
     Metadata.set_cluster_map t'.metadata cluster_map;
+    Recycler.set_cluster_map t'.recycler cluster_map;
     ( if config.Config.discard && not(lazy_refcounts) then begin
         Log.info (fun f -> f "discard requested and lazy_refcounts is disabled: erasing refcount table and enabling lazy_refcounts");
         Lwt_error.or_fail_with @@ Cluster.Refcount.zero_all t'
