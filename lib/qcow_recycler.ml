@@ -82,13 +82,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let cluster_map = None in
     { base; sector_size; cluster_bits; cluster_map; cache; locks; metadata; clusters; cluster; m }
 
-  (* Called after a full compact to reset everything. Otherwise we may try to
-     erase blocks which nolonger exist. *)
-  let reset t =
-    t.clusters <- nothing
-
   let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
-
 
   let add_to_junk t cluster =
     let i = Qcow_clusterset.Interval.make cluster cluster in

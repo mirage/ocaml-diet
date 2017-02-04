@@ -28,11 +28,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK): sig
   (** Set the associated cluster map (which will be updated on every cluster
       write) *)
 
-  val reset: t -> unit
-  (** Drop all state: useful when some other function has made untracked
-      changes to the used/free blocks. Eventually this probably should be
-      removed the compact function should be rewritten *)
-
   val add_to_junk: t -> int64 -> unit
   (** Input the given cluster (with arbitrary contents) to the recycler *)
 
