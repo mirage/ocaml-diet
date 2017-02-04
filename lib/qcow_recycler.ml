@@ -227,13 +227,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let nr_updated = ref 0L in
     let open Lwt.Infix in
     iter_p
-      (fun ({ move = { Move.src; dst; update }; _ } as move) ->
+      (fun ({ move = { Move.src; dst }; _ } as move) ->
         let ref_cluster, ref_cluster_within = match Qcow_cluster_map.find cluster_map src with
           | exception Not_found ->
             (* FIXME: block was probably discarded, but we'd like to avoid this case
                by construction *)
-            Log.err (fun f -> f "Not_found reference to cluster %Ld (moving to %Ld) (reference used to be in %Ld:%d)"
-              src dst (fst update) (snd update)
+            Log.err (fun f -> f "Not_found reference to cluster %Ld (moving to %Ld)"
+              src dst
             );
             assert false
           | a, b -> a, b in

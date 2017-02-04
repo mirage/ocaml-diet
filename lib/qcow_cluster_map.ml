@@ -113,7 +113,7 @@ let with_roots t clusters f =
   )
 
 module Move = struct
-  type t = { src: cluster; dst: cluster; update: reference }
+  type t = { src: cluster; dst: cluster }
 end
 
 let get_last_block t =
@@ -151,13 +151,13 @@ let compact_s f t acc =
 
         if cluster >= last_block then Lwt.return (false, Ok (acc, last_block)) else begin
           (* copy last_block into cluster and update rf *)
-          let move = { Move.src = last_block; dst = cluster; update = rf } in
+          let move = { Move.src = last_block; dst = cluster } in
           let src_interval = ClusterBitmap.Interval.make last_block last_block in
           let dst_interval = ClusterBitmap.Interval.make cluster cluster in
           ClusterBitmap.add dst_interval t.free;
           ClusterBitmap.remove src_interval t.free;
           t.refs <- ClusterMap.remove last_block @@ ClusterMap.add cluster rf t.refs;
-          f move t acc
+          f move acc
           >>= function
           | Ok (continue, acc) -> Lwt.return (continue, Ok (acc, last_block))
           | Error e -> Lwt.return (false, Error e)

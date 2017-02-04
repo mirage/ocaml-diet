@@ -982,7 +982,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 (* An initial run through only to calculate the total work. We shall
                    treat a block copy and a reference rewrite as a single unit of work
                    even though a block copy is probably bigger. *)
-                compact_s (fun _ _ total_work -> Lwt.return (Ok (true, total_work + 2))) map 0
+                compact_s (fun _ total_work -> Lwt.return (Ok (true, total_work + 2))) map 0
                 >>= fun total_work ->
 
                 (* We shall treat a block copy and a reference rewrite as a single unit of
@@ -999,7 +999,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                     end in
 
                 compact_s
-                  (fun move _ () ->
+                  (fun move () ->
                     let open Lwt.Infix in
                     update_progress ();
                     Recycler.move t.recycler move

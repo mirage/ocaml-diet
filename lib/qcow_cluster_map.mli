@@ -59,16 +59,14 @@ val with_roots: t -> ClusterSet.t -> (unit -> 'a Lwt.t) -> 'a Lwt.t
 (** [with_roots t clusters f] calls [f ()} with [clusters] registered as in-use. *)
 
 module Move: sig
-  type t = { src: cluster; dst: cluster; update: reference }
-  (** An instruction to move the contents from cluster [src] to cluster [dst]
-      and update the reference in cluster [update] *)
+  type t = { src: cluster; dst: cluster }
+  (** An instruction to move the contents from cluster [src] to cluster [dst] *)
 end
 
-val compact_s: (Move.t -> t -> 'a -> ((bool * 'a), 'b) result Lwt.t ) -> t -> 'a
+val compact_s: (Move.t -> 'a -> ((bool * 'a), 'b) result Lwt.t ) -> t -> 'a
   -> ('a, 'b) result Lwt.t
-(** [compact_s f t acc] accumulates the result of [f move t'] where [move] is
-    the next cluster move needed to perform a compaction of [t] and [t']
-    is the state of [t] after the move has been completed. *)
+(** [compact_s f t acc] accumulates the result of [f move] where [move] is
+    the next cluster move needed to perform a compaction of [t].. *)
 
 val get_last_block: t -> int64
 (** [get_last_block t] is the last allocated block in [t]. Note if there are no
