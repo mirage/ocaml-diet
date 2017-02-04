@@ -22,7 +22,6 @@ let src =
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-module ClusterBitmap = Qcow_bitmap
 module ClusterSet = Qcow_clusterset
 module ClusterMap = Map.Make(Int64)
 
@@ -31,7 +30,7 @@ type reference = cluster * int
 
 type t = {
   (* unused clusters in the file. These can be safely overwritten with new data *)
-  free: ClusterBitmap.t;
+  mutable free: ClusterSet.t;
   (* clusters which are in-use but which are not referenced from anywhere *)
   mutable roots: ClusterSet.t;
   (* map from physical cluster to the physical cluster + offset of the reference.
@@ -41,31 +40,29 @@ type t = {
 }
 
 let make ~free ~refs ~first_movable_cluster =
+  let free = Qcow_bitmap.fold
+    (fun i acc ->
+      let x, y = Qcow_bitmap.Interval.(x i, y i) in
+      Qcow_clusterset.(add (Interval.make x y) acc)
+    ) free Qcow_clusterset.empty in
   let roots = ClusterSet.empty in
   { free; roots; refs; first_movable_cluster }
 
 let zero =
-  let free = ClusterBitmap.make_empty ~initial_size:0 ~maximum_size:0 in
+  let free = Qcow_bitmap.make_empty ~initial_size:0 ~maximum_size:0 in
   let refs = ClusterMap.empty in
   make ~free ~refs ~first_movable_cluster:0L
 
 let find t cluster = ClusterMap.find cluster t.refs
 
-let copy t =
-  let free = ClusterBitmap.copy t.free in
-  let roots = t.roots in
-  let refs = t.refs in
-  let first_movable_cluster = t.first_movable_cluster in
-  { free; roots; refs; first_movable_cluster }
-
 let total_used t =
   Int64.of_int @@ ClusterMap.cardinal t.refs
 
 let total_free t =
-  ClusterBitmap.fold
+  ClusterSet.fold
     (fun i acc ->
-      let from = ClusterBitmap.Interval.x i in
-      let upto = ClusterBitmap.Interval.y i in
+      let from = ClusterSet.Interval.x i in
+      let upto = ClusterSet.Interval.y i in
       let size = Int64.succ (Int64.sub upto from) in
       Int64.add size acc
     ) t.free 0L
@@ -78,20 +75,20 @@ let add t rf cluster =
       Log.err (fun f -> f "Found two references to cluster %Ld: %Ld.%d and %Ld.%d" cluster c w c' w');
       failwith (Printf.sprintf "Found two references to cluster %Ld: %Ld.%d and %Ld.%d" cluster c w c' w');
     end;
-    ClusterBitmap.(remove (Interval.make cluster cluster) t.free);
+    t.free <- ClusterSet.(remove (Interval.make cluster cluster) t.free);
     t.refs <- ClusterMap.add cluster rf t.refs;
     ()
   end
 
 let remove t cluster =
-  ClusterBitmap.(add (Interval.make cluster cluster) t.free);
+  t.free <- ClusterSet.(add (Interval.make cluster cluster) t.free);
   t.refs <- ClusterMap.remove cluster t.refs
 
 (* Fold over all free blocks *)
 let fold_over_free_s f t acc =
   let range i acc =
-    let from = ClusterBitmap.Interval.x i in
-    let upto = ClusterBitmap.Interval.y i in
+    let from = ClusterSet.Interval.x i in
+    let upto = ClusterSet.Interval.y i in
     let rec loop acc x =
       let open Lwt.Infix in
       if x = (Int64.succ upto) then Lwt.return acc else begin
@@ -101,7 +98,7 @@ let fold_over_free_s f t acc =
         else Lwt.return acc
       end in
     loop acc from in
-  ClusterBitmap.fold_s range t.free acc
+  ClusterSet.fold_s range t.free acc
 
 let with_roots t clusters f =
   t.roots <- ClusterSet.union clusters t.roots;
@@ -130,12 +127,11 @@ let get_last_block t =
 open Result
 
 let compact_s f t acc =
-  let t = copy t in
   (* The last allocated block. Note if there are no data blocks this will
      point to the last header block even though it is immovable. *)
   let max_cluster = get_last_block t in
   let open Lwt.Infix in
-
+  let refs = ref t.refs in
   fold_over_free_s
     (fun cluster acc -> match acc with
       | Error e -> Lwt.return (false, Error e)
@@ -145,16 +141,12 @@ let compact_s f t acc =
          end. *)
       if cluster >= max_cluster then Lwt.return (false, Ok (acc, max_cluster)) else begin
         (* find the last physical block *)
-        let last_block, rf = ClusterMap.max_binding t.refs in
+        let last_block, rf = ClusterMap.max_binding (!refs) in
 
         if cluster >= last_block then Lwt.return (false, Ok (acc, last_block)) else begin
           (* copy last_block into cluster and update rf *)
           let move = { Move.src = last_block; dst = cluster } in
-          let src_interval = ClusterBitmap.Interval.make last_block last_block in
-          let dst_interval = ClusterBitmap.Interval.make cluster cluster in
-          ClusterBitmap.add dst_interval t.free;
-          ClusterBitmap.remove src_interval t.free;
-          t.refs <- ClusterMap.remove last_block @@ ClusterMap.add cluster rf t.refs;
+          refs := ClusterMap.remove last_block @@ ClusterMap.add cluster rf (!refs);
           f move acc
           >>= function
           | Ok (continue, acc) -> Lwt.return (continue, Ok (acc, last_block))

@@ -824,16 +824,16 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
        possible cluster. This is only a sanity check to catch crazily-wrong inputs. *)
     let cluster_size = 1L <| t.cluster_bits in
     let max_possible_cluster = (Int64.round_up t.h.Header.size cluster_size) |> t.cluster_bits in
-    let free = ClusterBitmap.make_full
+    let free = Qcow_bitmap.make_full
       ~initial_size:(Int64.to_int t.next_cluster)
       ~maximum_size:(Int64.(to_int (mul 10L max_possible_cluster))) in
     (* Subtract the fixed structures at the beginning of the file *)
-    ClusterBitmap.(remove (Interval.make l1_table_start_cluster (Int64.(pred @@ add l1_table_start_cluster l1_table_clusters))) free);
-    ClusterBitmap.(remove (Interval.make refcount_start_cluster (Int64.(pred @@ add refcount_start_cluster (Int64.of_int32 t.h.Header.refcount_table_clusters)))) free);
-    ClusterBitmap.(remove (Interval.make 0L 0L) free);
+    Qcow_bitmap.(remove (Interval.make l1_table_start_cluster (Int64.(pred @@ add l1_table_start_cluster l1_table_clusters))) free);
+    Qcow_bitmap.(remove (Interval.make refcount_start_cluster (Int64.(pred @@ add refcount_start_cluster (Int64.of_int32 t.h.Header.refcount_table_clusters)))) free);
+    Qcow_bitmap.(remove (Interval.make 0L 0L) free);
     let first_movable_cluster =
       try
-        ClusterBitmap.min_elt free
+        Qcow_bitmap.min_elt free
       with
       | Not_found -> t.next_cluster in
 
@@ -857,7 +857,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           Log.err (fun f -> f "Found two references to cluster %Ld: %Ld.%d and %Ld.%d" cluster c w c' w');
           failwith (Printf.sprintf "Found two references to cluster %Ld: %Ld.%d and %Ld.%d" cluster c w c' w');
         end;
-        ClusterBitmap.(remove (Interval.make cluster cluster) free);
+        Qcow_bitmap.(remove (Interval.make cluster cluster) free);
         refs := ClusterMap.add cluster rf !refs;
       end in
 
