@@ -29,3 +29,7 @@ val with_read_lock: t -> cluster -> (unit -> 'a Lwt.t) -> 'a Lwt.t
 
 val with_write_lock: t -> cluster -> (unit -> 'a Lwt.t) -> 'a Lwt.t
 (** [with_write_lock t f] executes [f ()] with the lock held for writing *)
+
+val with_metadata_lock: t -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+(** [with_metadata_lock t f] executes [f ()] with the global metadata lock held.
+    This prevents metadata blocks from moving while they're being used *)

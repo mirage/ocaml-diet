@@ -105,7 +105,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     locks: Qcow_cluster.t;
     recycler: Recycler.t;
     mutable next_cluster: int64; (* when the file is extended *)
-    next_cluster_m: Lwt_mutex.t;
     metadata: Metadata.t;
     (* for convenience *)
     cluster_bits: int;
@@ -199,10 +198,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         [f] must cause the clusters to be registered in the cluster map from
         file metadata, otherwise the clusters could be immediately collected.
 
-        This must be called with next_cluster_m held, and the mutex must not be
-        released until the allocation has been persisted so that concurrent threads
-        will not allocate another cluster for the same purpose.
-
+        This must be called via Qcow_cluster.with_metadata_lock, to prevent
+        a parallel thread allocating another cluster for the same purpose.
         *)
     let allocate_clusters t n f =
       if n = 0L then begin
@@ -595,43 +592,45 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
        racing with us then we may or may not see the mapping. *)
     let walk_readonly t a =
       let open Lwt_error.Infix in
-      read_l1_table t a.Virtual.l1_index
-      >>= fun l2_table_offset ->
+      Qcow_cluster.with_metadata_lock t.locks
+        (fun () ->
+          read_l1_table t a.Virtual.l1_index
+          >>= fun l2_table_offset ->
 
-      let (>>|=) m f =
-        let open Lwt in
-        m >>= function
-        | Error x -> Lwt.return (Error x)
-        | Ok None -> Lwt.return (Ok None)
-        | Ok (Some x) -> f x in
+          let (>>|=) m f =
+            let open Lwt in
+            m >>= function
+            | Error x -> Lwt.return (Error x)
+            | Ok None -> Lwt.return (Ok None)
+            | Ok (Some x) -> f x in
 
-      (* Look up an L2 table *)
-      ( if Physical.to_bytes l2_table_offset = 0L
-        then Lwt.return (Ok None)
-        else begin
-          if Physical.is_compressed l2_table_offset then failwith "compressed";
-          Lwt.return (Ok (Some l2_table_offset))
-        end
-      ) >>|= fun l2_table_offset ->
+          (* Look up an L2 table *)
+          ( if Physical.to_bytes l2_table_offset = 0L
+            then Lwt.return (Ok None)
+            else begin
+              if Physical.is_compressed l2_table_offset then failwith "compressed";
+              Lwt.return (Ok (Some l2_table_offset))
+            end
+          ) >>|= fun l2_table_offset ->
 
-      (* Look up a cluster *)
-      read_l2_table t l2_table_offset a.Virtual.l2_index
-      >>= fun cluster_offset ->
-      ( if Physical.to_bytes cluster_offset = 0L
-        then Lwt.return (Ok None)
-        else begin
-          if Physical.is_compressed cluster_offset then failwith "compressed";
-          Lwt.return (Ok (Some cluster_offset))
-        end
-      ) >>|= fun cluster_offset ->
+          (* Look up a cluster *)
+          read_l2_table t l2_table_offset a.Virtual.l2_index
+          >>= fun cluster_offset ->
+          ( if Physical.to_bytes cluster_offset = 0L
+            then Lwt.return (Ok None)
+            else begin
+              if Physical.is_compressed cluster_offset then failwith "compressed";
+              Lwt.return (Ok (Some cluster_offset))
+            end
+          ) >>|= fun cluster_offset ->
 
-      Lwt.return (Ok (Some (Physical.shift cluster_offset a.Virtual.cluster)))
-
+          Lwt.return (Ok (Some (Physical.shift cluster_offset a.Virtual.cluster)))
+      )
     (* Walk the L1 and L2 tables to translate an address, allocating missing
        entries as we go. *)
     let walk_and_allocate t a =
       let open Lwt_write_error.Infix in
-      Lwt_mutex.with_lock t.next_cluster_m
+      Qcow_cluster.with_metadata_lock t.locks
         (fun () ->
            read_l1_table t a.Virtual.l1_index
            >>= fun l2_offset ->
@@ -698,27 +697,29 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
       let walk_and_deallocate t a =
         let open Lwt_write_error.Infix in
-        read_l1_table t a.Virtual.l1_index
-        >>= fun l2_offset ->
-        if Physical.to_bytes l2_offset = 0L then begin
-          Lwt.return (Ok ())
-        end else begin
-          read_l2_table t l2_offset a.Virtual.l2_index
-          >>= fun data_offset ->
-          if Physical.to_bytes data_offset = 0L then begin
-            Lwt.return (Ok ())
-          end else begin
-            (* The data at [data_offset] is about to become an unreferenced
-               hole in the file *)
-            let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
-            t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
-            let data_cluster = Physical.cluster ~cluster_bits:t.cluster_bits data_offset in
-            write_l2_table t l2_offset a.Virtual.l2_index Physical.unmapped
-            >>= fun () ->
-            Refcount.decr t data_cluster
-          end
-        end
-
+        Qcow_cluster.with_metadata_lock t.locks
+          (fun () ->
+            read_l1_table t a.Virtual.l1_index
+            >>= fun l2_offset ->
+            if Physical.to_bytes l2_offset = 0L then begin
+              Lwt.return (Ok ())
+            end else begin
+              read_l2_table t l2_offset a.Virtual.l2_index
+              >>= fun data_offset ->
+              if Physical.to_bytes data_offset = 0L then begin
+                Lwt.return (Ok ())
+              end else begin
+                (* The data at [data_offset] is about to become an unreferenced
+                   hole in the file *)
+                let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
+                t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
+                let data_cluster = Physical.cluster ~cluster_bits:t.cluster_bits data_offset in
+                write_l2_table t l2_offset a.Virtual.l2_index Physical.unmapped
+                >>= fun () ->
+                Refcount.decr t data_cluster
+              end
+            end
+        )
   end
 
   (* Starting at byte offset [ofs], map a list of buffers onto a list of
@@ -1182,7 +1183,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Some recycler -> Recycler.add_to_junk recycler x in
     let metadata = Metadata.make ~cache ~on_unmap ~cluster_bits ~locks () in
     let recycler = Recycler.create ~base ~sector_size ~cluster_bits ~cache ~locks ~metadata in
-    let next_cluster_m = Lwt_mutex.create () in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true; _ } -> true | _ -> false in
     let stats = Stats.zero in
     let metadata_lock = Qcow_rwlock.make () in
@@ -1207,7 +1207,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster_map_m = Lwt_mutex.create () in
     let t' = {
       h; base; info = info'; config; base_info;
-      locks; recycler; next_cluster; next_cluster_m;
+      locks; recycler; next_cluster;
       metadata; cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock;
       background_compact_timer; cluster_map; cluster_map_m
     } in

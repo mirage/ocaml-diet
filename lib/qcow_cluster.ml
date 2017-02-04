@@ -27,11 +27,16 @@ type cluster = int64
 
 type t = {
   mutable locks: (Qcow_rwlock.t * int) Int64Map.t;
+  metadata_m: Lwt_mutex.t;
+  (** held during metadata changing operations *)
 }
 
 let make () =
   let locks = Int64Map.empty in
-  { locks  }
+  let metadata_m = Lwt_mutex.create () in
+  { locks; metadata_m  }
+
+let with_metadata_lock t = Lwt_mutex.with_lock t.metadata_m
 
 let get_lock t cluster =
   let lock, refcount =
