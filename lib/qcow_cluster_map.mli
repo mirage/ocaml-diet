@@ -41,9 +41,6 @@ val total_used: t -> int64
 val total_free: t -> int64
 (** Return the number of tracked free clusters *)
 
-val free: t -> ClusterBitmap.t
-(** Return the set of free blocks *)
-
 val add: t -> reference -> cluster -> unit
 (** [add t ref cluster] marks [cluster] as in-use and notes the reference from
     [reference]. *)
