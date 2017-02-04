@@ -40,14 +40,14 @@ type t = {
   first_movable_cluster: int64;
 }
 
-let make ~free ~first_movable_cluster =
-  let refs = ClusterMap.empty in
+let make ~free ~refs ~first_movable_cluster =
   let roots = ClusterSet.empty in
   { free; roots; refs; first_movable_cluster }
 
 let zero =
   let free = ClusterBitmap.make_empty ~initial_size:0 ~maximum_size:0 in
-  make ~free ~first_movable_cluster:0L
+  let refs = ClusterMap.empty in
+  make ~free ~refs ~first_movable_cluster:0L
 
 let find t cluster = ClusterMap.find cluster t.refs
 

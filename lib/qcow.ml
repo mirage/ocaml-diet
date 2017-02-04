@@ -814,15 +814,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
        physical cluster back to virtual. The free set will show us the holes,
        and the map will tell us where to get the data from to fill the holes in
        with. *)
-    let mark m rf cluster =
-      let max_cluster = Int64.pred t.next_cluster in
-      let c, w = rf in
-      if cluster > max_cluster then begin
-        Log.err (fun f -> f "Found a reference to cluster %Ld outside the file (max cluster %Ld) from cluster %Ld.%d" cluster max_cluster c w);
-        failwith (Printf.sprintf "Found a reference to cluster %Ld outside the file (max cluster %Ld) from cluster %Ld.%d" cluster max_cluster c w);
-      end;
-      add m rf cluster;
-      m in
+    let refs = ref ClusterMap.empty in
+
     let refcount_start_cluster = Physical.cluster ~cluster_bits:t.cluster_bits t.h.Header.refcount_table_offset in
     let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
     let l1_table_start_cluster = Physical.cluster ~cluster_bits:t.cluster_bits t.h.Header.l1_table_offset in
@@ -850,38 +843,55 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         cluster
       end in
 
-    let acc = make ~free ~first_movable_cluster in
+    let mark rf cluster =
+      let max_cluster = Int64.pred t.next_cluster in
+      let c, w = rf in
+      if cluster > max_cluster then begin
+        Log.err (fun f -> f "Found a reference to cluster %Ld outside the file (max cluster %Ld) from cluster %Ld.%d" cluster max_cluster c w);
+        failwith (Printf.sprintf "Found a reference to cluster %Ld outside the file (max cluster %Ld) from cluster %Ld.%d" cluster max_cluster c w);
+      end;
+      let c, w = rf in
+      if cluster = 0L then () else begin
+        if ClusterMap.mem cluster !refs then begin
+          let c', w' = ClusterMap.find cluster !refs in
+          Log.err (fun f -> f "Found two references to cluster %Ld: %Ld.%d and %Ld.%d" cluster c w c' w');
+          failwith (Printf.sprintf "Found two references to cluster %Ld: %Ld.%d and %Ld.%d" cluster c w c' w');
+        end;
+        ClusterBitmap.(remove (Interval.make cluster cluster) free);
+        refs := ClusterMap.add cluster rf !refs;
+      end in
+
     (* scan the refcount table *)
     let open Lwt_error.Infix in
-    let rec loop acc i =
+    let rec loop i =
       if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
-      then Lwt.return (Ok acc)
+      then Lwt.return (Ok ())
       else begin
         let refcount_cluster = Int64.(add refcount_start_cluster i) in
         Metadata.read t.metadata refcount_cluster
           (fun c ->
             let addresses = Metadata.Physical.of_cluster c in
-            let rec loop acc i =
+            let rec loop i =
               if i >= (Metadata.Physical.len addresses)
-              then Lwt.return (Ok acc)
+              then Lwt.return (Ok ())
               else begin
                 let cluster = parse (Metadata.Physical.get addresses i) in
-                let acc = mark acc (refcount_cluster, i) cluster in
-                loop acc (i + 1)
+                mark (refcount_cluster, i) cluster;
+                loop (i + 1)
               end in
-            loop acc 0
+            loop 0
           )
-        >>= fun acc ->
-        loop acc (Int64.succ i)
+        >>= fun () ->
+        loop (Int64.succ i)
       end in
-    loop acc 0L
-    >>= fun acc ->
+    loop 0L
+    >>= fun () ->
 
     (* scan the L1 and L2 tables, marking the L2 and data clusters *)
-    let rec l1_iter acc i =
+    let rec l1_iter i =
       let l1_table_cluster = Int64.(add l1_table_start_cluster i) in
       if i >= l1_table_clusters
-      then Lwt.return (Ok acc)
+      then Lwt.return (Ok ())
       else begin
         Metadata.read t.metadata l1_table_cluster
           (fun c ->
@@ -889,40 +899,42 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             Lwt.return (Ok l1)
           )
         >>= fun l1 ->
-        let rec l2_iter acc i =
+        let rec l2_iter i =
           if i >= (Metadata.Physical.len l1)
-          then Lwt.return (Ok acc)
+          then Lwt.return (Ok ())
           else begin
             let l2_table_cluster = parse (Metadata.Physical.get l1 i) in
             if l2_table_cluster <> 0L then begin
-              let acc = mark acc (l1_table_cluster, i) l2_table_cluster in
+              mark (l1_table_cluster, i) l2_table_cluster;
               Metadata.read t.metadata l2_table_cluster
                 (fun c ->
                   let l2 = Metadata.Physical.of_cluster c in
                   Lwt.return (Ok l2)
                 )
               >>= fun l2 ->
-              let rec data_iter acc i =
+              let rec data_iter i =
                 if i >= (Metadata.Physical.len l2)
-                then Lwt.return (Ok acc)
+                then Lwt.return (Ok ())
                 else begin
                   let cluster = parse (Metadata.Physical.get l2 i) in
-                  let acc = mark acc (l2_table_cluster, i) cluster in
-                  data_iter acc (i + 1)
+                  mark (l2_table_cluster, i) cluster;
+                  data_iter (i + 1)
                 end in
-              data_iter acc 0
-              >>= fun acc ->
-              l2_iter acc (i + 1)
-            end else l2_iter acc (i + 1)
+              data_iter 0
+              >>= fun () ->
+              l2_iter (i + 1)
+            end else l2_iter (i + 1)
           end in
-        l2_iter acc 0
-        >>= fun acc ->
-        l1_iter acc (Int64.succ i)
+        l2_iter 0
+        >>= fun () ->
+        l1_iter (Int64.succ i)
       end in
-    l1_iter acc 0L
-    >>= fun acc ->
+    l1_iter 0L
+    >>= fun () ->
 
-    Lwt.return (Ok acc)
+    let map = make ~free ~refs:(!refs) ~first_movable_cluster in
+
+    Lwt.return (Ok map)
 
   type check_result = {
     free: int64;
