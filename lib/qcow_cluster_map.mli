@@ -24,14 +24,14 @@ type cluster = int64
 
 type reference = cluster * int (* cluster * index within cluster *)
 
-module ClusterSet = Qcow_bitmap
-
+module ClusterBitmap = Qcow_bitmap
+module ClusterSet = Qcow_clusterset
 module ClusterMap: Map.S with type key = cluster
 
 val zero: t
 (** A cluster map for a zero-length disk *)
 
-val make: free:ClusterSet.t -> first_movable_cluster:cluster -> t
+val make: free:ClusterBitmap.t -> first_movable_cluster:cluster -> t
 (** Given a set of free clusters, and the first cluster which can be moved
     (i.e. that isn't fixed header), construct an empty cluster map. *)
 
@@ -41,7 +41,7 @@ val total_used: t -> int64
 val total_free: t -> int64
 (** Return the number of tracked free clusters *)
 
-val free: t -> ClusterSet.t
+val free: t -> ClusterBitmap.t
 (** Return the set of free blocks *)
 
 val add: t -> reference -> cluster -> unit
@@ -54,6 +54,9 @@ val remove: t -> cluster -> unit
 
 val find: t -> cluster -> reference
 (** [find t cluster] returns the reference to [cluster], or raises [Not_found] *)
+
+val with_roots: t -> ClusterSet.t -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+(** [with_roots t clusters f] calls [f ()} with [clusters] registered as in-use. *)
 
 module Move: sig
   type t = { src: cluster; dst: cluster; update: reference }
