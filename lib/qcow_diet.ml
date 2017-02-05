@@ -14,7 +14,10 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
-(* #require "ppx_sexp_conv";; *)
+(*
+#require "ppx_sexp_conv";;
+#require "lwt";;
+*)
 open Sexplib.Std
 
 module type ELT = sig
