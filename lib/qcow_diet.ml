@@ -103,9 +103,14 @@ let node x y l r =
           create rlx rly (create x y l rll) (create rx ry rlr rr)
   end else create x y l r
 
-  let rec depth = function
-    | Empty -> 0
-    | Node n -> max (depth n.l) (depth n.r) + 1
+  let depth tree =
+    let rec depth tree k = match tree with
+      | Empty -> k 0
+      | Node n ->
+        depth n.l (fun dl ->
+          depth n.r (fun dr ->
+            k (1 + (max dl dr))))
+    in depth tree (fun d -> d)
 
   let to_string_internal t = Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t t
 
@@ -341,16 +346,41 @@ module IntSet = Set.Make(Int)
 
 module Test = struct
 
+  let check_depth n =
+    let init = IntDiet.add (IntDiet.Interval.make 0 n) IntDiet.empty in
+    (* take away every other block *)
+    let rec sub m acc =
+      (* Printf.printf "acc = %s\n%!" (IntDiet.to_string_internal acc); *)
+      if m <= 0 then acc
+      else sub (m - 2) IntDiet.(remove (Interval.make m m) acc) in
+    let set = sub n init in
+    let d = IntDiet.height set in
+    if d > (int_of_float (log (float_of_int n) /. (log 2.)) + 1)
+    then failwith "Depth larger than expected";
+    let set = sub (n - 1) set in
+    let d = IntDiet.height set in
+    assert (d == 1)
+
   let make_random n m =
     let rec loop set diet = function
       | 0 -> set, diet
       | m ->
         let r = Random.int n in
-        let set, diet =
-          if Random.bool ()
+        let add = Random.bool () in
+        let set, diet' =
+          if add
           then IntSet.add r set, IntDiet.add (IntDiet.Interval.make r r) diet
           else IntSet.remove r set, IntDiet.remove (IntDiet.Interval.make r r) diet in
-        loop set diet (m - 1) in
+        begin
+          try
+            IntDiet.Invariant.check diet';
+          with e ->
+            Printf.fprintf stderr "%s %d\nBefore: %s\nAfter: %s\n"
+              (if add then "Add" else "Remove") r
+              (IntDiet.to_string_internal diet) (IntDiet.to_string_internal diet');
+            raise e
+        end;
+        loop set diet' (m - 1) in
     loop IntSet.empty IntDiet.empty m
     (*
   let set_to_string set =
@@ -412,10 +442,13 @@ module Test = struct
     let open IntDiet in
     assert (elements @@ diff (add (9, 9) @@ add (5, 7) empty) (add (7, 9) empty) = [5; 6])
 
+  let test_depth () = check_depth 1048576
+
   let all = [
     "adding an element to the right", test_add_1;
     "removing an element on the left", test_remove_1;
     "removing an elements from two intervals", test_remove_2;
+    "logarithmic depth", test_depth;
     "adding and removing elements acts like a Set", test_adds;
     "union", test_operator IntSet.union IntDiet.union;
     "diff", test_operator IntSet.diff IntDiet.diff;
