@@ -27,6 +27,7 @@ end
 exception Interval_pairs_should_be_ordered of string
 exception Intervals_should_not_overlap of string
 exception Height_not_equals_depth of string
+exception Unbalanced of string
 
 let _ =
   Printexc.register_printer
@@ -37,6 +38,8 @@ let _ =
         Some ("Intervals should be ordered without overlap: " ^ txt)
       | Height_not_equals_depth txt ->
         Some ("The height is not being maintained correctly: " ^ txt)
+      | Unbalanced txt ->
+        Some ("The tree has become imbalanced: " ^ txt)
       | _ ->
         None
     )
@@ -71,9 +74,34 @@ module Make(Elt: ELT) = struct
     | Empty -> 0
     | Node n -> n.h
 
-  let node x y l r =
-    let h = max (height l) (height r) + 1 in
-    Node { x; y; l; r; h }
+let create x y l r =
+  let h = max (height l) (height r) + 1 in
+  Node { x; y; l; r; h }
+
+let node x y l r =
+  let hl = height l and hr = height r in
+  let open Pervasives in
+  if hl > hr + 2 then begin
+    match l with
+    | Empty -> assert false
+    | Node { x = lx; y = ly; l = ll; r = lr; _ } ->
+      if height ll >= (height lr)
+      then create lx ly ll (create x y lr r)
+      else match lr with
+        | Empty -> assert false
+        | Node { x = lrx; y = lry; l = lrl; r = lrr; _ } ->
+          create lrx lry (create lx ly ll lrl) (create x y lrr r)
+  end else if hr > hl + 2 then begin
+    match r with
+    | Empty -> assert false
+    | Node { x = rx; y = ry; l = rl; r = rr; _ } ->
+      if height rr >= height rl
+      then create rx ry (create x y l rl) rr
+      else match rl with
+        | Empty -> assert false
+        | Node { x = rlx; y = rly; l = rll; r = rlr; _ } ->
+          create rlx rly (create x y l rll) (create rx ry rlr rr)
+  end else create x y l r
 
   let rec depth = function
     | Empty -> 0
@@ -115,10 +143,24 @@ module Make(Elt: ELT) = struct
         height_equals_depth l;
         height_equals_depth r
 
+    let rec balanced = function
+      | Empty -> ()
+      | Node { l; r; _ } as t ->
+        let diff = height l - (height r) in
+        let open Pervasives in
+        if (diff > 2) || (diff < -2) then begin
+          Printf.fprintf stdout "height l = %d = %s\n" (height l) (to_string_internal l);
+          Printf.fprintf stdout "height r = %d = %s\n" (height r) (to_string_internal r);
+          raise (Unbalanced (to_string_internal t));
+        end;
+        balanced l;
+        balanced r
+
     let check t =
       ordered t;
       no_overlap t;
-      height_equals_depth t
+      height_equals_depth t;
+      balanced t
   end
 
   let empty = Empty
@@ -224,18 +266,18 @@ module Make(Elt: ELT) = struct
     | Node n when x < n.x && y <= n.y ->
       let l = add (x, pred n.x) n.l in
       let n = addL { n with l } in
-      Node { n with h = max (height n.l) (height n.r) + 1 }
+      node n.x n.y n.l n.r
     (* overlap on the right only *)
     | Node n when y > n.y && x >= n.x ->
       let r = add (succ n.y, y) n.r in
       let n = addR { n with r } in
-      Node { n with h = max (height n.l) (height n.r) + 1 }
+      node n.x n.y n.l n.r
     (* overlap on both sides *)
     | Node n when x < n.x && y > n.y ->
       let l = add (x, pred n.x) n.l in
       let r = add (succ n.y, y) n.r in
       let n = addL { (addR { n with r }) with l } in
-      Node { n with h = max (height n.l) (height n.r) + 1 }
+      node n.x n.y n.l n.r
     (* completely within *)
     | Node n -> Node n
 
