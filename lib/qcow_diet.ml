@@ -26,6 +26,7 @@ end
 
 exception Interval_pairs_should_be_ordered of string
 exception Intervals_should_not_overlap of string
+exception Height_not_equals_depth of string
 
 let _ =
   Printexc.register_printer
@@ -34,6 +35,8 @@ let _ =
         Some ("Pairs within each interval should be ordered: " ^ txt)
       | Intervals_should_not_overlap txt ->
         Some ("Intervals should be ordered without overlap: " ^ txt)
+      | Height_not_equals_depth txt ->
+        Some ("The height is not being maintained correctly: " ^ txt)
       | _ ->
         None
     )
@@ -61,8 +64,20 @@ module Make(Elt: ELT) = struct
   type t =
     | Empty
     | Node: node -> t
-  and node = { x: elt; y: elt; l: t; r: t }
+  and node = { x: elt; y: elt; l: t; r: t; h: int }
   [@@deriving sexp]
+
+  let height = function
+    | Empty -> 0
+    | Node n -> n.h
+
+  let node x y l r =
+    let h = max (height l) (height r) + 1 in
+    Node { x; y; l; r; h }
+
+  let rec depth = function
+    | Empty -> 0
+    | Node n -> max (depth n.l) (depth n.r) + 1
 
   let to_string_internal t = Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t t
 
@@ -71,7 +86,7 @@ module Make(Elt: ELT) = struct
     (* The pairs (x, y) in each interval are ordered such that x <= y *)
     let rec ordered t = match t with
       | Empty -> ()
-      | Node { x; y; l; r } ->
+      | Node { x; y; l; r; _ } ->
         if x > y then raise (Interval_pairs_should_be_ordered (to_string_internal t));
         ordered l;
         ordered r
@@ -79,7 +94,7 @@ module Make(Elt: ELT) = struct
     (* The intervals don't overlap *)
     let rec no_overlap t = match t with
       | Empty -> ()
-      | Node { x; y; l; r } ->
+      | Node { x; y; l; r; _ } ->
         begin match l with
           | Empty -> ()
           | Node left -> if left.y >= x then raise (Intervals_should_not_overlap (to_string_internal t))
@@ -91,9 +106,19 @@ module Make(Elt: ELT) = struct
         no_overlap l;
         no_overlap r
 
+    (* The height is being stored correctly *)
+    let rec height_equals_depth t =
+      if height t <> (depth t) then raise (Height_not_equals_depth (to_string_internal t));
+      match t with
+      | Empty -> ()
+      | Node { l; r; _ } ->
+        height_equals_depth l;
+        height_equals_depth r
+
     let check t =
       ordered t;
-      no_overlap t
+      no_overlap t;
+      height_equals_depth t
   end
 
   let empty = Empty
@@ -154,18 +179,18 @@ module Make(Elt: ELT) = struct
   (* return (x, y, l) where (x, y) is the maximal interval and [l] is
      the rest of the tree on the left (whose intervals are all smaller). *)
   let rec splitMax = function
-    | { x; y; l; r = Empty } -> x, y, l
+    | { x; y; l; r = Empty; _} -> x, y, l
     | { r = Node r; _ } as n ->
       let u, v, r' = splitMax r in
-      u, v, Node { n with r = r' }
+      u, v, node n.x n.y n.l r'
 
   (* return (x, y, r) where (x, y) is the minimal interval and [r] is
      the rest of the tree on the right (whose intervals are all larger) *)
   let rec splitMin = function
-    | { x; y; l = Empty; r } -> x, y, r
+    | { x; y; l = Empty; r; _} -> x, y, r
     | { l = Node l; _ } as n ->
       let u, v, l' = splitMin l in
-      u, v, Node { n with l = l' }
+      u, v, node n.x n.y l' n.r
 
   let addL = function
     | { l = Empty; _ } as n -> n
@@ -186,28 +211,31 @@ module Make(Elt: ELT) = struct
   let rec add (x, y) t =
     if y < x then invalid_arg "interval reversed";
     match t with
-    | Empty -> Node { x; y; l = Empty; r = Empty }
+    | Empty -> node x y Empty Empty
     (* completely to the left *)
     | Node n when y < n.x ->
       let l = add (x, y) n.l in
-      Node (addL { n with l })
+      node n.x n.y l n.r
     (* completely to the right *)
     | Node n when n.y < x ->
       let r = add (x, y) n.r in
-      Node (addR { n with r })
+      node n.x n.y n.l r
     (* overlap on the left only *)
     | Node n when x < n.x && y <= n.y ->
       let l = add (x, pred n.x) n.l in
-      Node (addL { n with l })
+      let n = addL { n with l } in
+      Node { n with h = max (height n.l) (height n.r) + 1 }
     (* overlap on the right only *)
     | Node n when y > n.y && x >= n.x ->
       let r = add (succ n.y, y) n.r in
-      Node (addR { n with r })
+      let n = addR { n with r } in
+      Node { n with h = max (height n.l) (height n.r) + 1 }
     (* overlap on both sides *)
     | Node n when x < n.x && y > n.y ->
       let l = add (x, pred n.x) n.l in
       let r = add (succ n.y, y) n.r in
-      Node (addL { (addR { n with r }) with l })
+      let n = addL { (addR { n with r }) with l } in
+      Node { n with h = max (height n.l) (height n.r) + 1 }
     (* completely within *)
     | Node n -> Node n
 
@@ -218,22 +246,28 @@ module Make(Elt: ELT) = struct
     | Empty, r -> r
     | Node l, r ->
       let x, y, l' = splitMax l in
-      Node { x; y; l = l'; r }
+      node x y l' r
 
   let rec remove (x, y) t =
     if y < x then invalid_arg "interval reversed";
     match t with
     | Empty -> Empty
     (* completely to the left *)
-    | Node n when y < n.x -> Node { n with l = remove (x, y) n.l }
+    | Node n when y < n.x ->
+      let l = remove (x, y) n.l in
+      node n.x n.y l n.r
     (* completely to the right *)
-    | Node n when n.y < x -> Node { n with r = remove (x, y) n.r }
+    | Node n when n.y < x ->
+      let r = remove (x, y) n.r in
+      node n.x n.y n.l r
     (* overlap on the left only *)
     | Node n when x < n.x && y < n.y ->
-      remove (x, pred n.x) (Node { n with x = succ y })
+      let n' = node (succ y) n.y n.l n.r in
+      remove (x, pred n.x) n'
     (* overlap on the right only *)
     | Node n when y > n.y && x > n.x ->
-      remove (succ n.y, y) (Node { n with y = pred x })
+      let n' = node n.x (pred x) n.l n.r in
+      remove (succ n.y, y) n'
     (* overlap on both sides *)
     | Node n when x <= n.x && y >= n.y ->
       let l = remove (x, n.x) n.l in
@@ -245,7 +279,8 @@ module Make(Elt: ELT) = struct
     | Node n ->
       assert (n.x <= pred x);
       assert (succ y <= n.y);
-      Node { n with y = (pred x); r = Node { n with x = succ y; l = Empty } }
+      let r = node (succ y) n.y Empty n.r in
+      node n.x (pred x) n.l r
 
   let diff a b = fold remove b a
 
