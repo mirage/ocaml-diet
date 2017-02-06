@@ -28,9 +28,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK): sig
   (** Set the associated cluster map (which will be updated on every cluster
       write) *)
 
-  val add_to_junk: t -> int64 -> unit
-  (** Input the given cluster (with arbitrary contents) to the recycler *)
-
   val allocate: t -> int64 -> Qcow_clusterset.t option
   (** [allocate t n] returns [n] clusters which are ready for re-use. If there
       are not enough clusters free then this returns None. *)

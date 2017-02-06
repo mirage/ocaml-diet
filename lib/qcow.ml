@@ -1189,11 +1189,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () -> Lwt.return (Ok ()) in
     let cache = Cache.create ~read_cluster ~write_cluster () in
-    let recycler' = ref None in
-    let on_unmap x = match !recycler' with
-      | None -> ()
-      | Some recycler -> Recycler.add_to_junk recycler x in
-    let metadata = Metadata.make ~cache ~on_unmap ~cluster_bits ~locks () in
+    let metadata = Metadata.make ~cache ~cluster_bits ~locks () in
     let recycler = Recycler.create ~base ~sector_size ~cluster_bits ~cache ~locks ~metadata in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true; _ } -> true | _ -> false in
     let stats = Stats.zero in

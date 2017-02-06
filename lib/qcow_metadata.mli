@@ -24,7 +24,6 @@ type write_error = [ Mirage_block.write_error | `Msg of string ]
 
 val make:
   cache:Qcow_cache.t
-  -> on_unmap:(int64 -> unit)
   -> cluster_bits:int
   -> locks:Qcow_cluster.t
   -> unit -> t

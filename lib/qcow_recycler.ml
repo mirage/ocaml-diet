@@ -24,9 +24,6 @@ type clusters = {
   erased: Qcow_clusterset.t;
   (** zeroed but not yet flushed so the old data may come back after a crash *)
 
-  junk: Qcow_clusterset.t;
-  (** unused clusters containing arbitrary data *)
-
   moves: move Int64Map.t;
   (** all in-progress block moves, indexed by the source cluster *)
 }
@@ -34,7 +31,6 @@ type clusters = {
 let nothing = {
   available = Qcow_clusterset.empty;
   erased = Qcow_clusterset.empty;
-  junk = Qcow_clusterset.empty;
   moves = Int64Map.empty;
 }
 
@@ -67,10 +63,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     { base; sector_size; cluster_bits; cluster_map; cache; locks; metadata; clusters; cluster; m }
 
   let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
-
-  let add_to_junk t cluster =
-    let i = Qcow_clusterset.Interval.make cluster cluster in
-    t.clusters <- { t.clusters with junk = Qcow_clusterset.add i t.clusters.junk }
 
   let allocate t n =
     match Qcow_clusterset.take t.clusters.available n with
@@ -168,8 +160,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     loop remaining
 
   let erase_all t =
-    let batch = t.clusters.junk in
-    t.clusters <- { t.clusters with junk = Qcow_clusterset.empty };
+    let cluster_map = match t.cluster_map with
+      | Some x -> x
+      | None -> assert false in
+    let batch = Qcow_cluster_map.junk cluster_map in
+    Qcow_cluster_map.remove_from_junk cluster_map batch;
     (* The file may have been truncated, so we must truncate too *)
     let open Lwt.Infix in
     B.get_info t.base
@@ -253,6 +248,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     | Error e -> Lwt.return (Error e)
 
   let flush t =
+    let open Qcow_cluster_map in
+    let cluster_map = match t.cluster_map with
+      | None -> assert false (* by construction, see `make` *)
+      | Some x -> x in
     (* Anything erased right now will become available *)
     let clusters = t.clusters in
     let open Lwt.Infix in
@@ -270,7 +269,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
             (* This move appeared while the flush was happening: next time *)
             acc, junk
           end else begin
-            let open Qcow_cluster_map in
             match move.state with
             | Copying ->
               acc, junk
@@ -283,10 +281,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
               Int64Map.remove src acc, Qcow_clusterset.(add (Interval.make src src) junk)
           end
         ) clusters.moves (t.clusters.moves, Qcow_clusterset.empty) in
+      Qcow_cluster_map.add_to_junk cluster_map junk;
       t.clusters <- {
         available = Qcow_clusterset.union t.clusters.available clusters.erased;
         erased = Qcow_clusterset.diff t.clusters.erased clusters.erased;
-        junk = Qcow_clusterset.union t.clusters.junk junk;
         moves;
       };
       Lwt.return (Ok ())

@@ -65,6 +65,17 @@ val remove: t -> cluster -> unit
 (** [remove t cluster] marks [cluster] as free and invalidates any reference
     to it (e.g. in response to a discard) *)
 
+val junk: t -> ClusterSet.t
+(** [junk t] returns the set of clusters containing junk data *)
+
+val add_to_junk: t -> ClusterSet.t -> unit
+(** [add_to_junk t more] adds [more] to the clusters known to contain junk data
+    which must be overwritten before they can be reused. *)
+
+val remove_from_junk: t -> ClusterSet.t -> unit
+(** [remove_from_junk t less] removes [less] from the clusters known to contain
+    junk data which must be overwritten before they can be reused. *)
+
 val find: t -> cluster -> reference
 (** [find t cluster] returns the reference to [cluster], or raises [Not_found] *)
 

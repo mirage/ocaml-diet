@@ -40,7 +40,6 @@ type t = {
   cache: Cache.t;
   locks: Qcow_cluster.t;
   mutable cluster_map: Qcow_cluster_map.t option; (* free/ used space map *)
-  on_unmap: int64 -> unit; (* called whenever a block is unmapped *)
   cluster_bits: int;
   m: Lwt_mutex.t;
   c: unit Lwt_condition.t;
@@ -76,7 +75,8 @@ module Physical = struct
                       (if cluster <> 0L then ", unmapping " ^ (Int64.to_string cluster) else "")
                   );
         if cluster <> 0L then begin
-          t.t.on_unmap cluster;
+          let i = Qcow_clusterset.(add (Interval.make cluster cluster) empty) in
+          Qcow_cluster_map.add_to_junk m i;
           Qcow_cluster_map.remove m cluster;
         end;
         Qcow_cluster_map.add m (t.cluster, n) v'
@@ -88,11 +88,11 @@ end
 
 let erase cluster = Cstruct.memset cluster.data 0
 
-let make ~cache ~on_unmap ~cluster_bits ~locks () =
+let make ~cache ~cluster_bits ~locks () =
   let m = Lwt_mutex.create () in
   let c = Lwt_condition.create () in
   let cluster_map = None in
-  { cache; cluster_map; on_unmap; cluster_bits; locks; m; c }
+  { cache; cluster_map; cluster_bits; locks; m; c }
 
 let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
 

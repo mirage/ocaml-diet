@@ -37,6 +37,8 @@ type move_state =
 type t = {
   (* unused clusters in the file. These can be safely overwritten with new data *)
   mutable free: ClusterSet.t;
+  mutable junk: Qcow_clusterset.t;
+  (* unused clusters containing arbitrary data *)
   (* clusters which are in-use but which are not referenced from anywhere *)
   mutable roots: ClusterSet.t;
   (* map from physical cluster to the physical cluster + offset of the reference.
@@ -51,13 +53,20 @@ let make ~free ~refs ~first_movable_cluster =
       let x, y = Qcow_bitmap.Interval.(x i, y i) in
       Qcow_clusterset.(add (Interval.make x y) acc)
     ) free Qcow_clusterset.empty in
+  let junk = ClusterSet.empty in
   let roots = ClusterSet.empty in
-  { free; roots; refs; first_movable_cluster }
+  { free; junk; roots; refs; first_movable_cluster }
 
 let zero =
   let free = Qcow_bitmap.make_empty ~initial_size:0 ~maximum_size:0 in
   let refs = ClusterMap.empty in
   make ~free ~refs ~first_movable_cluster:0L
+
+let junk t = t.junk
+
+let add_to_junk t more = t.junk <- Qcow_clusterset.union t.junk more
+
+let remove_from_junk t less = t.junk <- Qcow_clusterset.diff t.junk less
 
 let find t cluster = ClusterMap.find cluster t.refs
 
