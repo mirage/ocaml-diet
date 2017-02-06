@@ -57,6 +57,9 @@ val total_used: t -> int64
 val total_free: t -> int64
 (** Return the number of tracked free clusters *)
 
+val resize: t -> cluster -> unit
+(** [resize t new_size_clusters] is called when the file is to be resized. *)
+
 val add: t -> reference -> cluster -> unit
 (** [add t ref cluster] marks [cluster] as in-use and notes the reference from
     [reference]. *)

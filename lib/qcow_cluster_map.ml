@@ -64,6 +64,12 @@ let zero =
   let refs = ClusterMap.empty in
   make ~free ~refs ~first_movable_cluster:0L
 
+let resize t new_size_clusters =
+  let file = Qcow_clusterset.(add (Interval.make 0L (Int64.pred new_size_clusters)) empty) in
+  t.junk <- Qcow_clusterset.inter t.junk file;
+  t.erased <- Qcow_clusterset.inter t.erased file;
+  t.available <- Qcow_clusterset.inter t.available file
+
 let junk t = t.junk
 
 let add_to_junk t more = t.junk <- Qcow_clusterset.union t.junk more
@@ -160,8 +166,6 @@ let compact_s f t acc =
   (* The last allocated block. Note if there are no data blocks this will
      point to the last header block even though it is immovable. *)
   let max_cluster = get_last_block t in
-  Log.info (fun f -> f "compact total_free=%Ld mac_cluster=%Ld" (total_free t) max_cluster);
-
   let open Lwt.Infix in
   let refs = ref t.refs in
   fold_over_free_s

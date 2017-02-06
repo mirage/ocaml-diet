@@ -172,12 +172,19 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     | Result.Error (`Msg m) ->
       Lwt.return (Error (`Msg m))
 
-  let resize_base base sector_size new_size =
+  let resize_base base sector_size cluster_map new_size =
     let sector, within = Physical.to_sector ~sector_size new_size in
     if within <> 0
     then Lwt.return (Error (`Msg (Printf.sprintf "Internal error: attempting to resize to a non-sector multiple %s" (Physical.to_string new_size))))
     else begin
       let open Lwt.Infix in
+      begin match cluster_map with
+        | Some (cluster_map, cluster_bits) ->
+          let cluster = Physical.cluster ~cluster_bits new_size in
+          Qcow_cluster_map.resize cluster_map cluster
+        | None ->
+          ()
+      end;
       B.resize base sector
       >>= function
       | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
@@ -205,7 +212,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       if n = 0L then begin
         (* Resync the file size only *)
         let open Lwt_write_error.Infix in
-        resize_base t.base t.sector_size (Physical.make (t.next_cluster <| t.cluster_bits))
+        resize_base t.base t.sector_size (Some(t.cluster_map, t.cluster_bits)) (Physical.make (t.next_cluster <| t.cluster_bits))
         >>= fun () ->
         Log.debug (fun f -> f "Resized file to %Ld clusters" t.next_cluster);
         f (FreeClusters.empty, true)
@@ -224,7 +231,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             (fun () ->
               Log.debug (fun f -> f "Soft allocated span of clusters from %Ld (length %Ld)" cluster n);
               let open Lwt_write_error.Infix in
-              resize_base t.base t.sector_size (Physical.make (t.next_cluster <| t.cluster_bits))
+              resize_base t.base t.sector_size (Some (t.cluster_map, t.cluster_bits)) (Physical.make (t.next_cluster <| t.cluster_bits))
               >>= fun () ->
               f (set, true)
             )
@@ -982,9 +989,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               (fun () ->
                 let open Qcow_cluster_map in
                 let map = t.cluster_map in
-
-                Log.debug (fun f -> f "Physical blocks discovered: %Ld" (total_free map));
-                Log.debug (fun f -> f "Total free blocks discovered: %Ld" (total_free map));
+                Log.debug (fun f -> f "Disk clusters: %s" (to_summary_string map));
                 let start_last_block = get_last_block map in
 
                 let sector_size = Int64.of_int t.base_info.Mirage_block.sector_size in
@@ -1418,7 +1423,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     (* make will use the file size to figure out where to allocate new clusters
        therefore we must resize the backing device now *)
     let open Lwt_write_error.Infix in
-    resize_base base base_info.Mirage_block.sector_size (Physical.make next_free_byte)
+    resize_base base base_info.Mirage_block.sector_size None (Physical.make next_free_byte)
     >>= fun () ->
     let open Lwt.Infix in
     make config base h
