@@ -14,7 +14,10 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
-(* #require "ppx_sexp_conv";; *)
+(*
+#require "ppx_sexp_conv";;
+#require "lwt";;
+*)
 open Sexplib.Std
 
 module type ELT = sig
@@ -26,6 +29,8 @@ end
 
 exception Interval_pairs_should_be_ordered of string
 exception Intervals_should_not_overlap of string
+exception Height_not_equals_depth of string
+exception Unbalanced of string
 
 let _ =
   Printexc.register_printer
@@ -34,6 +39,10 @@ let _ =
         Some ("Pairs within each interval should be ordered: " ^ txt)
       | Intervals_should_not_overlap txt ->
         Some ("Intervals should be ordered without overlap: " ^ txt)
+      | Height_not_equals_depth txt ->
+        Some ("The height is not being maintained correctly: " ^ txt)
+      | Unbalanced txt ->
+        Some ("The tree has become imbalanced: " ^ txt)
       | _ ->
         None
     )
@@ -61,8 +70,50 @@ module Make(Elt: ELT) = struct
   type t =
     | Empty
     | Node: node -> t
-  and node = { x: elt; y: elt; l: t; r: t }
+  and node = { x: elt; y: elt; l: t; r: t; h: int }
   [@@deriving sexp]
+
+  let height = function
+    | Empty -> 0
+    | Node n -> n.h
+
+let create x y l r =
+  let h = max (height l) (height r) + 1 in
+  Node { x; y; l; r; h }
+
+let node x y l r =
+  let hl = height l and hr = height r in
+  let open Pervasives in
+  if hl > hr + 2 then begin
+    match l with
+    | Empty -> assert false
+    | Node { x = lx; y = ly; l = ll; r = lr; _ } ->
+      if height ll >= (height lr)
+      then create lx ly ll (create x y lr r)
+      else match lr with
+        | Empty -> assert false
+        | Node { x = lrx; y = lry; l = lrl; r = lrr; _ } ->
+          create lrx lry (create lx ly ll lrl) (create x y lrr r)
+  end else if hr > hl + 2 then begin
+    match r with
+    | Empty -> assert false
+    | Node { x = rx; y = ry; l = rl; r = rr; _ } ->
+      if height rr >= height rl
+      then create rx ry (create x y l rl) rr
+      else match rl with
+        | Empty -> assert false
+        | Node { x = rlx; y = rly; l = rll; r = rlr; _ } ->
+          create rlx rly (create x y l rll) (create rx ry rlr rr)
+  end else create x y l r
+
+  let depth tree =
+    let rec depth tree k = match tree with
+      | Empty -> k 0
+      | Node n ->
+        depth n.l (fun dl ->
+          depth n.r (fun dr ->
+            k (1 + (max dl dr))))
+    in depth tree (fun d -> d)
 
   let to_string_internal t = Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t t
 
@@ -71,7 +122,7 @@ module Make(Elt: ELT) = struct
     (* The pairs (x, y) in each interval are ordered such that x <= y *)
     let rec ordered t = match t with
       | Empty -> ()
-      | Node { x; y; l; r } ->
+      | Node { x; y; l; r; _ } ->
         if x > y then raise (Interval_pairs_should_be_ordered (to_string_internal t));
         ordered l;
         ordered r
@@ -79,7 +130,7 @@ module Make(Elt: ELT) = struct
     (* The intervals don't overlap *)
     let rec no_overlap t = match t with
       | Empty -> ()
-      | Node { x; y; l; r } ->
+      | Node { x; y; l; r; _ } ->
         begin match l with
           | Empty -> ()
           | Node left -> if left.y >= x then raise (Intervals_should_not_overlap (to_string_internal t))
@@ -91,9 +142,33 @@ module Make(Elt: ELT) = struct
         no_overlap l;
         no_overlap r
 
+    (* The height is being stored correctly *)
+    let rec height_equals_depth t =
+      if height t <> (depth t) then raise (Height_not_equals_depth (to_string_internal t));
+      match t with
+      | Empty -> ()
+      | Node { l; r; _ } ->
+        height_equals_depth l;
+        height_equals_depth r
+
+    let rec balanced = function
+      | Empty -> ()
+      | Node { l; r; _ } as t ->
+        let diff = height l - (height r) in
+        let open Pervasives in
+        if (diff > 2) || (diff < -2) then begin
+          Printf.fprintf stdout "height l = %d = %s\n" (height l) (to_string_internal l);
+          Printf.fprintf stdout "height r = %d = %s\n" (height r) (to_string_internal r);
+          raise (Unbalanced (to_string_internal t));
+        end;
+        balanced l;
+        balanced r
+
     let check t =
       ordered t;
-      no_overlap t
+      no_overlap t;
+      height_equals_depth t;
+      balanced t
   end
 
   let empty = Empty
@@ -154,18 +229,18 @@ module Make(Elt: ELT) = struct
   (* return (x, y, l) where (x, y) is the maximal interval and [l] is
      the rest of the tree on the left (whose intervals are all smaller). *)
   let rec splitMax = function
-    | { x; y; l; r = Empty } -> x, y, l
+    | { x; y; l; r = Empty; _} -> x, y, l
     | { r = Node r; _ } as n ->
       let u, v, r' = splitMax r in
-      u, v, Node { n with r = r' }
+      u, v, node n.x n.y n.l r'
 
   (* return (x, y, r) where (x, y) is the minimal interval and [r] is
      the rest of the tree on the right (whose intervals are all larger) *)
   let rec splitMin = function
-    | { x; y; l = Empty; r } -> x, y, r
+    | { x; y; l = Empty; r; _} -> x, y, r
     | { l = Node l; _ } as n ->
       let u, v, l' = splitMin l in
-      u, v, Node { n with l = l' }
+      u, v, node n.x n.y l' n.r
 
   let addL = function
     | { l = Empty; _ } as n -> n
@@ -186,28 +261,31 @@ module Make(Elt: ELT) = struct
   let rec add (x, y) t =
     if y < x then invalid_arg "interval reversed";
     match t with
-    | Empty -> Node { x; y; l = Empty; r = Empty }
+    | Empty -> node x y Empty Empty
     (* completely to the left *)
     | Node n when y < n.x ->
       let l = add (x, y) n.l in
-      Node (addL { n with l })
+      node n.x n.y l n.r
     (* completely to the right *)
     | Node n when n.y < x ->
       let r = add (x, y) n.r in
-      Node (addR { n with r })
+      node n.x n.y n.l r
     (* overlap on the left only *)
     | Node n when x < n.x && y <= n.y ->
       let l = add (x, pred n.x) n.l in
-      Node (addL { n with l })
+      let n = addL { n with l } in
+      node n.x n.y n.l n.r
     (* overlap on the right only *)
     | Node n when y > n.y && x >= n.x ->
       let r = add (succ n.y, y) n.r in
-      Node (addR { n with r })
+      let n = addR { n with r } in
+      node n.x n.y n.l n.r
     (* overlap on both sides *)
     | Node n when x < n.x && y > n.y ->
       let l = add (x, pred n.x) n.l in
       let r = add (succ n.y, y) n.r in
-      Node (addL { (addR { n with r }) with l })
+      let n = addL { (addR { n with r }) with l } in
+      node n.x n.y n.l n.r
     (* completely within *)
     | Node n -> Node n
 
@@ -218,22 +296,28 @@ module Make(Elt: ELT) = struct
     | Empty, r -> r
     | Node l, r ->
       let x, y, l' = splitMax l in
-      Node { x; y; l = l'; r }
+      node x y l' r
 
   let rec remove (x, y) t =
     if y < x then invalid_arg "interval reversed";
     match t with
     | Empty -> Empty
     (* completely to the left *)
-    | Node n when y < n.x -> Node { n with l = remove (x, y) n.l }
+    | Node n when y < n.x ->
+      let l = remove (x, y) n.l in
+      node n.x n.y l n.r
     (* completely to the right *)
-    | Node n when n.y < x -> Node { n with r = remove (x, y) n.r }
+    | Node n when n.y < x ->
+      let r = remove (x, y) n.r in
+      node n.x n.y n.l r
     (* overlap on the left only *)
     | Node n when x < n.x && y < n.y ->
-      remove (x, pred n.x) (Node { n with x = succ y })
+      let n' = node (succ y) n.y n.l n.r in
+      remove (x, pred n.x) n'
     (* overlap on the right only *)
     | Node n when y > n.y && x > n.x ->
-      remove (succ n.y, y) (Node { n with y = pred x })
+      let n' = node n.x (pred x) n.l n.r in
+      remove (succ n.y, y) n'
     (* overlap on both sides *)
     | Node n when x <= n.x && y >= n.y ->
       let l = remove (x, n.x) n.l in
@@ -245,7 +329,8 @@ module Make(Elt: ELT) = struct
     | Node n ->
       assert (n.x <= pred x);
       assert (succ y <= n.y);
-      Node { n with y = (pred x); r = Node { n with x = succ y; l = Empty } }
+      let r = node (succ y) n.y Empty n.r in
+      node n.x (pred x) n.l r
 
   let diff a b = fold remove b a
 
@@ -264,16 +349,41 @@ module IntSet = Set.Make(Int)
 
 module Test = struct
 
+  let check_depth n =
+    let init = IntDiet.add (IntDiet.Interval.make 0 n) IntDiet.empty in
+    (* take away every other block *)
+    let rec sub m acc =
+      (* Printf.printf "acc = %s\n%!" (IntDiet.to_string_internal acc); *)
+      if m <= 0 then acc
+      else sub (m - 2) IntDiet.(remove (Interval.make m m) acc) in
+    let set = sub n init in
+    let d = IntDiet.height set in
+    if d > (int_of_float (log (float_of_int n) /. (log 2.)) + 1)
+    then failwith "Depth larger than expected";
+    let set = sub (n - 1) set in
+    let d = IntDiet.height set in
+    assert (d == 1)
+
   let make_random n m =
     let rec loop set diet = function
       | 0 -> set, diet
       | m ->
         let r = Random.int n in
-        let set, diet =
-          if Random.bool ()
+        let add = Random.bool () in
+        let set, diet' =
+          if add
           then IntSet.add r set, IntDiet.add (IntDiet.Interval.make r r) diet
           else IntSet.remove r set, IntDiet.remove (IntDiet.Interval.make r r) diet in
-        loop set diet (m - 1) in
+        begin
+          try
+            IntDiet.Invariant.check diet';
+          with e ->
+            Printf.fprintf stderr "%s %d\nBefore: %s\nAfter: %s\n"
+              (if add then "Add" else "Remove") r
+              (IntDiet.to_string_internal diet) (IntDiet.to_string_internal diet');
+            raise e
+        end;
+        loop set diet' (m - 1) in
     loop IntSet.empty IntDiet.empty m
     (*
   let set_to_string set =
@@ -335,10 +445,13 @@ module Test = struct
     let open IntDiet in
     assert (elements @@ diff (add (9, 9) @@ add (5, 7) empty) (add (7, 9) empty) = [5; 6])
 
+  let test_depth () = check_depth 1048576
+
   let all = [
     "adding an element to the right", test_add_1;
     "removing an element on the left", test_remove_1;
     "removing an elements from two intervals", test_remove_2;
+    "logarithmic depth", test_depth;
     "adding and removing elements acts like a Set", test_adds;
     "union", test_operator IntSet.union IntDiet.union;
     "diff", test_operator IntSet.diff IntDiet.diff;
