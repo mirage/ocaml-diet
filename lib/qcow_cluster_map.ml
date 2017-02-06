@@ -36,11 +36,14 @@ type move_state =
 
 type t = {
   mutable junk: Qcow_clusterset.t;
-  (* unused clusters containing arbitrary data *)
-  mutable available: Qcow_clusterset.t;
-  (** guaranteed to contain zeroes even after a crash *)
+  (** These are unused clusters containing arbitrary data. They must be erased
+      or fully overwritten and then flushed in order to be safely reused. *)
   mutable erased: Qcow_clusterset.t;
-  (** zeroed but not yet flushed so the old data may come back after a crash *)
+  (* These are clusters which have been erased, but not flushed. They will become
+     available for reallocation on the next flush. *)
+  mutable available: Qcow_clusterset.t;
+  (** These clusters are available for immediate reuse; after a crash they are
+      guaranteed to be full of zeroes. *)
   mutable roots: ClusterSet.t;
   (* map from physical cluster to the physical cluster + offset of the reference.
      When a block is moved, this reference must be updated. *)
