@@ -18,19 +18,11 @@ type move = {
 (** describes the state of an in-progress block move *)
 
 type clusters = {
-  available: Qcow_clusterset.t;
-  (** guaranteed to contain zeroes even after a crash *)
-
-  erased: Qcow_clusterset.t;
-  (** zeroed but not yet flushed so the old data may come back after a crash *)
-
   moves: move Int64Map.t;
   (** all in-progress block moves, indexed by the source cluster *)
 }
 
 let nothing = {
-  available = Qcow_clusterset.empty;
-  erased = Qcow_clusterset.empty;
   moves = Int64Map.empty;
 }
 
@@ -65,10 +57,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
 
   let allocate t n =
-    match Qcow_clusterset.take t.clusters.available n with
-    | Some (set, free) ->
+    let cluster_map = match t.cluster_map with
+      | Some x -> x
+      | None -> assert false in
+    match Qcow_clusterset.take (Qcow_cluster_map.available cluster_map) n with
+    | Some (set, _free) ->
       Log.debug (fun f -> f "Allocated %Ld clusters from free list" n);
-      t.clusters <- { t.clusters with available = free };
+      Qcow_cluster_map.remove_from_available cluster_map set;
       Some set
     | None ->
       None
@@ -109,7 +104,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   let move t move =
     let m = { move; state = Qcow_cluster_map.Copying } in
     let src, dst = Qcow_cluster_map.Move.(move.src, move.dst) in
-    t.clusters <- { t.clusters with moves = Int64Map.add src m t.clusters.moves };
+    t.clusters <- { moves = Int64Map.add src m t.clusters.moves };
     let open Lwt.Infix in
     copy t src dst
     >>= function
@@ -118,7 +113,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
     | Ok () ->
       (* FIXME: make a concurrent write remove the entry *)
-      t.clusters <- { t.clusters with moves =
+      t.clusters <- { moves =
                                         if Int64Map.mem src t.clusters.moves
                                         then Int64Map.add src { m with state = Qcow_cluster_map.Copied } t.clusters.moves
                                         else t.clusters.moves
@@ -179,7 +174,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
     | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
     | Ok () ->
-      t.clusters <- { t.clusters with erased = Qcow_clusterset.union batch' t.clusters.erased };
+      Qcow_cluster_map.add_to_erased cluster_map batch;
       Lwt.return (Ok ())
 
   (* Run all threads in parallel, wait for all to complete, then iterate through
@@ -238,7 +233,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         >>= function
         | Ok () ->
           if Int64Map.mem src t.clusters.moves
-          then t.clusters <- { t.clusters with moves = Int64Map.add src { move with state = Referenced } t.clusters.moves };
+          then t.clusters <- { moves = Int64Map.add src { move with state = Referenced } t.clusters.moves };
           nr_updated := Int64.add !nr_updated (Int64.of_int (List.length flushed));
           Lwt.return (Ok ())
         | Error e -> Lwt.return (Error e)
@@ -255,6 +250,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     (* Anything erased right now will become available *)
     let clusters = t.clusters in
     let open Lwt.Infix in
+    let erased = Qcow_cluster_map.erased cluster_map in
     B.flush t.base
     >>= function
     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
@@ -282,9 +278,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
           end
         ) clusters.moves (t.clusters.moves, Qcow_clusterset.empty) in
       Qcow_cluster_map.add_to_junk cluster_map junk;
+      Qcow_cluster_map.add_to_available cluster_map erased;
+      Qcow_cluster_map.remove_from_erased cluster_map erased;
       t.clusters <- {
-        available = Qcow_clusterset.union t.clusters.available clusters.erased;
-        erased = Qcow_clusterset.diff t.clusters.erased clusters.erased;
         moves;
       };
       Lwt.return (Ok ())

@@ -37,3 +37,12 @@ let take t n =
       | None -> None
     end in
   loop empty t n
+
+let cardinal t =
+  fold
+    (fun i acc ->
+      let from = Interval.x i in
+      let upto = Interval.y i in
+      let size = Int64.succ (Int64.sub upto from) in
+      Int64.add size acc
+    ) t 0L

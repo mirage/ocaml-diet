@@ -18,3 +18,5 @@
 include Qcow_s.INTERVAL_SET with type elt = int64
 
 val take: t -> int64 -> (t * t) option
+
+val cardinal: t -> int64

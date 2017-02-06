@@ -76,6 +76,27 @@ val remove_from_junk: t -> ClusterSet.t -> unit
 (** [remove_from_junk t less] removes [less] from the clusters known to contain
     junk data which must be overwritten before they can be reused. *)
 
+val available: t -> ClusterSet.t
+(** [available t] returns the set of clusters which are available for reallocation *)
+
+val add_to_available: t -> ClusterSet.t -> unit
+(** [add_to_available t more] adds [more] to the clusters known to contain
+    available data *)
+
+val remove_from_available: t -> ClusterSet.t -> unit
+(** [remove_from_available t less] removes [less] from the clusters known to
+    contain available data *)
+
+val erased: t -> ClusterSet.t
+(** [erased t] returns the set of clusters which are erased but not yet flushed *)
+
+val add_to_erased: t -> ClusterSet.t -> unit
+(** [add_to_erased t more] adds [more] to the clusters which have been erased *)
+
+val remove_from_erased: t -> ClusterSet.t -> unit
+(** [remove_from_erased t less] removes [less] from the clusters which have been
+    erased *)
+
 val find: t -> cluster -> reference
 (** [find t cluster] returns the reference to [cluster], or raises [Not_found] *)
 
@@ -96,3 +117,6 @@ val get_last_block: t -> int64
 (** [get_last_block t] is the last allocated block in [t]. Note if there are no
     data blocks this will point to the last header block even though it is
     immovable. *)
+
+val to_summary_string: t -> string
+(** [to_summary_string t] returns a terse printable summary of [t] *)

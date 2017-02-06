@@ -35,11 +35,12 @@ type move_state =
   | Referenced
 
 type t = {
-  (* unused clusters in the file. These can be safely overwritten with new data *)
-  mutable free: ClusterSet.t;
   mutable junk: Qcow_clusterset.t;
   (* unused clusters containing arbitrary data *)
-  (* clusters which are in-use but which are not referenced from anywhere *)
+  mutable available: Qcow_clusterset.t;
+  (** guaranteed to contain zeroes even after a crash *)
+  mutable erased: Qcow_clusterset.t;
+  (** zeroed but not yet flushed so the old data may come back after a crash *)
   mutable roots: ClusterSet.t;
   (* map from physical cluster to the physical cluster + offset of the reference.
      When a block is moved, this reference must be updated. *)
@@ -48,14 +49,15 @@ type t = {
 }
 
 let make ~free ~refs ~first_movable_cluster =
-  let free = Qcow_bitmap.fold
+  let junk = Qcow_bitmap.fold
     (fun i acc ->
       let x, y = Qcow_bitmap.Interval.(x i, y i) in
       Qcow_clusterset.(add (Interval.make x y) acc)
     ) free Qcow_clusterset.empty in
-  let junk = ClusterSet.empty in
   let roots = ClusterSet.empty in
-  { free; junk; roots; refs; first_movable_cluster }
+  let available = ClusterSet.empty in
+  let erased = ClusterSet.empty in
+  { junk; available; erased; roots; refs; first_movable_cluster }
 
 let zero =
   let free = Qcow_bitmap.make_empty ~initial_size:0 ~maximum_size:0 in
@@ -68,19 +70,45 @@ let add_to_junk t more = t.junk <- Qcow_clusterset.union t.junk more
 
 let remove_from_junk t less = t.junk <- Qcow_clusterset.diff t.junk less
 
+let available t = t.available
+
+let add_to_available t more = t.available <- Qcow_clusterset.union t.available more
+
+let remove_from_available t less = t.available <- Qcow_clusterset.diff t.available less
+
+let erased t = t.erased
+
+let add_to_erased t more = t.erased <- Qcow_clusterset.union t.erased more
+
+let remove_from_erased t less = t.erased <- Qcow_clusterset.diff t.erased less
+
 let find t cluster = ClusterMap.find cluster t.refs
 
 let total_used t =
   Int64.of_int @@ ClusterMap.cardinal t.refs
 
 let total_free t =
-  ClusterSet.fold
-    (fun i acc ->
-      let from = ClusterSet.Interval.x i in
-      let upto = ClusterSet.Interval.y i in
-      let size = Int64.succ (Int64.sub upto from) in
-      Int64.add size acc
-    ) t.free 0L
+  ClusterSet.cardinal t.junk
+
+let total_roots t =
+  ClusterSet.cardinal t.roots
+
+let get_last_block t =
+  let max_ref =
+    try
+      fst @@ ClusterMap.max_binding t.refs
+    with Not_found ->
+      Int64.pred t.first_movable_cluster in
+  let max_root =
+    try
+      ClusterSet.Interval.y @@ ClusterSet.max_elt t.roots
+    with Not_found ->
+      max_ref in
+  max max_ref max_root
+
+let to_summary_string t =
+  Printf.sprintf "total_free = %Ld; total_used = %Ld; total_roots = %Ld; max_cluster = %Ld"
+    (total_free t) (total_used t) (total_roots t) (get_last_block t)
 
 let add t rf cluster =
   let c, w = rf in
@@ -90,13 +118,13 @@ let add t rf cluster =
       Log.err (fun f -> f "Found two references to cluster %Ld: %Ld.%d and %Ld.%d" cluster c w c' w');
       failwith (Printf.sprintf "Found two references to cluster %Ld: %Ld.%d and %Ld.%d" cluster c w c' w');
     end;
-    t.free <- ClusterSet.(remove (Interval.make cluster cluster) t.free);
+    t.junk <- ClusterSet.(remove (Interval.make cluster cluster) t.junk);
     t.refs <- ClusterMap.add cluster rf t.refs;
     ()
   end
 
 let remove t cluster =
-  t.free <- ClusterSet.(add (Interval.make cluster cluster) t.free);
+  t.junk <- ClusterSet.(add (Interval.make cluster cluster) t.junk);
   t.refs <- ClusterMap.remove cluster t.refs
 
 (* Fold over all free blocks *)
@@ -113,7 +141,7 @@ let fold_over_free_s f t acc =
         else Lwt.return acc
       end in
     loop acc from in
-  ClusterSet.fold_s range t.free acc
+  ClusterSet.fold_s range t.junk acc
 
 let with_roots t clusters f =
   t.roots <- ClusterSet.union clusters t.roots;
@@ -126,25 +154,14 @@ module Move = struct
   type t = { src: cluster; dst: cluster }
 end
 
-let get_last_block t =
-  let max_ref =
-    try
-      fst @@ ClusterMap.max_binding t.refs
-    with Not_found ->
-      Int64.pred t.first_movable_cluster in
-  let max_root =
-    try
-      ClusterSet.Interval.y @@ ClusterSet.max_elt t.roots
-    with Not_found ->
-      max_ref in
-  max max_ref max_root
-
 open Result
 
 let compact_s f t acc =
   (* The last allocated block. Note if there are no data blocks this will
      point to the last header block even though it is immovable. *)
   let max_cluster = get_last_block t in
+  Log.info (fun f -> f "compact total_free=%Ld mac_cluster=%Ld" (total_free t) max_cluster);
+
   let open Lwt.Infix in
   let refs = ref t.refs in
   fold_over_free_s
