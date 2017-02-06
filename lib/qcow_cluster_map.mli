@@ -20,6 +20,23 @@ type t
     tracks which clusters are free, and which are used, and where the references
     are. *)
 
+type move_state =
+  | Copying
+  (** a background copy is in progress. If this cluster is modified then
+      the copy should be aborted. *)
+  | Copied
+  (** contents of this cluster have been copied once to another cluster.
+      If this cluster is modified then the copy should be aborted. *)
+  | Flushed
+  (** contents of this cluster have been copied and flushed to disk: it
+      is now safe to rewrite the pointer. If this cluster is modified then
+      the copy should be aborted. *)
+  | Referenced
+  (** the reference has been rewritten; it is now safe to write to this
+      cluster again. On the next flush, the copy is complete and the original
+      block can be recycled. *)
+(** Describes the state of a block move *)
+
 type cluster = int64
 
 type reference = cluster * int (* cluster * index within cluster *)

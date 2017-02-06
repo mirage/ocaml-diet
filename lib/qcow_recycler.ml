@@ -11,25 +11,9 @@ module Int64Map = Map.Make(Int64)
 
 let ( <| ) = Int64.shift_left
 
-type move_state =
-  | Copying
-  (** a background copy is in progress. If this cluster is modified then
-      the copy should be aborted. *)
-  | Copied
-  (** contents of this cluster have been copied once to another cluster.
-      If this cluster is modified then the copy should be aborted. *)
-  | Flushed
-  (** contents of this cluster have been copied and flushed to disk: it
-      is now safe to rewrite the pointer. If this cluster is modified then
-      the copy should be aborted. *)
-  | Referenced
-  (** the reference has been rewritten; it is now safe to write to this
-      cluster again. On the next flush, the copy is complete and the original
-      block can be recycled. *)
-
 type move = {
   move: Qcow_cluster_map.Move.t;
-  state: move_state;
+  state: Qcow_cluster_map.move_state;
 }
 (** describes the state of an in-progress block move *)
 
@@ -131,7 +115,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       )
 
   let move t move =
-    let m = { move; state = Copying } in
+    let m = { move; state = Qcow_cluster_map.Copying } in
     let src, dst = Qcow_cluster_map.Move.(move.src, move.dst) in
     t.clusters <- { t.clusters with moves = Int64Map.add src m t.clusters.moves };
     let open Lwt.Infix in
@@ -144,7 +128,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       (* FIXME: make a concurrent write remove the entry *)
       t.clusters <- { t.clusters with moves =
                                         if Int64Map.mem src t.clusters.moves
-                                        then Int64Map.add src { m with state = Copied } t.clusters.moves
+                                        then Int64Map.add src { m with state = Qcow_cluster_map.Copied } t.clusters.moves
                                         else t.clusters.moves
                     };
       Lwt.return (Ok ())
@@ -286,6 +270,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
             (* This move appeared while the flush was happening: next time *)
             acc, junk
           end else begin
+            let open Qcow_cluster_map in
             match move.state with
             | Copying ->
               acc, junk

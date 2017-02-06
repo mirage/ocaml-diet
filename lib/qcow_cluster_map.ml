@@ -28,6 +28,12 @@ module ClusterMap = Map.Make(Int64)
 type cluster = int64
 type reference = cluster * int
 
+type move_state =
+  | Copying
+  | Copied
+  | Flushed
+  | Referenced
+
 type t = {
   (* unused clusters in the file. These can be safely overwritten with new data *)
   mutable free: ClusterSet.t;
