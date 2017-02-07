@@ -163,7 +163,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let cluster_map = match t.cluster_map with
       | Some x -> x
       | None -> assert false in
-    let batch, _sizeof_batch = Qcow_cluster_map.junk cluster_map in
+    let batch = Qcow_cluster_map.junk cluster_map in
     Qcow_cluster_map.remove_from_junk cluster_map batch;
     let open Lwt.Infix in
     erase t batch
@@ -248,7 +248,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     (* Anything erased right now will become available *)
     let clusters = t.clusters in
     let open Lwt.Infix in
-    let erased, _nr_erased = Qcow_cluster_map.erased cluster_map in
+    let erased = Qcow_cluster_map.erased cluster_map in
     B.flush t.base
     >>= function
     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
@@ -297,8 +297,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let open Lwt.Infix in
       Qcow_cluster_map.wait_for_junk cluster_map
       >>= fun () ->
-      let _junk, nr_junk = Qcow_cluster_map.junk cluster_map in
-      let _erased, nr_erased = Qcow_cluster_map.erased cluster_map in
+      let junk = Qcow_cluster_map.junk cluster_map in
+      let nr_junk = Int64.IntervalSet.cardinal junk in
+      let erased = Qcow_cluster_map.erased cluster_map in
+      let nr_erased = Int64.IntervalSet.cardinal erased in
       if nr_erased < keep_erased then begin
         (* Take some of the junk and erase it *)
         let n = min nr_junk (Int64.sub keep_erased nr_erased) in

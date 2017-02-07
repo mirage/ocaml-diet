@@ -36,11 +36,9 @@ type move_state =
 
 type t = {
   mutable junk: Int64.IntervalSet.t;
-  mutable nr_junk: int64;
   (** These are unused clusters containing arbitrary data. They must be erased
       or fully overwritten and then flushed in order to be safely reused. *)
   mutable erased: Int64.IntervalSet.t;
-  mutable nr_erased: int64;
   (* These are clusters which have been erased, but not flushed. They will become
      available for reallocation on the next flush. *)
   mutable available: Int64.IntervalSet.t;
@@ -60,13 +58,11 @@ let make ~free ~refs ~first_movable_cluster =
       let x, y = Qcow_bitmap.Interval.(x i, y i) in
       Int64.IntervalSet.(add (Interval.make x y) acc)
     ) free Int64.IntervalSet.empty in
-  let nr_junk = Int64.IntervalSet.cardinal junk in
   let roots = Int64.IntervalSet.empty in
   let available = Int64.IntervalSet.empty in
   let erased = Int64.IntervalSet.empty in
-  let nr_erased = 0L in
   let junk_c = Lwt_condition.create () in
-  { junk; nr_junk; junk_c; available; erased; nr_erased; roots; refs; first_movable_cluster }
+  { junk; junk_c; available; erased; roots; refs; first_movable_cluster }
 
 let zero =
   let free = Qcow_bitmap.make_empty ~initial_size:0 ~maximum_size:0 in
@@ -79,18 +75,15 @@ let resize t new_size_clusters =
   t.erased <- Int64.IntervalSet.inter t.erased file;
   t.available <- Int64.IntervalSet.inter t.available file
 
-let junk t = t.junk, t.nr_junk
+let junk t = t.junk
 
 let add_to_junk t more =
   (* assert (Int64.IntervalSet.inter t.junk more = Int64.IntervalSet.empty); *)
-  t.nr_junk <- Int64.add t.nr_junk (Int64.IntervalSet.cardinal more);
   t.junk <- Int64.IntervalSet.union t.junk more;
   Lwt_condition.broadcast t.junk_c ()
 
 let remove_from_junk t less =
-  t.nr_junk <- Int64.sub t.nr_junk (Int64.IntervalSet.cardinal less);
   t.junk <- Int64.IntervalSet.diff t.junk less
-  (* ;assert (Int64.IntervalSet.cardinal t.junk = t.nr_junk) *)
 
 let wait_for_junk t = Lwt_condition.wait t.junk_c
 
@@ -100,7 +93,7 @@ let add_to_available t more = t.available <- Int64.IntervalSet.union t.available
 
 let remove_from_available t less = t.available <- Int64.IntervalSet.diff t.available less
 
-let erased t = t.erased, t.nr_erased
+let erased t = t.erased
 
 let add_to_erased t more = t.erased <- Int64.IntervalSet.union t.erased more
 

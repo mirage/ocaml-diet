@@ -68,9 +68,8 @@ val remove: t -> cluster -> unit
 (** [remove t cluster] marks [cluster] as free and invalidates any reference
     to it (e.g. in response to a discard) *)
 
-val junk: t -> Int64.IntervalSet.t * int64
-(** [junk t] returns the set of clusters containing junk data and the size of
-    the set. *)
+val junk: t -> Int64.IntervalSet.t
+(** [junk t] returns the set of clusters containing junk data *)
 
 val add_to_junk: t -> Int64.IntervalSet.t -> unit
 (** [add_to_junk t more] adds [more] to the clusters known to contain junk data
@@ -94,9 +93,8 @@ val remove_from_available: t -> Int64.IntervalSet.t -> unit
 (** [remove_from_available t less] removes [less] from the clusters known to
     contain available data *)
 
-val erased: t -> Int64.IntervalSet.t * int64
-(** [erased t] returns the set of clusters which are erased but not yet flushed
-    and the size of the set *)
+val erased: t -> Int64.IntervalSet.t
+(** [erased t] returns the set of clusters which are erased but not yet flushed *)
 
 val add_to_erased: t -> Int64.IntervalSet.t -> unit
 (** [add_to_erased t more] adds [more] to the clusters which have been erased *)
