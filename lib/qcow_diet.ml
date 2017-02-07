@@ -363,7 +363,29 @@ let node x y l r =
 
   let inter a b = diff a (diff a b)
 
+  let take t n =
+    let rec loop acc free n =
+      if n = Elt.zero
+      then Some (acc, free)
+      else begin
+        match (
+          try
+            let i = choose free in
+            let x, y = Interval.(x i, y i) in
+            let len = Elt.(succ @@ y - x) in
+            let will_use = if Pervasives.(Elt.compare n len < 0) then n else len in
+            let i' = Interval.make x Elt.(pred @@ x + will_use) in
+            Some ((add i' acc), (remove i' free), Elt.(n - will_use))
+          with
+          | Not_found -> None
+        ) with
+        | Some (acc', free', n') -> loop acc' free' n'
+        | None -> None
+      end in
+    loop empty t n
+
 end
+
 
 module Int = struct
   type t = int [@@deriving sexp]

@@ -138,6 +138,10 @@ module type INTERVAL_SET = sig
   val choose: t -> interval
   (** [choose t] returns one interval, or raises Not_found if the set is empty *)
 
+  val take: t -> elt -> (t * t) option
+  (** [take n] returns [Some a, b] where [cardinal a = n] and [diff t a = b]
+      or [None] if [cardinal t < n] *)
+
   val union: t -> t -> t
   (** set union *)
 
