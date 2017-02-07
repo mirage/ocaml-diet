@@ -180,7 +180,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let cluster_map = match t.cluster_map with
       | Some x -> x
       | None -> assert false in
-    let batch = Qcow_cluster_map.junk cluster_map in
+    let batch, _sizeof_batch = Qcow_cluster_map.junk cluster_map in
     Qcow_cluster_map.remove_from_junk cluster_map batch;
     let open Lwt.Infix in
     erase t batch

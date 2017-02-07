@@ -68,8 +68,9 @@ val remove: t -> cluster -> unit
 (** [remove t cluster] marks [cluster] as free and invalidates any reference
     to it (e.g. in response to a discard) *)
 
-val junk: t -> ClusterSet.t
-(** [junk t] returns the set of clusters containing junk data *)
+val junk: t -> ClusterSet.t * int64
+(** [junk t] returns the set of clusters containing junk data and the size of
+    the set. *)
 
 val add_to_junk: t -> ClusterSet.t -> unit
 (** [add_to_junk t more] adds [more] to the clusters known to contain junk data

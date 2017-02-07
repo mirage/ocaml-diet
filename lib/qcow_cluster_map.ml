@@ -36,6 +36,7 @@ type move_state =
 
 type t = {
   mutable junk: Qcow_clusterset.t;
+  mutable nr_junk: int64;
   (** These are unused clusters containing arbitrary data. They must be erased
       or fully overwritten and then flushed in order to be safely reused. *)
   mutable erased: Qcow_clusterset.t;
@@ -58,11 +59,12 @@ let make ~free ~refs ~first_movable_cluster =
       let x, y = Qcow_bitmap.Interval.(x i, y i) in
       Qcow_clusterset.(add (Interval.make x y) acc)
     ) free Qcow_clusterset.empty in
+  let nr_junk = ClusterSet.cardinal junk in
   let roots = ClusterSet.empty in
   let available = ClusterSet.empty in
   let erased = ClusterSet.empty in
   let junk_c = Lwt_condition.create () in
-  { junk; junk_c; available; erased; roots; refs; first_movable_cluster }
+  { junk; nr_junk; junk_c; available; erased; roots; refs; first_movable_cluster }
 
 let zero =
   let free = Qcow_bitmap.make_empty ~initial_size:0 ~maximum_size:0 in
@@ -75,13 +77,18 @@ let resize t new_size_clusters =
   t.erased <- Qcow_clusterset.inter t.erased file;
   t.available <- Qcow_clusterset.inter t.available file
 
-let junk t = t.junk
+let junk t = t.junk, t.nr_junk
 
 let add_to_junk t more =
+  (* assert (Qcow_clusterset.inter t.junk more = Qcow_clusterset.empty); *)
+  t.nr_junk <- Int64.add t.nr_junk (ClusterSet.cardinal more);
   t.junk <- Qcow_clusterset.union t.junk more;
   Lwt_condition.broadcast t.junk_c ()
 
-let remove_from_junk t less = t.junk <- Qcow_clusterset.diff t.junk less
+let remove_from_junk t less =
+  t.nr_junk <- Int64.sub t.nr_junk (ClusterSet.cardinal less);
+  t.junk <- Qcow_clusterset.diff t.junk less
+  (* ;assert (ClusterSet.cardinal t.junk = t.nr_junk) *)
 
 let wait_for_junk t = Lwt_condition.wait t.junk_c
 
