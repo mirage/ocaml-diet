@@ -34,6 +34,7 @@ exception Interval_pairs_should_be_ordered of string
 exception Intervals_should_not_overlap of string
 exception Height_not_equals_depth of string
 exception Unbalanced of string
+exception Cardinal of string
 
 let _ =
   Printexc.register_printer
@@ -46,6 +47,8 @@ let _ =
         Some ("The height is not being maintained correctly: " ^ txt)
       | Unbalanced txt ->
         Some ("The tree has become imbalanced: " ^ txt)
+      | Cardinal txt ->
+        Some ("The cardinal value stored in the node is wrong: " ^ txt)
       | _ ->
         None
     )
@@ -178,11 +181,21 @@ let node x y l r =
         balanced l;
         balanced r
 
+    let rec check_cardinal = function
+      | Empty -> ()
+      | Node { x; y; l; r; cardinal = c; _ } as t ->
+        check_cardinal l;
+        check_cardinal r;
+        if Elt.(c - (cardinal l) - (cardinal r) - y + x) <> Elt.(succ zero) then begin
+          raise (Cardinal (to_string_internal t));
+        end
+
     let check t =
       ordered t;
       no_overlap t;
       height_equals_depth t;
-      balanced t
+      balanced t;
+      check_cardinal t
   end
 
   let empty = Empty
@@ -474,5 +487,4 @@ module Test = struct
     "diff", test_operator IntSet.diff IntDiet.diff;
     "intersection", test_operator IntSet.inter IntDiet.inter;
   ]
-
 end
