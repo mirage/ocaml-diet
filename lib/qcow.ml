@@ -1233,7 +1233,10 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | None -> ()
       | Some sectors ->
         let keep_erased = Int64.(div (mul sectors (of_int sector_size)) cluster_size) in
-        Recycler.start_background_thread t'.recycler ~keep_erased );
+        let compact_after_unmaps = match config.Config.compact_after_unmaps with
+          | None -> None
+          | Some sectors -> Some (Int64.(div (mul sectors (of_int sector_size)) cluster_size)) in
+        Recycler.start_background_thread t'.recycler ~keep_erased ?compact_after_unmaps () );
     ( if config.Config.discard && not(lazy_refcounts) then begin
         Log.info (fun f -> f "discard requested and lazy_refcounts is disabled: erasing refcount table and enabling lazy_refcounts");
         Lwt_error.or_fail_with @@ Cluster.Refcount.zero_all t'

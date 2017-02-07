@@ -40,6 +40,7 @@ type t = {
   (** These are unused clusters containing arbitrary data. They must be erased
       or fully overwritten and then flushed in order to be safely reused. *)
   mutable erased: Qcow_clusterset.t;
+  mutable nr_erased: int64;
   (* These are clusters which have been erased, but not flushed. They will become
      available for reallocation on the next flush. *)
   mutable available: Qcow_clusterset.t;
@@ -63,8 +64,9 @@ let make ~free ~refs ~first_movable_cluster =
   let roots = ClusterSet.empty in
   let available = ClusterSet.empty in
   let erased = ClusterSet.empty in
+  let nr_erased = 0L in
   let junk_c = Lwt_condition.create () in
-  { junk; nr_junk; junk_c; available; erased; roots; refs; first_movable_cluster }
+  { junk; nr_junk; junk_c; available; erased; nr_erased; roots; refs; first_movable_cluster }
 
 let zero =
   let free = Qcow_bitmap.make_empty ~initial_size:0 ~maximum_size:0 in
@@ -98,7 +100,7 @@ let add_to_available t more = t.available <- Qcow_clusterset.union t.available m
 
 let remove_from_available t less = t.available <- Qcow_clusterset.diff t.available less
 
-let erased t = t.erased
+let erased t = t.erased, t.nr_erased
 
 let add_to_erased t more = t.erased <- Qcow_clusterset.union t.erased more
 

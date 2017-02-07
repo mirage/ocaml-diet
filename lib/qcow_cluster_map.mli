@@ -94,8 +94,9 @@ val remove_from_available: t -> ClusterSet.t -> unit
 (** [remove_from_available t less] removes [less] from the clusters known to
     contain available data *)
 
-val erased: t -> ClusterSet.t
-(** [erased t] returns the set of clusters which are erased but not yet flushed *)
+val erased: t -> ClusterSet.t * int64
+(** [erased t] returns the set of clusters which are erased but not yet flushed
+    and the size of the set *)
 
 val add_to_erased: t -> ClusterSet.t -> unit
 (** [add_to_erased t more] adds [more] to the clusters which have been erased *)

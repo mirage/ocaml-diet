@@ -246,7 +246,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     (* Anything erased right now will become available *)
     let clusters = t.clusters in
     let open Lwt.Infix in
-    let erased = Qcow_cluster_map.erased cluster_map in
+    let erased, _nr_erased = Qcow_cluster_map.erased cluster_map in
     B.flush t.base
     >>= function
     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
@@ -281,7 +281,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       };
       Lwt.return (Ok ())
 
-  let start_background_thread t ~keep_erased =
+  let start_background_thread t ~keep_erased ?compact_after_unmaps () =
     let th, _ = Lwt.task () in
     Lwt.on_cancel th
       (fun () ->
@@ -295,7 +295,17 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let open Lwt.Infix in
       Qcow_cluster_map.wait_for_junk cluster_map
       >>= fun () ->
-      Log.info (fun f -> f "block recycler: %s" (Qcow_cluster_map.to_summary_string cluster_map));
+      let _junk, nr_junk = Qcow_cluster_map.junk cluster_map in
+      let _erased, nr_erased = Qcow_cluster_map.erased cluster_map in
+      if nr_erased < keep_erased then begin
+        (* Take some of the junk and erase it *)
+        let n = min nr_junk (Int64.sub keep_erased nr_erased) in
+        Log.info (fun f -> f "block recycler: should erase %Ld clusters" n);
+      end else begin match compact_after_unmaps with
+        | Some x when x < nr_junk ->
+          Log.info (fun f -> f "block recycler: should compact up to %Ld clusters" nr_junk)
+        | _ -> ()
+      end;
       loop () in
     Lwt.async loop;
     t.background_thread <- th
