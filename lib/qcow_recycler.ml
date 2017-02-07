@@ -295,7 +295,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     Log.info (fun f -> f "block recycler starting with keep_erased = %Ld" keep_erased);
     let rec loop () =
       let open Lwt.Infix in
-      Qcow_cluster_map.wait_for_junk cluster_map
+      Qcow_cluster_map.wait cluster_map
       >>= fun () ->
       let junk = Qcow_cluster_map.junk cluster_map in
       let nr_junk = Int64.IntervalSet.cardinal junk in

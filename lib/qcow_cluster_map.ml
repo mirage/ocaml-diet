@@ -49,7 +49,9 @@ type t = {
      When a block is moved, this reference must be updated. *)
   mutable refs: reference ClusterMap.t;
   first_movable_cluster: int64;
-  junk_c: unit Lwt_condition.t;
+  c: unit Lwt_condition.t;
+  (** Signalled when any of the junk/erased sets change to kick the background
+      recycling thread. *)
 }
 
 let make ~free ~refs ~first_movable_cluster =
@@ -61,8 +63,8 @@ let make ~free ~refs ~first_movable_cluster =
   let roots = Int64.IntervalSet.empty in
   let available = Int64.IntervalSet.empty in
   let erased = Int64.IntervalSet.empty in
-  let junk_c = Lwt_condition.create () in
-  { junk; junk_c; available; erased; roots; refs; first_movable_cluster }
+  let c = Lwt_condition.create () in
+  { junk; available; erased; roots; refs; first_movable_cluster; c }
 
 let zero =
   let free = Qcow_bitmap.make_empty ~initial_size:0 ~maximum_size:0 in
@@ -80,24 +82,33 @@ let junk t = t.junk
 let add_to_junk t more =
   (* assert (Int64.IntervalSet.inter t.junk more = Int64.IntervalSet.empty); *)
   t.junk <- Int64.IntervalSet.union t.junk more;
-  Lwt_condition.broadcast t.junk_c ()
+  Lwt_condition.signal t.c ()
 
 let remove_from_junk t less =
-  t.junk <- Int64.IntervalSet.diff t.junk less
+  t.junk <- Int64.IntervalSet.diff t.junk less;
+  Lwt_condition.signal t.c ()
 
-let wait_for_junk t = Lwt_condition.wait t.junk_c
+let wait t = Lwt_condition.wait t.c
 
 let available t = t.available
 
-let add_to_available t more = t.available <- Int64.IntervalSet.union t.available more
+let add_to_available t more =
+  t.available <- Int64.IntervalSet.union t.available more;
+  Lwt_condition.signal t.c ()
 
-let remove_from_available t less = t.available <- Int64.IntervalSet.diff t.available less
+let remove_from_available t less =
+  t.available <- Int64.IntervalSet.diff t.available less;
+  Lwt_condition.signal t.c ()
 
 let erased t = t.erased
 
-let add_to_erased t more = t.erased <- Int64.IntervalSet.union t.erased more
+let add_to_erased t more =
+  t.erased <- Int64.IntervalSet.union t.erased more;
+  Lwt_condition.signal t.c ()
 
-let remove_from_erased t less = t.erased <- Int64.IntervalSet.diff t.erased less
+let remove_from_erased t less =
+  t.erased <- Int64.IntervalSet.diff t.erased less;
+  Lwt_condition.signal t.c ()
 
 let find t cluster = ClusterMap.find cluster t.refs
 
