@@ -21,6 +21,8 @@
     concurrent access.
 *)
 
+open Qcow_types
+
 let src =
   let src = Logs.Src.create "qcow" ~doc:"qcow2-formatted BLOCK device" in
   Logs.Src.set_level src (Some Logs.Info);
@@ -75,7 +77,7 @@ module Physical = struct
                       (if cluster <> 0L then ", unmapping " ^ (Int64.to_string cluster) else "")
                   );
         if cluster <> 0L then begin
-          let i = Qcow_clusterset.(add (Interval.make cluster cluster) empty) in
+          let i = Int64.IntervalSet.(add (Interval.make cluster cluster) empty) in
           Qcow_cluster_map.add_to_junk m i;
           Qcow_cluster_map.remove m cluster;
         end;

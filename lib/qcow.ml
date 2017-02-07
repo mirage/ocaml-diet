@@ -21,7 +21,7 @@ module Header = Qcow_header
 module Virtual = Qcow_virtual
 module Physical = Qcow_physical
 
-module FreeClusters = Qcow_clusterset
+module FreeClusters = Int64.IntervalSet
 
 let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right_logical

@@ -14,6 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
+open Qcow_types
 
 type t
 (** A cluster map which describes cluster usage in the file. The cluster map
@@ -41,7 +42,6 @@ type cluster = int64
 
 type reference = cluster * int (* cluster * index within cluster *)
 
-module ClusterSet = Qcow_clusterset
 module ClusterMap: Map.S with type key = cluster
 
 val zero: t
@@ -68,47 +68,47 @@ val remove: t -> cluster -> unit
 (** [remove t cluster] marks [cluster] as free and invalidates any reference
     to it (e.g. in response to a discard) *)
 
-val junk: t -> ClusterSet.t * int64
+val junk: t -> Int64.IntervalSet.t * int64
 (** [junk t] returns the set of clusters containing junk data and the size of
     the set. *)
 
-val add_to_junk: t -> ClusterSet.t -> unit
+val add_to_junk: t -> Int64.IntervalSet.t -> unit
 (** [add_to_junk t more] adds [more] to the clusters known to contain junk data
     which must be overwritten before they can be reused. *)
 
-val remove_from_junk: t -> ClusterSet.t -> unit
+val remove_from_junk: t -> Int64.IntervalSet.t -> unit
 (** [remove_from_junk t less] removes [less] from the clusters known to contain
     junk data which must be overwritten before they can be reused. *)
 
 val wait_for_junk: t -> unit Lwt.t
 (** [wait_for_junk t] wait until more junk has been registered. *)
 
-val available: t -> ClusterSet.t
+val available: t -> Int64.IntervalSet.t
 (** [available t] returns the set of clusters which are available for reallocation *)
 
-val add_to_available: t -> ClusterSet.t -> unit
+val add_to_available: t -> Int64.IntervalSet.t -> unit
 (** [add_to_available t more] adds [more] to the clusters known to contain
     available data *)
 
-val remove_from_available: t -> ClusterSet.t -> unit
+val remove_from_available: t -> Int64.IntervalSet.t -> unit
 (** [remove_from_available t less] removes [less] from the clusters known to
     contain available data *)
 
-val erased: t -> ClusterSet.t * int64
+val erased: t -> Int64.IntervalSet.t * int64
 (** [erased t] returns the set of clusters which are erased but not yet flushed
     and the size of the set *)
 
-val add_to_erased: t -> ClusterSet.t -> unit
+val add_to_erased: t -> Int64.IntervalSet.t -> unit
 (** [add_to_erased t more] adds [more] to the clusters which have been erased *)
 
-val remove_from_erased: t -> ClusterSet.t -> unit
+val remove_from_erased: t -> Int64.IntervalSet.t -> unit
 (** [remove_from_erased t less] removes [less] from the clusters which have been
     erased *)
 
 val find: t -> cluster -> reference
 (** [find t cluster] returns the reference to [cluster], or raises [Not_found] *)
 
-val with_roots: t -> ClusterSet.t -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+val with_roots: t -> Int64.IntervalSet.t -> (unit -> 'a Lwt.t) -> 'a Lwt.t
 (** [with_roots t clusters f] calls [f ()} with [clusters] registered as in-use. *)
 
 module Move: sig

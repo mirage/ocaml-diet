@@ -79,11 +79,15 @@ module Int32 = struct
 end
 
 module Int64 = struct
-  include Int64
+  module M = struct
+    include Int64
 
-  type _t = int64 [@@deriving sexp]
-  let sexp_of_t = sexp_of__t
-  let t_of_sexp = _t_of_sexp
+    type _t = int64 [@@deriving sexp]
+    let sexp_of_t = sexp_of__t
+    let t_of_sexp = _t_of_sexp
+  end
+  module IntervalSet = Qcow_diet.Make(M)
+  include M
 
   let round_up x size = mul (div (add x (pred size)) size) size
 
@@ -99,4 +103,5 @@ module Int64 = struct
     >>= fun () ->
     Cstruct.BE.set_uint64 buf 0 t;
     return (Cstruct.shift buf 8)
+
 end

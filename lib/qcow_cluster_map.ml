@@ -22,7 +22,7 @@ let src =
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-module ClusterSet = Qcow_clusterset
+open Qcow_types
 module ClusterMap = Map.Make(Int64)
 
 type cluster = int64
@@ -35,18 +35,18 @@ type move_state =
   | Referenced
 
 type t = {
-  mutable junk: Qcow_clusterset.t;
+  mutable junk: Int64.IntervalSet.t;
   mutable nr_junk: int64;
   (** These are unused clusters containing arbitrary data. They must be erased
       or fully overwritten and then flushed in order to be safely reused. *)
-  mutable erased: Qcow_clusterset.t;
+  mutable erased: Int64.IntervalSet.t;
   mutable nr_erased: int64;
   (* These are clusters which have been erased, but not flushed. They will become
      available for reallocation on the next flush. *)
-  mutable available: Qcow_clusterset.t;
+  mutable available: Int64.IntervalSet.t;
   (** These clusters are available for immediate reuse; after a crash they are
       guaranteed to be full of zeroes. *)
-  mutable roots: ClusterSet.t;
+  mutable roots: Int64.IntervalSet.t;
   (* map from physical cluster to the physical cluster + offset of the reference.
      When a block is moved, this reference must be updated. *)
   mutable refs: reference ClusterMap.t;
@@ -58,12 +58,12 @@ let make ~free ~refs ~first_movable_cluster =
   let junk = Qcow_bitmap.fold
     (fun i acc ->
       let x, y = Qcow_bitmap.Interval.(x i, y i) in
-      Qcow_clusterset.(add (Interval.make x y) acc)
-    ) free Qcow_clusterset.empty in
-  let nr_junk = ClusterSet.cardinal junk in
-  let roots = ClusterSet.empty in
-  let available = ClusterSet.empty in
-  let erased = ClusterSet.empty in
+      Int64.IntervalSet.(add (Interval.make x y) acc)
+    ) free Int64.IntervalSet.empty in
+  let nr_junk = Int64.IntervalSet.cardinal junk in
+  let roots = Int64.IntervalSet.empty in
+  let available = Int64.IntervalSet.empty in
+  let erased = Int64.IntervalSet.empty in
   let nr_erased = 0L in
   let junk_c = Lwt_condition.create () in
   { junk; nr_junk; junk_c; available; erased; nr_erased; roots; refs; first_movable_cluster }
@@ -74,37 +74,37 @@ let zero =
   make ~free ~refs ~first_movable_cluster:0L
 
 let resize t new_size_clusters =
-  let file = Qcow_clusterset.(add (Interval.make 0L (Int64.pred new_size_clusters)) empty) in
-  t.junk <- Qcow_clusterset.inter t.junk file;
-  t.erased <- Qcow_clusterset.inter t.erased file;
-  t.available <- Qcow_clusterset.inter t.available file
+  let file = Int64.IntervalSet.(add (Interval.make 0L (Int64.pred new_size_clusters)) empty) in
+  t.junk <- Int64.IntervalSet.inter t.junk file;
+  t.erased <- Int64.IntervalSet.inter t.erased file;
+  t.available <- Int64.IntervalSet.inter t.available file
 
 let junk t = t.junk, t.nr_junk
 
 let add_to_junk t more =
-  (* assert (Qcow_clusterset.inter t.junk more = Qcow_clusterset.empty); *)
-  t.nr_junk <- Int64.add t.nr_junk (ClusterSet.cardinal more);
-  t.junk <- Qcow_clusterset.union t.junk more;
+  (* assert (Int64.IntervalSet.inter t.junk more = Int64.IntervalSet.empty); *)
+  t.nr_junk <- Int64.add t.nr_junk (Int64.IntervalSet.cardinal more);
+  t.junk <- Int64.IntervalSet.union t.junk more;
   Lwt_condition.broadcast t.junk_c ()
 
 let remove_from_junk t less =
-  t.nr_junk <- Int64.sub t.nr_junk (ClusterSet.cardinal less);
-  t.junk <- Qcow_clusterset.diff t.junk less
-  (* ;assert (ClusterSet.cardinal t.junk = t.nr_junk) *)
+  t.nr_junk <- Int64.sub t.nr_junk (Int64.IntervalSet.cardinal less);
+  t.junk <- Int64.IntervalSet.diff t.junk less
+  (* ;assert (Int64.IntervalSet.cardinal t.junk = t.nr_junk) *)
 
 let wait_for_junk t = Lwt_condition.wait t.junk_c
 
 let available t = t.available
 
-let add_to_available t more = t.available <- Qcow_clusterset.union t.available more
+let add_to_available t more = t.available <- Int64.IntervalSet.union t.available more
 
-let remove_from_available t less = t.available <- Qcow_clusterset.diff t.available less
+let remove_from_available t less = t.available <- Int64.IntervalSet.diff t.available less
 
 let erased t = t.erased, t.nr_erased
 
-let add_to_erased t more = t.erased <- Qcow_clusterset.union t.erased more
+let add_to_erased t more = t.erased <- Int64.IntervalSet.union t.erased more
 
-let remove_from_erased t less = t.erased <- Qcow_clusterset.diff t.erased less
+let remove_from_erased t less = t.erased <- Int64.IntervalSet.diff t.erased less
 
 let find t cluster = ClusterMap.find cluster t.refs
 
@@ -112,10 +112,10 @@ let total_used t =
   Int64.of_int @@ ClusterMap.cardinal t.refs
 
 let total_free t =
-  ClusterSet.cardinal t.junk
+  Int64.IntervalSet.cardinal t.junk
 
 let total_roots t =
-  ClusterSet.cardinal t.roots
+  Int64.IntervalSet.cardinal t.roots
 
 let get_last_block t =
   let max_ref =
@@ -125,7 +125,7 @@ let get_last_block t =
       Int64.pred t.first_movable_cluster in
   let max_root =
     try
-      ClusterSet.Interval.y @@ ClusterSet.max_elt t.roots
+      Int64.IntervalSet.Interval.y @@ Int64.IntervalSet.max_elt t.roots
     with Not_found ->
       max_ref in
   max max_ref max_root
@@ -142,20 +142,20 @@ let add t rf cluster =
       Log.err (fun f -> f "Found two references to cluster %Ld: %Ld.%d and %Ld.%d" cluster c w c' w');
       failwith (Printf.sprintf "Found two references to cluster %Ld: %Ld.%d and %Ld.%d" cluster c w c' w');
     end;
-    t.junk <- ClusterSet.(remove (Interval.make cluster cluster) t.junk);
+    t.junk <- Int64.IntervalSet.(remove (Interval.make cluster cluster) t.junk);
     t.refs <- ClusterMap.add cluster rf t.refs;
     ()
   end
 
 let remove t cluster =
-  t.junk <- ClusterSet.(add (Interval.make cluster cluster) t.junk);
+  t.junk <- Int64.IntervalSet.(add (Interval.make cluster cluster) t.junk);
   t.refs <- ClusterMap.remove cluster t.refs
 
 (* Fold over all free blocks *)
 let fold_over_free_s f t acc =
   let range i acc =
-    let from = ClusterSet.Interval.x i in
-    let upto = ClusterSet.Interval.y i in
+    let from = Int64.IntervalSet.Interval.x i in
+    let upto = Int64.IntervalSet.Interval.y i in
     let rec loop acc x =
       let open Lwt.Infix in
       if x = (Int64.succ upto) then Lwt.return acc else begin
@@ -165,12 +165,12 @@ let fold_over_free_s f t acc =
         else Lwt.return acc
       end in
     loop acc from in
-  ClusterSet.fold_s range t.junk acc
+  Int64.IntervalSet.fold_s range t.junk acc
 
 let with_roots t clusters f =
-  t.roots <- ClusterSet.union clusters t.roots;
+  t.roots <- Int64.IntervalSet.union clusters t.roots;
   Lwt.finalize f (fun () ->
-    t.roots <- ClusterSet.diff t.roots clusters;
+    t.roots <- Int64.IntervalSet.diff t.roots clusters;
     Lwt.return_unit
   )
 

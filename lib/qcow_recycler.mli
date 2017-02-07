@@ -14,6 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
+open Qcow_types
 
 module Make(B: Qcow_s.RESIZABLE_BLOCK): sig
   type t
@@ -32,11 +33,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK): sig
     ?compact_after_unmaps:int64 -> unit -> unit
   (** Start a background thread which will perform block recycling *)
 
-  val allocate: t -> int64 -> Qcow_clusterset.t option
+  val allocate: t -> int64 -> Int64.IntervalSet.t option
   (** [allocate t n] returns [n] clusters which are ready for re-use. If there
       are not enough clusters free then this returns None. *)
 
-  val erase: t -> Qcow_clusterset.t -> (unit, B.write_error) result Lwt.t
+  val erase: t -> Int64.IntervalSet.t -> (unit, B.write_error) result Lwt.t
   (** Write zeroes over the specified set of clusters *)
 
   val copy: t -> int64 -> int64 -> (unit, B.write_error) result Lwt.t

@@ -7,6 +7,8 @@ let src =
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
+open Qcow_types
+
 module Int64Map = Map.Make(Int64)
 
 let ( <| ) = Int64.shift_left
@@ -63,7 +65,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let cluster_map = match t.cluster_map with
       | Some x -> x
       | None -> assert false in
-    match Qcow_clusterset.take (Qcow_cluster_map.available cluster_map) n with
+    match Int64.IntervalSet.take (Qcow_cluster_map.available cluster_map) n with
     | Some (set, _free) ->
       Log.debug (fun f -> f "Allocated %Ld clusters from free list" n);
       Qcow_cluster_map.remove_from_available cluster_map set;
@@ -126,9 +128,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   let erase t remaining =
     let open Lwt.Infix in
     let rec loop remaining =
-      match Qcow_clusterset.min_elt remaining with
+      match Int64.IntervalSet.min_elt remaining with
       | i ->
-        let x, y = Qcow_clusterset.Interval.(x i, y i) in
+        let x, y = Int64.IntervalSet.Interval.(x i, y i) in
         Log.debug (fun f -> f "erasing clusters (%Ld -> %Ld)" x y);
         let rec per_cluster x =
           if x > y
@@ -152,7 +154,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
           | Error `Disconnected -> Lwt.return (Error `Disconnected)
           | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
           | Ok () ->
-            loop (Qcow_clusterset.remove i remaining) )
+            loop (Int64.IntervalSet.remove i remaining) )
       | exception Not_found ->
         Lwt.return (Ok ()) in
     loop remaining
@@ -270,9 +272,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
               (* FIXME: who rewrites the references *)
               Int64Map.add src { move with state = Flushed } acc, junk
             | Referenced ->
-              Int64Map.remove src acc, Qcow_clusterset.(add (Interval.make src src) junk)
+              Int64Map.remove src acc, Int64.IntervalSet.(add (Interval.make src src) junk)
           end
-        ) clusters.moves (t.clusters.moves, Qcow_clusterset.empty) in
+        ) clusters.moves (t.clusters.moves, Int64.IntervalSet.empty) in
       Qcow_cluster_map.add_to_junk cluster_map junk;
       Qcow_cluster_map.add_to_available cluster_map erased;
       Qcow_cluster_map.remove_from_erased cluster_map erased;

@@ -53,5 +53,7 @@ module Int64 : sig
   val round_up: int64 -> int64 -> int64
   (** [round_up value to] rounds [value] to the next multiple of [to] *)
 
+  module IntervalSet: Qcow_s.INTERVAL_SET with type elt = t
+
   include Qcow_s.SERIALISABLE with type t := t
 end
