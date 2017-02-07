@@ -352,6 +352,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Lwt.return work in
 
     let rec loop () =
+      need_to_flush := true;
+      Lwt_condition.signal c (); (* trigger a flush later *)
       wait_for_work ()
       >>= function
       | `Erase to_erase ->
@@ -363,13 +365,22 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
         | Ok () ->
           Qcow_cluster_map.add_to_erased cluster_map to_erase;
-          need_to_flush := true;
-          Lwt_condition.signal c (); (* trigger a flush later *)
           loop ()
         end
       | `Compact nr_junk ->
         Log.info (fun f -> f "block recycler: should compact up to %Ld clusters" nr_junk);
-        loop () in
+        Qcow_cluster_map.compact_s
+          (fun m () ->
+            move t m
+            >>= function
+            | Error e -> Lwt.return (Error e)
+            | Ok () -> Lwt.return (Ok (false, ()))
+          ) cluster_map ()
+          >>= function
+          | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
+          | Error `Disconnected -> Lwt.fail_with "Disconnected"
+          | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
+          | Ok () -> loop () in
 
     Lwt.async loop;
     t.background_thread <- th
