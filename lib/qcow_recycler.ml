@@ -46,6 +46,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     mutable background_thread: unit Lwt.t;
     mutable need_to_flush: bool;
     need_to_flush_c: unit Lwt_condition.t;
+    need_to_update_references_c: unit Lwt_condition.t;
     m: Lwt_mutex.t;
   }
 
@@ -60,8 +61,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster_map = None in
     let need_to_flush = false in
     let need_to_flush_c = Lwt_condition.create () in
+    let need_to_update_references_c = Lwt_condition.create () in
     { base; sector_size; cluster_bits; cluster_map; cache; locks; metadata;
-      clusters; cluster; background_thread; need_to_flush; need_to_flush_c; m }
+      clusters; cluster; background_thread; need_to_flush; need_to_flush_c;
+      need_to_update_references_c; m }
 
   let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
 
@@ -262,6 +265,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
     | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
     | Ok () ->
+      let update_references = ref false in
       (* Walk over the moves in the map from before the flush, and accumulate
          changes on the current state of moves. If a move started while we
          were flushing, then it should be preserved as-is until the next flush. *)
@@ -274,6 +278,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             | Copying ->
               acc, junk
             | Copied ->
+              update_references := true;
               Int64Map.add src { move with state = Flushed } acc, junk
             | Flushed ->
               Int64Map.add src { move with state = Flushed } acc, junk
@@ -287,6 +292,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       t.clusters <- {
         moves;
       };
+      if !update_references then begin
+        Lwt_condition.signal t.need_to_update_references_c ();
+      end;
       Lwt.return (Ok ())
 
   let start_background_thread t ~keep_erased ?compact_after_unmaps () =
@@ -343,13 +351,23 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           | None -> None
           | Some (to_erase, _) -> Some (`Erase to_erase)
         end else None in
-      let work = match highest_priority, compact_after_unmaps with
-        | Some x, _ -> Some x
-        | None, Some x when x < nr_junk -> Some (`Move nr_junk)
+      (* If we need to update references, do that next *)
+      let middle_priority =
+        let flushed =
+          Int64Map.fold (fun _src move acc ->
+            match move.state with
+            | Qcow_cluster_map.Flushed -> true
+            | _ -> acc
+          ) t.clusters.moves false in
+        if flushed then Some `Update_references else None in
+      let work = match highest_priority, middle_priority, compact_after_unmaps with
+        | Some x, _, _ -> Some x
+        | _, Some x, _ -> Some x
+        | None, _, Some x when x < nr_junk -> Some (`Move nr_junk)
         | _ -> None in
       match work with
       | None ->
-        Qcow_cluster_map.wait cluster_map
+        Lwt.pick [ Qcow_cluster_map.wait cluster_map; Lwt_condition.wait t.need_to_update_references_c ]
         >>= fun () ->
         wait_for_work ()
       | Some work ->
@@ -373,7 +391,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         end
       | `Move nr_junk ->
         Log.info (fun f -> f "block recycler: should compact up to %Ld clusters" nr_junk);
-        Qcow_cluster_map.compact_s
+        begin Qcow_cluster_map.compact_s
           (fun m () ->
             move t m
             >>= function
@@ -384,7 +402,18 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
           | Error `Disconnected -> Lwt.fail_with "Disconnected"
           | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
-          | Ok () -> loop () in
+          | Ok () -> loop ()
+        end
+      | `Update_references ->
+        Log.info (fun f -> f "block recycler: need to update references to blocks");
+        update_references t
+        >>= function
+        | Error (`Msg x) -> Lwt.fail_with x
+        | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
+        | Error `Disconnected -> Lwt.fail_with "Disconnected"
+        | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
+        | Ok _nr_updated -> loop ()
+      in
 
     Lwt.async loop;
     t.background_thread <- th
