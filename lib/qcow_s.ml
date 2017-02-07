@@ -109,6 +109,9 @@ module type INTERVAL_SET = sig
   val is_empty: t -> bool
   (** Test whether a set is empty or not *)
 
+  val cardinal: t -> elt
+  (** [cardinal t] is the number of elements in the set [t] *)
+
   val mem: elt -> t -> bool
   (** [mem elt t] tests whether [elt] is in set [t] *)
 
