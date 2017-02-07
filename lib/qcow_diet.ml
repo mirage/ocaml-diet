@@ -23,8 +23,11 @@ open Sexplib.Std
 module type ELT = sig
   type t [@@deriving sexp]
   val compare: t -> t -> int
+  val zero: t
   val pred: t -> t
   val succ: t -> t
+  val sub: t -> t -> t
+  val add: t -> t -> t
 end
 
 exception Interval_pairs_should_be_ordered of string
@@ -341,8 +344,11 @@ end
 module Int = struct
   type t = int [@@deriving sexp]
   let compare (x: t) (y: t) = Pervasives.compare x y
+  let zero = 0
   let succ x = x + 1
   let pred x = x - 1
+  let add x y = x + y
+  let sub x y = x - y
 end
 module IntDiet = Make(Int)
 module IntSet = Set.Make(Int)

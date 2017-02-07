@@ -21,11 +21,20 @@ module type ELT = sig
 
   include Set.OrderedType with type t := t
 
+  val zero: t
+  (** The zeroth element *)
+
   val pred: t -> t
   (** Predecessor of an element *)
 
   val succ: t -> t
   (** Successor of an element *)
+
+  val sub: t -> t -> t
+  (** [sub a b] returns [a] - [b] *)
+
+  val add: t -> t -> t
+  (** [add a b] returns [a] + [b] *)
 end
 
 module Make(Elt: ELT): Qcow_s.INTERVAL_SET with type elt = Elt.t
