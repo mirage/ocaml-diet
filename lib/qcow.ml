@@ -1222,13 +1222,18 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       h; base; info = info'; config; base_info;
       locks; recycler; next_cluster;
       metadata; cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock;
-      background_compact_timer; cluster_map; cluster_map_m
+      background_compact_timer; cluster_map; cluster_map_m;
     } in
     Lwt_error.or_fail_with @@ make_cluster_map t'
     >>= fun cluster_map ->
     t'.cluster_map <- cluster_map;
     Metadata.set_cluster_map t'.metadata cluster_map;
     Recycler.set_cluster_map t'.recycler cluster_map;
+    ( match config.Config.keep_erased with
+      | None -> ()
+      | Some sectors ->
+        let keep_erased = Int64.(div (mul sectors (of_int sector_size)) cluster_size) in
+        Recycler.start_background_thread t'.recycler ~keep_erased );
     ( if config.Config.discard && not(lazy_refcounts) then begin
         Log.info (fun f -> f "discard requested and lazy_refcounts is disabled: erasing refcount table and enabling lazy_refcounts");
         Lwt_error.or_fail_with @@ Cluster.Refcount.zero_all t'

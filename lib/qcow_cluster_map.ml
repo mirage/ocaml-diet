@@ -49,6 +49,7 @@ type t = {
      When a block is moved, this reference must be updated. *)
   mutable refs: reference ClusterMap.t;
   first_movable_cluster: int64;
+  junk_c: unit Lwt_condition.t;
 }
 
 let make ~free ~refs ~first_movable_cluster =
@@ -60,7 +61,8 @@ let make ~free ~refs ~first_movable_cluster =
   let roots = ClusterSet.empty in
   let available = ClusterSet.empty in
   let erased = ClusterSet.empty in
-  { junk; available; erased; roots; refs; first_movable_cluster }
+  let junk_c = Lwt_condition.create () in
+  { junk; junk_c; available; erased; roots; refs; first_movable_cluster }
 
 let zero =
   let free = Qcow_bitmap.make_empty ~initial_size:0 ~maximum_size:0 in
@@ -75,9 +77,13 @@ let resize t new_size_clusters =
 
 let junk t = t.junk
 
-let add_to_junk t more = t.junk <- Qcow_clusterset.union t.junk more
+let add_to_junk t more =
+  t.junk <- Qcow_clusterset.union t.junk more;
+  Lwt_condition.broadcast t.junk_c ()
 
 let remove_from_junk t less = t.junk <- Qcow_clusterset.diff t.junk less
+
+let wait_for_junk t = Lwt_condition.wait t.junk_c
 
 let available t = t.available
 

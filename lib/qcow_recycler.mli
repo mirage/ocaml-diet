@@ -28,6 +28,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK): sig
   (** Set the associated cluster map (which will be updated on every cluster
       write) *)
 
+  val start_background_thread: t -> keep_erased:int64 -> unit
+  (** Start a background thread which will perform block recycling *)
+
   val allocate: t -> int64 -> Qcow_clusterset.t option
   (** [allocate t n] returns [n] clusters which are ready for re-use. If there
       are not enough clusters free then this returns None. *)

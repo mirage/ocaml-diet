@@ -79,6 +79,9 @@ val remove_from_junk: t -> ClusterSet.t -> unit
 (** [remove_from_junk t less] removes [less] from the clusters known to contain
     junk data which must be overwritten before they can be reused. *)
 
+val wait_for_junk: t -> unit Lwt.t
+(** [wait_for_junk t] wait until more junk has been registered. *)
+
 val available: t -> ClusterSet.t
 (** [available t] returns the set of clusters which are available for reallocation *)
 

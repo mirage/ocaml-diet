@@ -41,6 +41,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     metadata: Metadata.t;
     mutable clusters: clusters;
     cluster: Cstruct.t; (* a zero cluster for erasing *)
+    mutable background_thread: unit Lwt.t;
     m: Lwt_mutex.t;
   }
 
@@ -50,11 +51,32 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let pages = Io_page.(to_cstruct @@ get npages) in
     let cluster = Cstruct.sub pages 0 (1 lsl cluster_bits) in
     Cstruct.memset cluster 0;
+    let background_thread = Lwt.return_unit in
     let m = Lwt_mutex.create () in
     let cluster_map = None in
-    { base; sector_size; cluster_bits; cluster_map; cache; locks; metadata; clusters; cluster; m }
+    { base; sector_size; cluster_bits; cluster_map; cache; locks; metadata;
+      clusters; cluster; background_thread; m }
 
   let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
+
+  let start_background_thread t ~keep_erased =
+    let th, _ = Lwt.task () in
+    Lwt.on_cancel th
+      (fun () ->
+        Log.info (fun f -> f "cancellation of block recycler not implemented");
+      );
+    let cluster_map = match t.cluster_map with
+      | Some x -> x
+      | None -> assert false in
+    Log.info (fun f -> f "block recycler starting with keep_erased = %Ld" keep_erased);
+    let rec loop () =
+      let open Lwt.Infix in
+      Qcow_cluster_map.wait_for_junk cluster_map
+      >>= fun () ->
+      Log.info (fun f -> f "block recycler: %s" (Qcow_cluster_map.to_summary_string cluster_map));
+      loop () in
+    Lwt.async loop;
+    t.background_thread <- th
 
   let allocate t n =
     let cluster_map = match t.cluster_map with
