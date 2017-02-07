@@ -160,15 +160,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       | None -> assert false in
     let batch = Qcow_cluster_map.junk cluster_map in
     Qcow_cluster_map.remove_from_junk cluster_map batch;
-    (* The file may have been truncated, so we must truncate too *)
     let open Lwt.Infix in
-    B.get_info t.base
-    >>= fun info ->
-    let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
-    let size_clusters = Int64.div info.Mirage_block.size_sectors sectors_per_cluster in
-    let full_file = Qcow_clusterset.(add (Interval.make 0L (Int64.pred size_clusters)) empty) in
-    let batch' = Qcow_clusterset.inter batch full_file in
-    erase t batch'
+    erase t batch
     >>= function
     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
