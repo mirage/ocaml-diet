@@ -59,25 +59,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
   let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
 
-  let start_background_thread t ~keep_erased =
-    let th, _ = Lwt.task () in
-    Lwt.on_cancel th
-      (fun () ->
-        Log.info (fun f -> f "cancellation of block recycler not implemented");
-      );
-    let cluster_map = match t.cluster_map with
-      | Some x -> x
-      | None -> assert false in
-    Log.info (fun f -> f "block recycler starting with keep_erased = %Ld" keep_erased);
-    let rec loop () =
-      let open Lwt.Infix in
-      Qcow_cluster_map.wait_for_junk cluster_map
-      >>= fun () ->
-      Log.info (fun f -> f "block recycler: %s" (Qcow_cluster_map.to_summary_string cluster_map));
-      loop () in
-    Lwt.async loop;
-    t.background_thread <- th
-
   let allocate t n =
     let cluster_map = match t.cluster_map with
       | Some x -> x
@@ -299,4 +280,23 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         moves;
       };
       Lwt.return (Ok ())
+
+  let start_background_thread t ~keep_erased =
+    let th, _ = Lwt.task () in
+    Lwt.on_cancel th
+      (fun () ->
+        Log.info (fun f -> f "cancellation of block recycler not implemented");
+      );
+    let cluster_map = match t.cluster_map with
+      | Some x -> x
+      | None -> assert false in
+    Log.info (fun f -> f "block recycler starting with keep_erased = %Ld" keep_erased);
+    let rec loop () =
+      let open Lwt.Infix in
+      Qcow_cluster_map.wait_for_junk cluster_map
+      >>= fun () ->
+      Log.info (fun f -> f "block recycler: %s" (Qcow_cluster_map.to_summary_string cluster_map));
+      loop () in
+    Lwt.async loop;
+    t.background_thread <- th
 end
