@@ -24,7 +24,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
   module Config: sig
     type t = {
       discard: bool; (** true if `discard` will be enabled at runtime *)
-      recycle_threshold: int64 option; (** re-use clusters after more than n sectors are free *)
+      keep_erased: int64 option; (** size of erased free pool in sectors *)
       compact_after_unmaps: int64 option; (** automatically compact after n sectors are unmapped *)
       compact_ms: int; (** if automatically compacting, wait for this many milliseconds *)
       check_on_connect: bool; (** perform an integrity check on connect *)
@@ -32,10 +32,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
     (** Runtime configuration of a device *)
 
     val create: ?discard:bool ->
-      ?recycle_threshold:int64 ->
+      ?keep_erased:int64 ->
       ?compact_after_unmaps:int64 ->
       ?compact_ms:int -> ?check_on_connect:bool -> unit -> t
-    (** [create ?discard ?recycle_threshold ?compact_after_unmaps ?compact_ms ()] constructs a runtime configuration *)
+    (** [create ?discard ?keep_erased ?compact_after_unmaps ?compact_ms ()] constructs a runtime configuration *)
 
     val to_string: t -> string
     (** Marshal a config into a string suitable for a command-line argument *)

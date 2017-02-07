@@ -19,8 +19,8 @@ type t = {
   discard: bool;
   (** discard (aka TRIM) is enabled *)
 
-  recycle_threshold: int64 option;
-  (** once more than this many sectors are free, start recycling *)
+  keep_erased: int64 option;
+  (** maintain a free pool of this many erased sectors *)
 
   compact_after_unmaps: int64 option;
   (** once more than this many sectors are free, perform a compact *)
@@ -33,7 +33,7 @@ type t = {
   (** perform an integrity check on connect *)
 }
 
-val create: ?discard:bool -> ?recycle_threshold:int64 ->
+val create: ?discard:bool -> ?keep_erased:int64 ->
   ?compact_after_unmaps:int64 -> ?compact_ms:int -> ?check_on_connect:bool ->
   unit -> t
 
