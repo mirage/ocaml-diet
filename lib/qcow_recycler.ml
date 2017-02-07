@@ -44,6 +44,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     mutable clusters: clusters;
     cluster: Cstruct.t; (* a zero cluster for erasing *)
     mutable background_thread: unit Lwt.t;
+    mutable need_to_flush: bool;
+    need_to_flush_c: unit Lwt_condition.t;
     m: Lwt_mutex.t;
   }
 
@@ -56,8 +58,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let background_thread = Lwt.return_unit in
     let m = Lwt_mutex.create () in
     let cluster_map = None in
+    let need_to_flush = false in
+    let need_to_flush_c = Lwt_condition.create () in
     { base; sector_size; cluster_bits; cluster_map; cache; locks; metadata;
-      clusters; cluster; background_thread; m }
+      clusters; cluster; background_thread; need_to_flush; need_to_flush_c; m }
 
   let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
 
@@ -237,7 +241,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         | Error e -> Lwt.return (Error e)
       ) flushed
     >>= function
-    | Ok () -> Lwt.return (Ok !nr_updated)
+    | Ok () ->
+      t.need_to_flush <- true;
+      Lwt_condition.signal t.need_to_flush_c ();
+      Lwt.return (Ok !nr_updated)
     | Error e -> Lwt.return (Error e)
 
   let flush t =
@@ -294,18 +301,16 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     Log.info (fun f -> f "block recycler starting with keep_erased = %Ld" keep_erased);
     let open Lwt.Infix in
 
-    let c = Lwt_condition.create () in
-    let need_to_flush = ref false in
     let rec background_flusher () =
-      let rec wait () = match !need_to_flush with
+      let rec wait () = match t.need_to_flush with
         | true -> Lwt.return_unit
         | false ->
-          Lwt_condition.wait c
+          Lwt_condition.wait t.need_to_flush_c
           >>= fun () ->
           wait () in
       wait ()
       >>= fun () ->
-      need_to_flush := false;
+      t.need_to_flush <- false;
       Time.sleep_ns 5_000_000_000L
       >>= fun () ->
       Log.info (fun f -> f "block recycler triggering background flush");
@@ -340,7 +345,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         end else None in
       let work = match highest_priority, compact_after_unmaps with
         | Some x, _ -> Some x
-        | None, Some x when x < nr_junk -> Some (`Compact nr_junk)
+        | None, Some x when x < nr_junk -> Some (`Move nr_junk)
         | _ -> None in
       match work with
       | None ->
@@ -351,8 +356,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Lwt.return work in
 
     let rec loop () =
-      need_to_flush := true;
-      Lwt_condition.signal c (); (* trigger a flush later *)
+      t.need_to_flush <- true;
+      Lwt_condition.signal t.need_to_flush_c (); (* trigger a flush later *)
       wait_for_work ()
       >>= function
       | `Erase to_erase ->
@@ -366,7 +371,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           Qcow_cluster_map.add_to_erased cluster_map to_erase;
           loop ()
         end
-      | `Compact nr_junk ->
+      | `Move nr_junk ->
         Log.info (fun f -> f "block recycler: should compact up to %Ld clusters" nr_junk);
         Qcow_cluster_map.compact_s
           (fun m () ->
