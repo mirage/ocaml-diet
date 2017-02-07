@@ -78,7 +78,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
 
   module Cache = Qcow_cache
-  module Recycler = Qcow_recycler.Make(B)
+  module Recycler = Qcow_recycler.Make(B)(Time)
   module Metadata = Qcow_metadata
 
   module Stats = struct

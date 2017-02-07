@@ -31,7 +31,7 @@ let nothing = {
 module Cache = Qcow_cache
 module Metadata = Qcow_metadata
 
-module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
+module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   type t = {
     base: B.t;
@@ -294,6 +294,31 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       | None -> assert false in
     Log.info (fun f -> f "block recycler starting with keep_erased = %Ld" keep_erased);
     let open Lwt.Infix in
+
+    let c = Lwt_condition.create () in
+    let need_to_flush = ref false in
+    let rec background_flusher () =
+      let rec wait () = match !need_to_flush with
+        | true -> Lwt.return_unit
+        | false ->
+          Lwt_condition.wait c
+          >>= fun () ->
+          wait () in
+      wait ()
+      >>= fun () ->
+      need_to_flush := false;
+      Time.sleep_ns 5_000_000_000L
+      >>= fun () ->
+      Log.info (fun f -> f "block recycler triggering background flush");
+      flush t
+      >>= function
+      | Error _ ->
+        Log.err (fun f -> f "block recycler: flush failed");
+        Lwt.return_unit
+      | Ok () ->
+        background_flusher () in
+    Lwt.async background_flusher;
+
     let rec loop () =
       Qcow_cluster_map.wait cluster_map
       >>= fun () ->
@@ -322,6 +347,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
             | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
             | Ok () ->
               Qcow_cluster_map.add_to_erased cluster_map to_erase;
+              need_to_flush := true;
+              Lwt_condition.signal c (); (* trigger a flush later *)
               Lwt.return_unit
         end else begin match compact_after_unmaps with
           | Some x when x < nr_junk ->
