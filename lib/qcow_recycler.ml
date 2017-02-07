@@ -269,7 +269,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             | Copied ->
               Int64Map.add src { move with state = Flushed } acc, junk
             | Flushed ->
-              (* FIXME: who rewrites the references *)
               Int64Map.add src { move with state = Flushed } acc, junk
             | Referenced ->
               Int64Map.remove src acc, Int64.IntervalSet.(add (Interval.make src src) junk)
