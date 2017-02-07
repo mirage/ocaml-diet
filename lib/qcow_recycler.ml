@@ -293,23 +293,43 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       | Some x -> x
       | None -> assert false in
     Log.info (fun f -> f "block recycler starting with keep_erased = %Ld" keep_erased);
+    let open Lwt.Infix in
     let rec loop () =
-      let open Lwt.Infix in
       Qcow_cluster_map.wait cluster_map
       >>= fun () ->
       let junk = Qcow_cluster_map.junk cluster_map in
       let nr_junk = Int64.IntervalSet.cardinal junk in
       let erased = Qcow_cluster_map.erased cluster_map in
       let nr_erased = Int64.IntervalSet.cardinal erased in
-      if nr_erased < keep_erased then begin
-        (* Take some of the junk and erase it *)
-        let n = min nr_junk (Int64.sub keep_erased nr_erased) in
-        Log.info (fun f -> f "block recycler: should erase %Ld clusters" n);
-      end else begin match compact_after_unmaps with
-        | Some x when x < nr_junk ->
-          Log.info (fun f -> f "block recycler: should compact up to %Ld clusters" nr_junk)
-        | _ -> ()
-      end;
+      let available = Qcow_cluster_map.available cluster_map in
+      let nr_available = Int64.IntervalSet.cardinal available in
+      (* Apply the threshold to the total clusters erased, which includes those
+         marked as available *)
+      let total_erased = Int64.add nr_erased nr_available in
+      (* Prioritise cluster reuse because it's more efficient not to have to
+         move a cluster at all U*)
+      ( if total_erased < keep_erased && nr_junk > 0L then begin
+          (* Take some of the junk and erase it *)
+          let n = min nr_junk (Int64.sub keep_erased total_erased) in
+          Log.info (fun f -> f "block recycler: should erase %Ld clusters" n);
+          match Int64.IntervalSet.take junk n with
+          | None -> Lwt.return_unit
+          | Some (to_erase, _) ->
+            erase t to_erase
+            >>= function
+            | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
+            | Error `Disconnected -> Lwt.fail_with "Disconnected"
+            | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
+            | Ok () ->
+              Qcow_cluster_map.add_to_erased cluster_map to_erase;
+              Lwt.return_unit
+        end else begin match compact_after_unmaps with
+          | Some x when x < nr_junk ->
+            Log.info (fun f -> f "block recycler: should compact up to %Ld clusters" nr_junk);
+            Lwt.return_unit
+          | _ -> Lwt.return_unit
+        end )
+      >>= fun () ->
       loop () in
     Lwt.async loop;
     t.background_thread <- th
