@@ -319,9 +319,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         background_flusher () in
     Lwt.async background_flusher;
 
-    let rec loop () =
-      Qcow_cluster_map.wait cluster_map
-      >>= fun () ->
+    let rec wait_for_work () =
       let junk = Qcow_cluster_map.junk cluster_map in
       let nr_junk = Int64.IntervalSet.cardinal junk in
       let erased = Qcow_cluster_map.erased cluster_map in
@@ -333,31 +331,46 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let total_erased = Int64.add nr_erased nr_available in
       (* Prioritise cluster reuse because it's more efficient not to have to
          move a cluster at all U*)
-      ( if total_erased < keep_erased && nr_junk > 0L then begin
+      let highest_priority =
+        if total_erased < keep_erased && nr_junk > 0L then begin
           (* Take some of the junk and erase it *)
           let n = min nr_junk (Int64.sub keep_erased total_erased) in
-          Log.info (fun f -> f "block recycler: should erase %Ld clusters" n);
           match Int64.IntervalSet.take junk n with
-          | None -> Lwt.return_unit
-          | Some (to_erase, _) ->
-            erase t to_erase
-            >>= function
-            | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
-            | Error `Disconnected -> Lwt.fail_with "Disconnected"
-            | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
-            | Ok () ->
-              Qcow_cluster_map.add_to_erased cluster_map to_erase;
-              need_to_flush := true;
-              Lwt_condition.signal c (); (* trigger a flush later *)
-              Lwt.return_unit
-        end else begin match compact_after_unmaps with
-          | Some x when x < nr_junk ->
-            Log.info (fun f -> f "block recycler: should compact up to %Ld clusters" nr_junk);
-            Lwt.return_unit
-          | _ -> Lwt.return_unit
-        end )
-      >>= fun () ->
-      loop () in
+          | None -> None
+          | Some (to_erase, _) -> Some (`Erase to_erase)
+        end else None in
+      let work = match highest_priority, compact_after_unmaps with
+        | Some x, _ -> Some x
+        | None, Some x when x < nr_junk -> Some (`Compact nr_junk)
+        | _ -> None in
+      match work with
+      | None ->
+        Qcow_cluster_map.wait cluster_map
+        >>= fun () ->
+        wait_for_work ()
+      | Some work ->
+        Lwt.return work in
+
+    let rec loop () =
+      wait_for_work ()
+      >>= function
+      | `Erase to_erase ->
+        Log.info (fun f -> f "block recycler: should erase %Ld clusters" (Int64.IntervalSet.cardinal to_erase));
+        begin erase t to_erase
+        >>= function
+        | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
+        | Error `Disconnected -> Lwt.fail_with "Disconnected"
+        | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
+        | Ok () ->
+          Qcow_cluster_map.add_to_erased cluster_map to_erase;
+          need_to_flush := true;
+          Lwt_condition.signal c (); (* trigger a flush later *)
+          loop ()
+        end
+      | `Compact nr_junk ->
+        Log.info (fun f -> f "block recycler: should compact up to %Ld clusters" nr_junk);
+        loop () in
+
     Lwt.async loop;
     t.background_thread <- th
 end
