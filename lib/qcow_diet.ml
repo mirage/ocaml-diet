@@ -53,6 +53,12 @@ let _ =
 module Make(Elt: ELT) = struct
   type elt = Elt.t [@@deriving sexp]
 
+  module Elt = struct
+    include Elt
+    let ( - ) = sub
+    let ( + ) = add
+  end
+
   type interval = elt * elt
 
   module Interval = struct
@@ -73,16 +79,21 @@ module Make(Elt: ELT) = struct
   type t =
     | Empty
     | Node: node -> t
-  and node = { x: elt; y: elt; l: t; r: t; h: int }
+  and node = { x: elt; y: elt; l: t; r: t; h: int; cardinal: elt }
   [@@deriving sexp]
 
   let height = function
     | Empty -> 0
     | Node n -> n.h
 
+  let cardinal = function
+    | Empty -> Elt.zero
+    | Node n -> n.cardinal
+
 let create x y l r =
   let h = max (height l) (height r) + 1 in
-  Node { x; y; l; r; h }
+  let cardinal = Elt.(succ (y - x) + (cardinal l) + (cardinal r)) in
+  Node { x; y; l; r; h; cardinal }
 
 let node x y l r =
   let hl = height l and hr = height r in
