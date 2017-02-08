@@ -214,7 +214,8 @@ let add t rf cluster =
 
 let remove t cluster =
   t.junk <- Int64.IntervalSet.(add (Interval.make cluster cluster) t.junk);
-  t.refs <- ClusterMap.remove cluster t.refs
+  t.refs <- ClusterMap.remove cluster t.refs;
+  Lwt_condition.signal t.c ()
 
 (* Fold over all free blocks *)
 let fold_over_free_s f t acc =
@@ -236,6 +237,7 @@ let with_roots t clusters f =
   t.roots <- Int64.IntervalSet.union clusters t.roots;
   Lwt.finalize f (fun () ->
     t.roots <- Int64.IntervalSet.diff t.roots clusters;
+    Lwt_condition.signal t.c ();
     Lwt.return_unit
   )
 
