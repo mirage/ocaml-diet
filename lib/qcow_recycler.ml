@@ -80,36 +80,47 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     | None ->
       None
 
+  let cancel_move t cluster =
+    if Int64Map.mem cluster t.clusters.moves
+    then Log.warn (fun f -> f "Cancelling in-progress move of cluster %Ld" cluster);
+    t.clusters <- { moves = Int64Map.remove cluster t.clusters.moves }
+
+  let copy_already_locked t src dst =
+    Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
+    let npages = 1 lsl (t.cluster_bits - 12) in
+    let pages = Io_page.(to_cstruct @@ get npages) in
+    let cluster = Cstruct.sub pages 0 (1 lsl t.cluster_bits) in
+
+    let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
+
+    let src_sector = Int64.mul src sectors_per_cluster in
+    let dst_sector = Int64.mul dst sectors_per_cluster in
+    let open Lwt.Infix in
+    B.read t.base src_sector [ cluster ]
+    >>= function
+    | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+    | Error `Disconnected -> Lwt.return (Error `Disconnected)
+    | Ok () ->
+      B.write t.base dst_sector [ cluster ]
+      >>= function
+      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+      | Error `Disconnected -> Lwt.return (Error `Disconnected)
+      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+      | Ok () ->
+        (* If these were metadata blocks (e.g. L2 table entries) then they might
+           be cached. Remove the overwritten block's cache entry just in case. *)
+        Cache.remove t.cache dst;
+        (* If the destination block was being moved, abort the move since the
+           original copy has diverged. *)
+        cancel_move t dst;
+        Lwt.return (Ok ())
+
   let copy t src dst =
     Qcow_cluster.with_read_lock t.locks src
       (fun () ->
          Qcow_cluster.with_write_lock t.locks dst
            (fun () ->
-              Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
-              let npages = 1 lsl (t.cluster_bits - 12) in
-              let pages = Io_page.(to_cstruct @@ get npages) in
-              let cluster = Cstruct.sub pages 0 (1 lsl t.cluster_bits) in
-
-              let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
-
-              let src_sector = Int64.mul src sectors_per_cluster in
-              let dst_sector = Int64.mul dst sectors_per_cluster in
-              let open Lwt.Infix in
-              B.read t.base src_sector [ cluster ]
-              >>= function
-              | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-              | Error `Disconnected -> Lwt.return (Error `Disconnected)
-              | Ok () ->
-                B.write t.base dst_sector [ cluster ]
-                >>= function
-                | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-                | Error `Disconnected -> Lwt.return (Error `Disconnected)
-                | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-                | Ok () ->
-                  (* If these were metadata blocks (e.g. L2 table entries) then they might
-                     be cached. Remove the overwritten block's cache entry just in case. *)
-                  Cache.remove t.cache dst;
-                  Lwt.return (Ok ())
+             copy_already_locked t src dst
            )
       )
 
@@ -118,19 +129,25 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let src, dst = Qcow_cluster_map.Move.(move.src, move.dst) in
     t.clusters <- { moves = Int64Map.add src m t.clusters.moves };
     let open Lwt.Infix in
-    copy t src dst
-    >>= function
-    | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-    | Error `Disconnected -> Lwt.return (Error `Disconnected)
-    | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-    | Ok () ->
-      (* FIXME: make a concurrent write remove the entry *)
-      t.clusters <- { moves =
-                                        if Int64Map.mem src t.clusters.moves
-                                        then Int64Map.add src { m with state = Qcow_cluster_map.Copied } t.clusters.moves
-                                        else t.clusters.moves
-                    };
-      Lwt.return (Ok ())
+    Qcow_cluster.with_read_lock t.locks src
+      (fun () ->
+         Qcow_cluster.with_write_lock t.locks dst
+           (fun () ->
+             copy_already_locked t src dst
+             >>= function
+             | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+             | Error `Disconnected -> Lwt.return (Error `Disconnected)
+             | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+             | Ok () ->
+               (* FIXME: make a concurrent write remove the entry *)
+               t.clusters <- { moves =
+                                    if Int64Map.mem src t.clusters.moves
+                                    then Int64Map.add src { m with state = Qcow_cluster_map.Copied } t.clusters.moves
+                                    else t.clusters.moves
+                              };
+               Lwt.return (Ok ())
+            )
+      )
 
   let erase t remaining =
     let open Lwt.Infix in
