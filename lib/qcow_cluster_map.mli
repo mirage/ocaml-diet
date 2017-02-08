@@ -44,6 +44,17 @@ type reference = cluster * int (* cluster * index within cluster *)
 
 module ClusterMap: Map.S with type key = cluster
 
+module Move: sig
+  type t = { src: cluster; dst: cluster }
+  (** An instruction to move the contents from cluster [src] to cluster [dst] *)
+end
+
+type move = {
+  move: Move.t;
+  state: move_state;
+}
+(** describes the state of an in-progress block move *)
+
 val zero: t
 (** A cluster map for a zero-length disk *)
 
@@ -103,16 +114,24 @@ val remove_from_erased: t -> Int64.IntervalSet.t -> unit
 (** [remove_from_erased t less] removes [less] from the clusters which have been
     erased *)
 
+val moves: t -> move Int64.Map.t
+
+val set_move_state: t -> Move.t -> move_state -> unit
+(** Update the state of the given move operation *)
+
+val cancel_move: t -> int64 -> unit
+(** [cancel_move cluster] cancels any in-progress move of cluster [cluster].
+    This should be called with the cluster write lock held whenever there has
+    been a change in the contents of [cluster] *)
+
+val complete_move: t -> Move.t -> unit
+(** [complete_move t move] marks the move as complete. *)
+
 val find: t -> cluster -> reference
 (** [find t cluster] returns the reference to [cluster], or raises [Not_found] *)
 
 val with_roots: t -> Int64.IntervalSet.t -> (unit -> 'a Lwt.t) -> 'a Lwt.t
 (** [with_roots t clusters f] calls [f ()} with [clusters] registered as in-use. *)
-
-module Move: sig
-  type t = { src: cluster; dst: cluster }
-  (** An instruction to move the contents from cluster [src] to cluster [dst] *)
-end
 
 val compact_s: (Move.t -> 'a -> ((bool * 'a), 'b) result Lwt.t ) -> t -> 'a
   -> ('a, 'b) result Lwt.t

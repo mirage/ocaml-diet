@@ -46,11 +46,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S): sig
   val move: t -> Qcow_cluster_map.Move.t -> (unit, B.write_error) result Lwt.t
   (** [move t mv] perform the initial data copy of the move operation [mv] *)
 
-  val cancel_move: t -> int64 -> unit
-  (** [cancel_move cluster] cancels any in-progress move of cluster [cluster].
-      This should be called with the cluster write lock held whenever there has
-      been a change in the contents of [cluster] *)
-
   val update_references: t -> (int64, Qcow_metadata.write_error) result Lwt.t
   (** [update_references t] rewrites references to any recently copied and
       flushed block, returning the number of writes completed. *)

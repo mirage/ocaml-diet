@@ -87,6 +87,7 @@ module Int64 = struct
     let t_of_sexp = _t_of_sexp
   end
   module IntervalSet = Qcow_diet.Make(M)
+  module Map = Map.Make(M)
   include M
 
   let round_up x size = mul (div (add x (pred size)) size) size

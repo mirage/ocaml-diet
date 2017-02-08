@@ -23,7 +23,7 @@ let src =
 module Log = (val Logs.src_log src : Logs.LOG)
 
 open Qcow_types
-module ClusterMap = Map.Make(Int64)
+module ClusterMap = Int64.Map
 
 type cluster = int64
 type reference = cluster * int
@@ -33,6 +33,15 @@ type move_state =
   | Copied
   | Flushed
   | Referenced
+
+module Move = struct
+  type t = { src: cluster; dst: cluster }
+end
+
+type move = {
+  move: Move.t;
+  state: move_state;
+}
 
 type t = {
   mutable junk: Int64.IntervalSet.t;
@@ -47,6 +56,8 @@ type t = {
   mutable roots: Int64.IntervalSet.t;
   (* map from physical cluster to the physical cluster + offset of the reference.
      When a block is moved, this reference must be updated. *)
+  mutable moves: move ClusterMap.t;
+  (** The state of in-progress block moves, indexed by the source cluster *)
   mutable refs: reference ClusterMap.t;
   first_movable_cluster: int64;
   c: unit Lwt_condition.t;
@@ -63,8 +74,9 @@ let make ~free ~refs ~first_movable_cluster =
   let roots = Int64.IntervalSet.empty in
   let available = Int64.IntervalSet.empty in
   let erased = Int64.IntervalSet.empty in
+  let moves = ClusterMap.empty in
   let c = Lwt_condition.create () in
-  { junk; available; erased; roots; refs; first_movable_cluster; c }
+  { junk; available; erased; roots; moves; refs; first_movable_cluster; c }
 
 let zero =
   let free = Qcow_bitmap.make_empty ~initial_size:0 ~maximum_size:0 in
@@ -120,6 +132,28 @@ let total_free t =
 
 let total_roots t =
   Int64.IntervalSet.cardinal t.roots
+
+let moves t = t.moves
+
+let set_move_state t move state =
+  let m = { move; state } in
+  match state with
+  | Copying ->
+    t.moves <- ClusterMap.add move.Move.src m t.moves
+  | _ ->
+    if not(ClusterMap.mem move.Move.src t.moves)
+    then Log.warn (fun f -> f "Not updating move state of cluster %Ld: operation cancelled" move.Move.src)
+    else t.moves <- ClusterMap.add move.Move.src m t.moves
+
+let cancel_move t cluster =
+  if ClusterMap.mem cluster t.moves
+  then Log.warn (fun f -> f "Cancelling in-progress move of cluster %Ld" cluster);
+  t.moves <- ClusterMap.remove cluster t.moves
+
+let complete_move t move =
+  if not(ClusterMap.mem move.Move.src t.moves)
+  then Log.warn (fun f -> f "Not completing move state of cluster %Ld: operation cancelled" move.Move.src)
+  else t.moves <- ClusterMap.remove move.Move.src t.moves
 
 let get_last_block t =
   let max_ref =
@@ -177,10 +211,6 @@ let with_roots t clusters f =
     t.roots <- Int64.IntervalSet.diff t.roots clusters;
     Lwt.return_unit
   )
-
-module Move = struct
-  type t = { src: cluster; dst: cluster }
-end
 
 open Result
 

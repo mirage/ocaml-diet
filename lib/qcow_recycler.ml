@@ -9,24 +9,7 @@ module Log = (val Logs.src_log src : Logs.LOG)
 
 open Qcow_types
 
-module Int64Map = Map.Make(Int64)
-
 let ( <| ) = Int64.shift_left
-
-type move = {
-  move: Qcow_cluster_map.Move.t;
-  state: Qcow_cluster_map.move_state;
-}
-(** describes the state of an in-progress block move *)
-
-type clusters = {
-  moves: move Int64Map.t;
-  (** all in-progress block moves, indexed by the source cluster *)
-}
-
-let nothing = {
-  moves = Int64Map.empty;
-}
 
 module Cache = Qcow_cache
 module Metadata = Qcow_metadata
@@ -41,7 +24,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     cache: Cache.t;
     locks: Qcow_cluster.t;
     metadata: Metadata.t;
-    mutable clusters: clusters;
     cluster: Cstruct.t; (* a zero cluster for erasing *)
     mutable background_thread: unit Lwt.t;
     mutable need_to_flush: bool;
@@ -51,7 +33,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   }
 
   let create ~base ~sector_size ~cluster_bits ~cache ~locks ~metadata =
-    let clusters = nothing in
     let npages = 1 lsl (cluster_bits - 12) in
     let pages = Io_page.(to_cstruct @@ get npages) in
     let cluster = Cstruct.sub pages 0 (1 lsl cluster_bits) in
@@ -63,7 +44,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let need_to_flush_c = Lwt_condition.create () in
     let need_to_update_references_c = Lwt_condition.create () in
     { base; sector_size; cluster_bits; cluster_map; cache; locks; metadata;
-      clusters; cluster; background_thread; need_to_flush; need_to_flush_c;
+      cluster; background_thread; need_to_flush; need_to_flush_c;
       need_to_update_references_c; m }
 
   let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
@@ -80,12 +61,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     | None ->
       None
 
-  let cancel_move t cluster =
-    if Int64Map.mem cluster t.clusters.moves
-    then Log.warn (fun f -> f "Cancelling in-progress move of cluster %Ld" cluster);
-    t.clusters <- { moves = Int64Map.remove cluster t.clusters.moves }
-
   let copy_already_locked t src dst =
+    let cluster_map = match t.cluster_map with
+      | Some x -> x
+      | None -> assert false in
     Log.debug (fun f -> f "Copy cluster %Ld to %Ld" src dst);
     let npages = 1 lsl (t.cluster_bits - 12) in
     let pages = Io_page.(to_cstruct @@ get npages) in
@@ -112,7 +91,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Cache.remove t.cache dst;
         (* If the destination block was being moved, abort the move since the
            original copy has diverged. *)
-        cancel_move t dst;
+        Qcow_cluster_map.cancel_move cluster_map dst;
         Lwt.return (Ok ())
 
   let copy t src dst =
@@ -125,9 +104,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       )
 
   let move t move =
-    let m = { move; state = Qcow_cluster_map.Copying } in
+    let cluster_map = match t.cluster_map with
+      | Some x -> x
+      | None -> assert false in
+    Qcow_cluster_map.(set_move_state cluster_map move Copying);
     let src, dst = Qcow_cluster_map.Move.(move.src, move.dst) in
-    t.clusters <- { moves = Int64Map.add src m t.clusters.moves };
     let open Lwt.Infix in
     Qcow_cluster.with_read_lock t.locks src
       (fun () ->
@@ -140,11 +121,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
              | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
              | Ok () ->
                (* FIXME: make a concurrent write remove the entry *)
-               t.clusters <- { moves =
-                                    if Int64Map.mem src t.clusters.moves
-                                    then Int64Map.add src { m with state = Qcow_cluster_map.Copied } t.clusters.moves
-                                    else t.clusters.moves
-                              };
+               Qcow_cluster_map.(set_move_state cluster_map move Copied);
                Lwt.return (Ok ())
             )
       )
@@ -210,13 +187,16 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       ) (Ok ()) threads
 
   let update_references t =
+    let cluster_map = match t.cluster_map with
+      | None -> assert false (* by construction, see `make` *)
+      | Some x -> x in
     let open Qcow_cluster_map in
     let flushed =
-      Int64Map.fold (fun _src move acc ->
+      Int64.Map.fold (fun _src move acc ->
         match move.state with
         | Flushed -> move :: acc
         | _ -> acc
-      ) t.clusters.moves [] in
+      ) (moves cluster_map) [] in
     let cluster_map = match t.cluster_map with
       | None -> assert false (* by construction, see `make` *)
       | Some x -> x in
@@ -254,8 +234,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           )
         >>= function
         | Ok () ->
-          if Int64Map.mem src t.clusters.moves
-          then t.clusters <- { moves = Int64Map.add src { move with state = Referenced } t.clusters.moves };
+          set_move_state cluster_map move.move Referenced;
           nr_updated := Int64.add !nr_updated (Int64.of_int (List.length flushed));
           Lwt.return (Ok ())
         | Error e -> Lwt.return (Error e)
@@ -272,10 +251,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster_map = match t.cluster_map with
       | None -> assert false (* by construction, see `make` *)
       | Some x -> x in
-    (* Anything erased right now will become available *)
-    let clusters = t.clusters in
     let open Lwt.Infix in
+    (* Anything erased right now will become available *)
     let erased = Qcow_cluster_map.erased cluster_map in
+    let moves = Qcow_cluster_map.moves cluster_map in
     B.flush t.base
     >>= function
     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
@@ -283,32 +262,27 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
     | Ok () ->
       let update_references = ref false in
-      (* Walk over the moves in the map from before the flush, and accumulate
-         changes on the current state of moves. If a move started while we
-         were flushing, then it should be preserved as-is until the next flush. *)
-      let moves, junk = Int64Map.fold (fun src (move: move) (acc, junk) ->
-          if not(Int64Map.mem src acc) then begin
-            (* This move appeared while the flush was happening: next time *)
-            acc, junk
-          end else begin
-            match move.state with
-            | Copying ->
-              acc, junk
-            | Copied ->
-              update_references := true;
-              Int64Map.add src { move with state = Flushed } acc, junk
-            | Flushed ->
-              Int64Map.add src { move with state = Flushed } acc, junk
-            | Referenced ->
-              Int64Map.remove src acc, Int64.IntervalSet.(add (Interval.make src src) junk)
-          end
-        ) clusters.moves (t.clusters.moves, Int64.IntervalSet.empty) in
+      (* Walk over the snapshot of moves before the flush and update. This
+         ensures we don't accidentally advance the state of moves which appeared
+         after the flush. *)
+      let junk = Int64.Map.fold (fun src (move: move) junk ->
+        match move.state with
+        | Copying ->
+          junk
+        | Copied ->
+          update_references := true;
+          Qcow_cluster_map.(set_move_state cluster_map move.move Flushed);
+          junk
+        | Flushed ->
+          Qcow_cluster_map.(set_move_state cluster_map move.move Flushed);
+          junk
+        | Referenced ->
+          Qcow_cluster_map.complete_move cluster_map move.move;
+          Int64.IntervalSet.(add (Interval.make src src) junk)
+        ) moves Int64.IntervalSet.empty in
       Qcow_cluster_map.add_to_junk cluster_map junk;
       Qcow_cluster_map.add_to_available cluster_map erased;
       Qcow_cluster_map.remove_from_erased cluster_map erased;
-      t.clusters <- {
-        moves;
-      };
       if !update_references then begin
         Lwt_condition.signal t.need_to_update_references_c ();
       end;
@@ -371,11 +345,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       (* If we need to update references, do that next *)
       let middle_priority =
         let flushed =
-          Int64Map.fold (fun _src move acc ->
-            match move.state with
+          Int64.Map.fold (fun _src move acc ->
+            match move.Qcow_cluster_map.state with
             | Qcow_cluster_map.Flushed -> true
             | _ -> acc
-          ) t.clusters.moves false in
+          ) (Qcow_cluster_map.moves cluster_map) false in
         if flushed then Some `Update_references else None in
       let work = match highest_priority, middle_priority, compact_after_unmaps with
         | Some x, _, _ -> Some x
