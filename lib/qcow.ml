@@ -802,6 +802,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             let open Lwt.Infix in
             Qcow_cluster.with_write_lock t.locks cluster
               (fun () ->
+                (* Cancel any in-progress move since the data will be stale *)
+                Qcow_cluster_map.cancel_move t.cluster_map cluster;
                 B.write t.base base_sector [ buf ]
                 >>= function
                 | Error `Unimplemented -> Lwt.return (Error `Unimplemented)

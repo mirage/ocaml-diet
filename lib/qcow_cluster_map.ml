@@ -154,9 +154,22 @@ let set_move_state t move state =
     Log.warn (fun f -> f "Not updating move state of cluster %Ld: operation cancelled" move.Move.src)
 
 let cancel_move t cluster =
-  if ClusterMap.mem cluster t.moves
-  then Log.warn (fun f -> f "Cancelling in-progress move of cluster %Ld" cluster);
-  t.moves <- ClusterMap.remove cluster t.moves
+  match ClusterMap.find cluster t.moves with
+    | { state = Referenced; _ } ->
+      (* The write will have followed the reference to the destination block.
+         There are 2 interesting possibilities if we crash without flushing:
+         - neither the write nor the reference are committed: this behaves as if
+           the write wasn't committed which is valid
+         - the write is committed but the reference isn't: this also behaves
+           as if the write wasn't committed which is valid
+         The only reason we still track this move is because when the next flush
+         happens it is safe to add the src cluster to the set of junk blocks. *)
+      Log.debug (fun f -> f "Not cancelling in-progress move of cluter %Ld: already Referenced" cluster)
+    | _ ->
+      Log.warn (fun f -> f "Cancelling in-progress move of cluster %Ld" cluster);
+      t.moves <- ClusterMap.remove cluster t.moves
+    | exception Not_found ->
+      ()
 
 let complete_move t move =
   if not(ClusterMap.mem move.Move.src t.moves)

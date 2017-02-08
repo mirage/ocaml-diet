@@ -115,6 +115,11 @@ let update t cluster f =
   let open Lwt_write_error.Infix in
   Qcow_cluster.with_write_lock t.locks cluster
     (fun () ->
+       (* Cancel any in-progress move since the data will be stale *)
+       begin match t.cluster_map with
+         | Some cluster_map -> Qcow_cluster_map.cancel_move cluster_map cluster
+         | None -> ()
+       end;
        Cache.read t.cache cluster
        >>= fun data ->
        f { t; data; cluster }
