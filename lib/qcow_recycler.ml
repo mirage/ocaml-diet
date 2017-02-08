@@ -13,6 +13,7 @@ let ( <| ) = Int64.shift_left
 
 module Cache = Qcow_cache
 module Metadata = Qcow_metadata
+module Physical = Qcow_physical
 
 module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
@@ -316,6 +317,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         background_flusher () in
     Lwt.async background_flusher;
 
+    let last_block = ref (Qcow_cluster_map.get_last_block cluster_map) in
     let rec wait_for_work () =
       let junk = Qcow_cluster_map.Junk.get cluster_map in
       let nr_junk = Int64.IntervalSet.cardinal junk in
@@ -349,7 +351,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         | Some x, _, _ -> Some x
         | _, Some x, _ -> Some x
         | None, _, Some x when x < nr_junk -> Some (`Move nr_junk)
-        | _ -> None in
+        | _ ->
+          let last_block' = Qcow_cluster_map.get_last_block cluster_map in
+          let result =
+            if last_block' < !last_block then Some `Resize else None in
+          last_block := last_block';
+          result in
       match work with
       | None ->
         Qcow_cluster_map.wait cluster_map
@@ -391,13 +398,31 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         end
       | `Update_references ->
         Log.info (fun f -> f "block recycler: need to update references to blocks");
-        update_references t
-        >>= function
-        | Error (`Msg x) -> Lwt.fail_with x
-        | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
-        | Error `Disconnected -> Lwt.fail_with "Disconnected"
-        | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
-        | Ok _nr_updated -> loop ()
+        begin update_references t
+          >>= function
+          | Error (`Msg x) -> Lwt.fail_with x
+          | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
+          | Error `Disconnected -> Lwt.fail_with "Disconnected"
+          | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
+          | Ok _nr_updated -> loop ()
+        end
+      | `Resize ->
+        Qcow_cluster.with_metadata_lock t.locks
+          (fun () ->
+            let new_last_block = Qcow_cluster_map.get_last_block cluster_map in
+            Log.info (fun f -> f "block recycler: resize for last_block = %Ld" new_last_block);
+            let new_size = Physical.make (Int64.succ new_last_block <| t.cluster_bits) in
+            let sector = Physical.sector ~sector_size:t.sector_size new_size in
+            let cluster = Physical.cluster ~cluster_bits:t.cluster_bits new_size in
+            Qcow_cluster_map.resize cluster_map cluster;
+            B.resize t.base sector
+            >>= function
+            | Error _ -> Lwt.fail_with "resize"
+            | Ok () ->
+            Log.debug (fun f -> f "Resized device to %Ld sectors of size %d" (Qcow_physical.to_bytes new_size) t.sector_size);
+            Lwt.return_unit
+          ) >>= fun () ->
+          loop ()
       in
 
     Lwt.async loop;
