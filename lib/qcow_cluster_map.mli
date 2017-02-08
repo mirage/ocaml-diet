@@ -55,6 +55,17 @@ type move = {
 }
 (** describes the state of an in-progress block move *)
 
+module type MutableSet = sig
+  val get: t -> Int64.IntervalSet.t
+  (** [get t] query the current contents of the set *)
+
+  val add: t -> Int64.IntervalSet.t -> unit
+  (** [add t more] adds [more] to the set *)
+
+  val remove: t -> Int64.IntervalSet.t -> unit
+  (** [remove t less] removes [less] from the set *)
+end
+
 val zero: t
 (** A cluster map for a zero-length disk *)
 
@@ -79,43 +90,21 @@ val remove: t -> cluster -> unit
 (** [remove t cluster] marks [cluster] as free and invalidates any reference
     to it (e.g. in response to a discard) *)
 
-val junk: t -> Int64.IntervalSet.t
-(** [junk t] returns the set of clusters containing junk data *)
+module Junk: MutableSet
+(** Clusters which contain arbitrary data *)
 
-val add_to_junk: t -> Int64.IntervalSet.t -> unit
-(** [add_to_junk t more] adds [more] to the clusters known to contain junk data
-    which must be overwritten before they can be reused. *)
+module Erased: MutableSet
+(** Clusters which have been erased but haven't been flushed yet so can't be
+    safely reallocated. *)
 
-val remove_from_junk: t -> Int64.IntervalSet.t -> unit
-(** [remove_from_junk t less] removes [less] from the clusters known to contain
-    junk data which must be overwritten before they can be reused. *)
+module Available: MutableSet
+(** Clusters which are available for reallocation *)
 
 val wait: t -> unit Lwt.t
 (** [wait t] wait for some amount of recycling work to become available, e.g.
     - junk could be created
     - available could be used
     - a move might require a reference update *)
-
-val available: t -> Int64.IntervalSet.t
-(** [available t] returns the set of clusters which are available for reallocation *)
-
-val add_to_available: t -> Int64.IntervalSet.t -> unit
-(** [add_to_available t more] adds [more] to the clusters known to contain
-    available data *)
-
-val remove_from_available: t -> Int64.IntervalSet.t -> unit
-(** [remove_from_available t less] removes [less] from the clusters known to
-    contain available data *)
-
-val erased: t -> Int64.IntervalSet.t
-(** [erased t] returns the set of clusters which are erased but not yet flushed *)
-
-val add_to_erased: t -> Int64.IntervalSet.t -> unit
-(** [add_to_erased t more] adds [more] to the clusters which have been erased *)
-
-val remove_from_erased: t -> Int64.IntervalSet.t -> unit
-(** [remove_from_erased t less] removes [less] from the clusters which have been
-    erased *)
 
 val moves: t -> move Int64.Map.t
 

@@ -65,6 +65,12 @@ type t = {
       to be rewritten to kick the background recycling thread. *)
 }
 
+module type MutableSet = sig
+  val get: t -> Int64.IntervalSet.t
+  val add: t -> Int64.IntervalSet.t -> unit
+  val remove: t -> Int64.IntervalSet.t -> unit
+end
+
 let make ~free ~refs ~first_movable_cluster =
   let junk = Qcow_bitmap.fold
     (fun i acc ->
@@ -89,38 +95,38 @@ let resize t new_size_clusters =
   t.erased <- Int64.IntervalSet.inter t.erased file;
   t.available <- Int64.IntervalSet.inter t.available file
 
-let junk t = t.junk
+module Junk = struct
+  let get t = t.junk
+  let add t more =
+    (* assert (Int64.IntervalSet.inter t.junk more = Int64.IntervalSet.empty); *)
+    t.junk <- Int64.IntervalSet.union t.junk more;
+    Lwt_condition.signal t.c ()
+  let remove t less =
+    t.junk <- Int64.IntervalSet.diff t.junk less;
+    Lwt_condition.signal t.c ()
+end
 
-let add_to_junk t more =
-  (* assert (Int64.IntervalSet.inter t.junk more = Int64.IntervalSet.empty); *)
-  t.junk <- Int64.IntervalSet.union t.junk more;
-  Lwt_condition.signal t.c ()
+module Available = struct
+  let get t = t.available
+  let add t more =
+    t.available <- Int64.IntervalSet.union t.available more;
+    Lwt_condition.signal t.c ()
+  let remove t less =
+    t.available <- Int64.IntervalSet.diff t.available less;
+    Lwt_condition.signal t.c ()
+end
 
-let remove_from_junk t less =
-  t.junk <- Int64.IntervalSet.diff t.junk less;
-  Lwt_condition.signal t.c ()
+module Erased = struct
+  let get t = t.erased
+  let add t more =
+    t.erased <- Int64.IntervalSet.union t.erased more;
+    Lwt_condition.signal t.c ()
+  let remove t less =
+    t.erased <- Int64.IntervalSet.diff t.erased less;
+    Lwt_condition.signal t.c ()
+end
 
 let wait t = Lwt_condition.wait t.c
-
-let available t = t.available
-
-let add_to_available t more =
-  t.available <- Int64.IntervalSet.union t.available more;
-  Lwt_condition.signal t.c ()
-
-let remove_from_available t less =
-  t.available <- Int64.IntervalSet.diff t.available less;
-  Lwt_condition.signal t.c ()
-
-let erased t = t.erased
-
-let add_to_erased t more =
-  t.erased <- Int64.IntervalSet.union t.erased more;
-  Lwt_condition.signal t.c ()
-
-let remove_from_erased t less =
-  t.erased <- Int64.IntervalSet.diff t.erased less;
-  Lwt_condition.signal t.c ()
 
 let find t cluster = ClusterMap.find cluster t.refs
 

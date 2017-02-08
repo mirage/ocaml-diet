@@ -78,7 +78,7 @@ module Physical = struct
                   );
         if cluster <> 0L then begin
           let i = Int64.IntervalSet.(add (Interval.make cluster cluster) empty) in
-          Qcow_cluster_map.add_to_junk m i;
+          Qcow_cluster_map.Junk.add m i;
           Qcow_cluster_map.remove m cluster;
         end;
         Qcow_cluster_map.add m (t.cluster, n) v'

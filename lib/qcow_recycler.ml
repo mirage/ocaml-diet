@@ -51,10 +51,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster_map = match t.cluster_map with
       | Some x -> x
       | None -> assert false in
-    match Int64.IntervalSet.take (Qcow_cluster_map.available cluster_map) n with
+    match Int64.IntervalSet.take (Qcow_cluster_map.Available.get cluster_map) n with
     | Some (set, _free) ->
       Log.debug (fun f -> f "Allocated %Ld clusters from free list" n);
-      Qcow_cluster_map.remove_from_available cluster_map set;
+      Qcow_cluster_map.Available.remove cluster_map set;
       Some set
     | None ->
       None
@@ -161,8 +161,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster_map = match t.cluster_map with
       | Some x -> x
       | None -> assert false in
-    let batch = Qcow_cluster_map.junk cluster_map in
-    Qcow_cluster_map.remove_from_junk cluster_map batch;
+    let batch = Qcow_cluster_map.Junk.get cluster_map in
+    Qcow_cluster_map.Junk.remove cluster_map batch;
     let open Lwt.Infix in
     erase t batch
     >>= function
@@ -170,7 +170,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
     | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
     | Ok () ->
-      Qcow_cluster_map.add_to_erased cluster_map batch;
+      Qcow_cluster_map.Erased.add cluster_map batch;
       Lwt.return (Ok ())
 
   (* Run all threads in parallel, wait for all to complete, then iterate through
@@ -255,7 +255,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Some x -> x in
     let open Lwt.Infix in
     (* Anything erased right now will become available *)
-    let erased = Qcow_cluster_map.erased cluster_map in
+    let erased = Qcow_cluster_map.Erased.get cluster_map in
     let moves = Qcow_cluster_map.moves cluster_map in
     B.flush t.base
     >>= function
@@ -277,9 +277,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           Qcow_cluster_map.complete_move cluster_map move.move;
           Int64.IntervalSet.(add (Interval.make src src) junk)
         ) moves Int64.IntervalSet.empty in
-      Qcow_cluster_map.add_to_junk cluster_map junk;
-      Qcow_cluster_map.add_to_available cluster_map erased;
-      Qcow_cluster_map.remove_from_erased cluster_map erased;
+      Qcow_cluster_map.Junk.add cluster_map junk;
+      Qcow_cluster_map.Available.add cluster_map erased;
+      Qcow_cluster_map.Erased.remove cluster_map erased;
       Lwt.return (Ok ())
 
   let start_background_thread t ~keep_erased ?compact_after_unmaps () =
@@ -317,11 +317,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     Lwt.async background_flusher;
 
     let rec wait_for_work () =
-      let junk = Qcow_cluster_map.junk cluster_map in
+      let junk = Qcow_cluster_map.Junk.get cluster_map in
       let nr_junk = Int64.IntervalSet.cardinal junk in
-      let erased = Qcow_cluster_map.erased cluster_map in
+      let erased = Qcow_cluster_map.Erased.get cluster_map in
       let nr_erased = Int64.IntervalSet.cardinal erased in
-      let available = Qcow_cluster_map.available cluster_map in
+      let available = Qcow_cluster_map.Available.get cluster_map in
       let nr_available = Int64.IntervalSet.cardinal available in
       (* Apply the threshold to the total clusters erased, which includes those
          marked as available *)
@@ -371,7 +371,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         | Error `Disconnected -> Lwt.fail_with "Disconnected"
         | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
         | Ok () ->
-          Qcow_cluster_map.add_to_erased cluster_map to_erase;
+          Qcow_cluster_map.Erased.add cluster_map to_erase;
           loop ()
         end
       | `Move nr_junk ->
