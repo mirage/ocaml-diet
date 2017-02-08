@@ -61,8 +61,8 @@ type t = {
   mutable refs: reference ClusterMap.t;
   first_movable_cluster: int64;
   c: unit Lwt_condition.t;
-  (** Signalled when any of the junk/erased sets change to kick the background
-      recycling thread. *)
+  (** Signalled when any of the junk/erased sets change or when references need
+      to be rewritten to kick the background recycling thread. *)
 }
 
 let make ~free ~refs ~first_movable_cluster =
@@ -137,13 +137,21 @@ let moves t = t.moves
 
 let set_move_state t move state =
   let m = { move; state } in
-  match state with
-  | Copying ->
+  let old_state =
+    if ClusterMap.mem move.Move.src t.moves
+    then Some ((ClusterMap.find move.Move.src t.moves).state)
+    else None in
+  match old_state, state with
+  | None, Copying ->
     t.moves <- ClusterMap.add move.Move.src m t.moves
-  | _ ->
-    if not(ClusterMap.mem move.Move.src t.moves)
-    then Log.warn (fun f -> f "Not updating move state of cluster %Ld: operation cancelled" move.Move.src)
-    else t.moves <- ClusterMap.add move.Move.src m t.moves
+  | Some Copied, Flushed ->
+    t.moves <- ClusterMap.add move.Move.src m t.moves;
+    (* References now need to be rewritten *)
+    Lwt_condition.signal t.c ();
+  | Some _, _ ->
+    t.moves <- ClusterMap.add move.Move.src m t.moves
+  | None, _ ->
+    Log.warn (fun f -> f "Not updating move state of cluster %Ld: operation cancelled" move.Move.src)
 
 let cancel_move t cluster =
   if ClusterMap.mem cluster t.moves

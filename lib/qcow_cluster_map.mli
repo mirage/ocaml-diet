@@ -91,7 +91,10 @@ val remove_from_junk: t -> Int64.IntervalSet.t -> unit
     junk data which must be overwritten before they can be reused. *)
 
 val wait: t -> unit Lwt.t
-(** [wait t] wait for the number of junk, erased or available sets to change. *)
+(** [wait t] wait for some amount of recycling work to become available, e.g.
+    - junk could be created
+    - available could be used
+    - a move might require a reference update *)
 
 val available: t -> Int64.IntervalSet.t
 (** [available t] returns the set of clusters which are available for reallocation *)

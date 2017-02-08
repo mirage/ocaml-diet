@@ -28,7 +28,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     mutable background_thread: unit Lwt.t;
     mutable need_to_flush: bool;
     need_to_flush_c: unit Lwt_condition.t;
-    need_to_update_references_c: unit Lwt_condition.t;
     m: Lwt_mutex.t;
   }
 
@@ -42,10 +41,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster_map = None in
     let need_to_flush = false in
     let need_to_flush_c = Lwt_condition.create () in
-    let need_to_update_references_c = Lwt_condition.create () in
     { base; sector_size; cluster_bits; cluster_map; cache; locks; metadata;
       cluster; background_thread; need_to_flush; need_to_flush_c;
-      need_to_update_references_c; m }
+      m }
 
   let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
 
@@ -261,7 +259,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
     | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
     | Ok () ->
-      let update_references = ref false in
       (* Walk over the snapshot of moves before the flush and update. This
          ensures we don't accidentally advance the state of moves which appeared
          after the flush. *)
@@ -269,11 +266,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         match move.state with
         | Copying ->
           junk
-        | Copied ->
-          update_references := true;
-          Qcow_cluster_map.(set_move_state cluster_map move.move Flushed);
-          junk
-        | Flushed ->
+        | Copied | Flushed ->
           Qcow_cluster_map.(set_move_state cluster_map move.move Flushed);
           junk
         | Referenced ->
@@ -283,9 +276,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       Qcow_cluster_map.add_to_junk cluster_map junk;
       Qcow_cluster_map.add_to_available cluster_map erased;
       Qcow_cluster_map.remove_from_erased cluster_map erased;
-      if !update_references then begin
-        Lwt_condition.signal t.need_to_update_references_c ();
-      end;
       Lwt.return (Ok ())
 
   let start_background_thread t ~keep_erased ?compact_after_unmaps () =
@@ -358,7 +348,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         | _ -> None in
       match work with
       | None ->
-        Lwt.pick [ Qcow_cluster_map.wait cluster_map; Lwt_condition.wait t.need_to_update_references_c ]
+        Qcow_cluster_map.wait cluster_map
         >>= fun () ->
         wait_for_work ()
       | Some work ->
