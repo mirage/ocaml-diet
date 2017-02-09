@@ -293,7 +293,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       t.need_to_flush <- false;
       Time.sleep_ns 5_000_000_000L
       >>= fun () ->
-      Log.info (fun f -> f "block recycler triggering background flush");
+      Log.info (fun f -> f "block recycler: triggering background flush: %s" (Qcow_cluster_map.to_summary_string cluster_map));
       flush t
       >>= function
       | Error _ ->
