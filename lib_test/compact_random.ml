@@ -156,7 +156,7 @@ let random_write_discard_compact nr_clusters stop_after =
               write sector n;
               Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "write timeout")
             ]
-          end else if 10 <= r && r < 20 then begin
+          end else begin
             let sector = Random.int64 nr_sectors in
             let n = Random.int64 (Int64.sub nr_sectors sector) in
             if !debug then Printf.fprintf stderr "discard %Ld %Ld\n%!" sector n;
@@ -165,33 +165,6 @@ let random_write_discard_compact nr_clusters stop_after =
               discard sector n;
               Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "discard timeout")
             ]
-          end else begin
-            if !debug then Printf.fprintf stderr "compact\n%!";
-            let cancel_at_percent = Random.int 300 in
-            Printf.printf "x%!";
-            let th = ref None in
-            let progress_cb ~percent =
-              if percent >= cancel_at_percent then match !th with
-                | Some th' ->
-                  th := None;
-                  Printf.printf "X%!";
-                  Lwt.cancel th'
-                | None -> () in
-            let t = B.compact ~progress_cb qcow () in
-            th := Some t;
-            Lwt.catch
-              (fun () ->
-                Lwt.pick [
-                  t;
-                  Lwt_unix.sleep 5. >>= fun () -> Lwt.fail_with "compact timeout"
-                ]
-                >>= function
-                | Error _ -> failwith "compact"
-                | Ok _report -> Lwt.return_unit
-              ) (function
-                | Lwt.Canceled -> Lwt.return_unit
-                | e -> Lwt.fail e
-              )
           end )
         >>= fun () ->
         check_all_clusters ();
