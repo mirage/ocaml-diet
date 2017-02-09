@@ -136,6 +136,20 @@ let total_used t =
 let total_free t =
   Int64.IntervalSet.cardinal t.junk
 
+let total_erased t =
+  Int64.IntervalSet.cardinal t.erased
+
+let total_available t =
+  Int64.IntervalSet.cardinal t.available
+
+let total_moves t =
+  Int64.Map.fold (fun _ m (copying, copied, flushed, referenced) -> match m.state with
+    | Copying -> (copying + 1), copied, flushed, referenced
+    | Copied -> copying, copied + 1, flushed, referenced
+    | Flushed -> copying, copied, flushed + 1, referenced
+    | Referenced -> copying, copied, flushed, referenced + 1
+  ) t.moves (0, 0, 0, 0)
+
 let total_roots t =
   Int64.IntervalSet.cardinal t.roots
 
@@ -196,8 +210,10 @@ let get_last_block t =
   max max_ref max_root
 
 let to_summary_string t =
-  Printf.sprintf "total_free = %Ld; total_used = %Ld; total_roots = %Ld; max_cluster = %Ld"
-    (total_free t) (total_used t) (total_roots t) (get_last_block t)
+  let copying, copied, flushed, referenced = total_moves t in
+  Printf.sprintf "%Ld used; %Ld junk; %Ld erased; %Ld available; %Ld roots; %d Copying; %d Copied; %d Flushed; %d Referenced; max_cluster = %Ld"
+    (total_used t) (total_free t) (total_erased t) (total_available t) (total_roots t)
+    copying copied flushed referenced (get_last_block t)
 
 let add t rf cluster =
   let c, w = rf in
