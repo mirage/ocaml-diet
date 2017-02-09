@@ -173,6 +173,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | None -> assert false (* by construction, see `make` *)
       | Some x -> x in
     let open Qcow_cluster_map in
+    Qcow_cluster.with_metadata_lock t.locks
+      (fun () ->
+
     let flushed =
       Int64.Map.fold (fun _src move acc ->
         match move.state with
@@ -195,8 +198,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             );
             assert false
           | a, b -> a, b in
-        Qcow_cluster.with_metadata_lock t.locks
-          (fun () ->
+
             Metadata.update t.metadata ref_cluster
               (fun c ->
                 if not(Int64.Map.mem src (moves cluster_map)) then begin
@@ -218,7 +220,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                   Lwt.return (Ok ())
                 end
               )
-          )
         >>= function
         | Ok () ->
           set_move_state cluster_map move.move Referenced;
@@ -232,6 +233,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       Lwt_condition.signal t.need_to_flush_c ();
       Lwt.return (Ok !nr_updated)
     | Error e -> Lwt.return (Error e)
+  )
 
   let flush t =
     let open Qcow_cluster_map in
