@@ -139,11 +139,7 @@ let random_write_discard_compact nr_clusters stop_after =
     let rec loop () =
       incr nr_iterations;
       if !nr_iterations = stop_after then Lwt.return (Ok ()) else begin
-        (* Erase any outstanding blocks and call flush so they become reusable *)
-        B.Debug.erase_all qcow
-        >>= function
-        | Error _ -> failwith "erase_all"
-        | Ok () ->
+        (* Call flush so any erased blocks become reusable *)
         B.Debug.flush qcow
         >>= function
         | Error _ -> failwith "flush"

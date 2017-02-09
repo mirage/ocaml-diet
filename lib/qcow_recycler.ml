@@ -158,22 +158,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Lwt.return (Ok ()) in
     loop remaining
 
-  let erase_all t =
-    let cluster_map = match t.cluster_map with
-      | Some x -> x
-      | None -> assert false in
-    let batch = Qcow_cluster_map.Junk.get cluster_map in
-    Qcow_cluster_map.Junk.remove cluster_map batch;
-    let open Lwt.Infix in
-    erase t batch
-    >>= function
-    | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-    | Error `Disconnected -> Lwt.return (Error `Disconnected)
-    | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-    | Ok () ->
-      Qcow_cluster_map.Erased.add cluster_map batch;
-      Lwt.return (Ok ())
-
   (* Run all threads in parallel, wait for all to complete, then iterate through
      the results and return the first failure we discover. *)
   let iter_p f xs =

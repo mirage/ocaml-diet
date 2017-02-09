@@ -1613,15 +1613,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let set_next_cluster t x = t.next_cluster <- x
 
-    let erase_all t =
-      let open Lwt.Infix in
-      Recycler.erase_all t.recycler
-      >>= function
-      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-      | Error `Disconnected -> Lwt.return (Error `Disconnected)
-      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-      | Ok () -> Lwt.return (Ok ())
-
     let flush t =
       let open Lwt.Infix in
       Recycler.flush t.recycler

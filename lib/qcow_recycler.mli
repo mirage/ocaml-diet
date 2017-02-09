@@ -50,9 +50,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S): sig
   (** [update_references t] rewrites references to any recently copied and
       flushed block, returning the number of writes completed. *)
 
-  val erase_all: t -> (unit, B.write_error) result Lwt.t
-  (** Erase all junk clusters *)
-
   val flush: t -> (unit, B.write_error) result Lwt.t
   (** Issue a flush to the block device, update internal recycler state. *)
 end
