@@ -364,6 +364,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         | Error `Disconnected -> Lwt.fail_with "Disconnected"
         | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
         | Ok () ->
+          Qcow_cluster_map.Junk.remove cluster_map to_erase;
           Qcow_cluster_map.Erased.add cluster_map to_erase;
           loop ()
         end
