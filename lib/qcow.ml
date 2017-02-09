@@ -209,6 +209,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         a parallel thread allocating another cluster for the same purpose.
         *)
     let allocate_clusters t n f =
+      t.next_cluster <- Int64.succ @@ Qcow_cluster_map.get_last_block t.cluster_map;
       if n = 0L then begin
         (* Resync the file size only *)
         let open Lwt_write_error.Infix in
