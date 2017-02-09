@@ -163,6 +163,10 @@ let set_move_state t move state =
     else None in
   match old_state, state with
   | None, Copying ->
+    let dst = move.Move.dst in
+    let dst' = Int64.IntervalSet.(add (Interval.make dst dst) empty) in
+    (* We always move into junk blocks *)
+    Junk.remove t dst';
     t.moves <- ClusterMap.add move.Move.src m t.moves
   | Some Copied, Flushed ->
     t.moves <- ClusterMap.add move.Move.src m t.moves;
@@ -185,9 +189,12 @@ let cancel_move t cluster =
          The only reason we still track this move is because when the next flush
          happens it is safe to add the src cluster to the set of junk blocks. *)
       Log.debug (fun f -> f "Not cancelling in-progress move of cluter %Ld: already Referenced" cluster)
-    | _ ->
-      Log.warn (fun f -> f "Cancelling in-progress move of cluster %Ld" cluster);
-      t.moves <- ClusterMap.remove cluster t.moves
+    | { move = { Move.dst; _ }; _ } ->
+      Log.warn (fun f -> f "Cancelling in-progress move of cluster %Ld to %Ld" cluster dst);
+      t.moves <- ClusterMap.remove cluster t.moves;
+      let dst' = Int64.IntervalSet.(add (Interval.make dst dst) empty) in
+      (* The destination block can now be recycled *)
+      Junk.add t dst'
     | exception Not_found ->
       ()
 
