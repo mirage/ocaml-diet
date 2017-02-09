@@ -304,22 +304,42 @@ module Debug = struct
     let last = get_last_block t in
     if last >= t.first_movable_cluster then begin
       let whole_file = add (Interval.make t.first_movable_cluster last) empty in
-      let should_be_used = diff (diff (diff (diff whole_file t.junk) t.erased) t.available) t.roots in
-      let removed_refs = Int64.Map.fold (fun cluster _ set ->
-        let i = add (Interval.make cluster cluster) empty in
-        diff set i
-      ) t.refs should_be_used in
-      let leaked = Int64.Map.fold (fun _ m set ->
+      let refs = Int64.Map.fold (fun cluster _ set ->
+        add (Interval.make cluster cluster) set
+      ) t.refs empty in
+      let moves = Int64.Map.fold (fun _ m set ->
         let dst = m.move.Move.dst in
-        let i = add (Interval.make dst dst) empty in
-        diff set i
-      ) t.moves removed_refs in
-
+        add (Interval.make dst dst) set
+      ) t.moves empty in
+      (* A cluster can only be in one of these sets at once *)
+      let exclusive = [
+        "junk", t.junk; "erased", t.erased; "available", t.available;
+        "refs", refs; "moves", moves
+      ] in
+      (* A cluster should be added to refs while it is still in roots *)
+      let all = ("roots", t.roots) :: exclusive in
+      let leaked = List.fold_left diff whole_file (List.map snd all) in
       if cardinal leaked <> 0L then begin
         Printf.fprintf stderr "%s\n" (to_summary_string t);
         Printf.fprintf stderr "%Ld clusters leaked: %s" (cardinal leaked)
           (Sexplib.Sexp.to_string_hum (sexp_of_t leaked));
         assert false
-      end
+      end;
+      let rec cross xs = function
+        | [] -> []
+        | y :: ys -> List.map (fun x -> x, y) xs @ cross xs ys in
+      List.iter (fun ((x_name, x), (y_name, y)) ->
+        if x_name <> y_name then begin
+          let i = inter x y in
+          if cardinal i <> 0L then begin
+            Printf.fprintf stderr "%s\n" (to_summary_string t);
+            Printf.fprintf stderr "%s and %s are not disjoint\n" x_name y_name;
+            Printf.fprintf stderr "%s = %s\n" x_name (Sexplib.Sexp.to_string_hum (sexp_of_t x));
+            Printf.fprintf stderr "%s = %s\n" y_name (Sexplib.Sexp.to_string_hum (sexp_of_t y));
+            Printf.fprintf stderr "intersection = %s\n" (Sexplib.Sexp.to_string_hum (sexp_of_t i));
+            assert false
+          end
+        end
+      ) (cross exclusive exclusive)
     end
 end
