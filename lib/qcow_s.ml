@@ -75,6 +75,8 @@ module type DEBUG = sig
 
   val set_next_cluster: t -> int64 -> unit
 
+  val assert_no_leaked_blocks: t -> unit
+
   val flush: t -> (unit, error) result Lwt.t
 end
 

@@ -138,6 +138,7 @@ let random_write_discard_compact nr_clusters stop_after =
     Random.init 0;
     let rec loop () =
       incr nr_iterations;
+      B.Debug.assert_no_leaked_blocks qcow;
       if !nr_iterations = stop_after then Lwt.return (Ok ()) else begin
         (* Call flush so any erased blocks become reusable *)
         B.Debug.flush qcow

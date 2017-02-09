@@ -274,3 +274,29 @@ let compact_s f t acc =
   >>= function
   | Ok (result, _) -> Lwt.return (Ok result)
   | Error e -> Lwt.return (Error e)
+
+module Debug = struct
+  let assert_no_leaked_blocks t =
+    let open Int64.IntervalSet in
+    let last = get_last_block t in
+    if last >= t.first_movable_cluster then begin
+      let whole_file = add (Interval.make t.first_movable_cluster last) empty in
+      let should_be_used = diff (diff (diff (diff whole_file t.junk) t.erased) t.available) t.roots in
+      let removed_refs = Int64.Map.fold (fun cluster _ set ->
+        let i = add (Interval.make cluster cluster) empty in
+        diff set i
+      ) t.refs should_be_used in
+      let leaked = Int64.Map.fold (fun _ m set ->
+        let dst = m.move.Move.dst in
+        let i = add (Interval.make dst dst) empty in
+        diff set i
+      ) t.moves removed_refs in
+
+      if cardinal leaked <> 0L then begin
+        Printf.fprintf stderr "%s\n" (to_summary_string t);
+        Printf.fprintf stderr "%Ld clusters leaked: %s" (cardinal leaked)
+          (Sexplib.Sexp.to_string_hum (sexp_of_t leaked));
+        assert false
+      end
+    end
+end

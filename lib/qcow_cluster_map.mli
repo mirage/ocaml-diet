@@ -137,3 +137,8 @@ val get_last_block: t -> int64
 
 val to_summary_string: t -> string
 (** [to_summary_string t] returns a terse printable summary of [t] *)
+
+module Debug: sig
+  val assert_no_leaked_blocks: t -> unit
+  (** Check no blocks have gone missing *)
+end

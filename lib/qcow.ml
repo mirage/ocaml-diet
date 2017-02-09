@@ -1611,6 +1611,9 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       assert (within = 0);
       Lwt.return (Ok ())
 
+    let assert_no_leaked_blocks t =
+      Qcow_cluster_map.Debug.assert_no_leaked_blocks t.cluster_map
+
     let set_next_cluster t x = t.next_cluster <- x
 
     let flush t =
