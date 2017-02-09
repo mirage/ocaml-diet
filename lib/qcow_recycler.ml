@@ -357,7 +357,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       wait_for_work ()
       >>= function
       | `Erase to_erase ->
-        Log.info (fun f -> f "block recycler: should erase %Ld clusters" (Int64.IntervalSet.cardinal to_erase));
+        Log.debug (fun f -> f "block recycler: should erase %Ld clusters" (Int64.IntervalSet.cardinal to_erase));
         begin erase t to_erase
         >>= function
         | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
@@ -369,7 +369,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           loop ()
         end
       | `Move nr_junk ->
-        Log.info (fun f -> f "block recycler: should compact up to %Ld clusters" nr_junk);
+        Log.debug (fun f -> f "block recycler: should compact up to %Ld clusters" nr_junk);
         begin Qcow_cluster_map.compact_s
           (fun m () ->
             move t m
@@ -384,7 +384,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           | Ok () -> loop ()
         end
       | `Update_references ->
-        Log.info (fun f -> f "block recycler: need to update references to blocks");
+        Log.debug (fun f -> f "block recycler: need to update references to blocks");
         begin update_references t
           >>= function
           | Error (`Msg x) -> Lwt.fail_with x
@@ -397,7 +397,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Qcow_cluster.with_metadata_lock t.locks
           (fun () ->
             let new_last_block = Qcow_cluster_map.get_last_block cluster_map in
-            Log.info (fun f -> f "block recycler: resize for last_block = %Ld" new_last_block);
+            Log.debug (fun f -> f "block recycler: resize for last_block = %Ld" new_last_block);
             let new_size = Physical.make (Int64.succ new_last_block <| t.cluster_bits) in
             let sector = Physical.sector ~sector_size:t.sector_size new_size in
             let cluster = Physical.cluster ~cluster_bits:t.cluster_bits new_size in
