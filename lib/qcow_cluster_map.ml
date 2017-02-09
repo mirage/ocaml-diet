@@ -23,6 +23,7 @@ let src =
 module Log = (val Logs.src_log src : Logs.LOG)
 
 open Qcow_types
+module Cache = Qcow_cache
 module ClusterMap = Int64.Map
 
 type cluster = int64
@@ -60,6 +61,7 @@ type t = {
   (** The state of in-progress block moves, indexed by the source cluster *)
   mutable refs: reference ClusterMap.t;
   first_movable_cluster: int64;
+  cache: Cache.t;
   c: unit Lwt_condition.t;
   (** Signalled when any of the junk/erased sets change or when references need
       to be rewritten to kick the background recycling thread. *)
@@ -71,7 +73,7 @@ module type MutableSet = sig
   val remove: t -> Int64.IntervalSet.t -> unit
 end
 
-let make ~free ~refs ~first_movable_cluster =
+let make ~free ~refs ~cache ~first_movable_cluster =
   let junk = Qcow_bitmap.fold
     (fun i acc ->
       let x, y = Qcow_bitmap.Interval.(x i, y i) in
@@ -82,12 +84,16 @@ let make ~free ~refs ~first_movable_cluster =
   let erased = Int64.IntervalSet.empty in
   let moves = ClusterMap.empty in
   let c = Lwt_condition.create () in
-  { junk; available; erased; roots; moves; refs; first_movable_cluster; c }
+  { junk; available; erased; roots; moves; refs; first_movable_cluster; cache; c }
 
 let zero =
   let free = Qcow_bitmap.make_empty ~initial_size:0 ~maximum_size:0 in
   let refs = ClusterMap.empty in
-  make ~free ~refs ~first_movable_cluster:0L
+  let cache = Cache.create
+    ~read_cluster:(fun _ -> Lwt.return (Error `Unimplemented))
+    ~write_cluster:(fun _ _ -> Lwt.return (Error `Unimplemented))
+    () in
+  make ~free ~refs ~first_movable_cluster:0L ~cache
 
 let resize t new_size_clusters =
   let file = Int64.IntervalSet.(add (Interval.make 0L (Int64.pred new_size_clusters)) empty) in
@@ -100,6 +106,16 @@ module Junk = struct
   let add t more =
     (* assert (Int64.IntervalSet.inter t.junk more = Int64.IntervalSet.empty); *)
     t.junk <- Int64.IntervalSet.union t.junk more;
+    (* Ensure all cached copies of junk blocks are dropped *)
+    Int64.IntervalSet.(fold (fun i () ->
+      let x, y = Interval.(x i, y i) in
+      let rec loop n =
+        if n <= y then begin
+          Cache.remove t.cache n;
+          loop (Int64.succ n)
+        end in
+      loop x
+    ) more ());
     Lwt_condition.signal t.c ()
   let remove t less =
     t.junk <- Int64.IntervalSet.diff t.junk less;
@@ -311,13 +327,14 @@ module Debug = struct
         let dst = m.move.Move.dst in
         add (Interval.make dst dst) set
       ) t.moves empty in
-      (* A cluster can only be in one of these sets at once *)
-      let exclusive = [
-        "junk", t.junk; "erased", t.erased; "available", t.available;
-        "refs", refs; "moves", moves
-      ] in
-      (* A cluster should be added to refs while it is still in roots *)
-      let all = ("roots", t.roots) :: exclusive in
+      let junk = "junk", t.junk in
+      let erased = "erased", t.erased in
+      let available = "available", t.available in
+      let refs = "refs", refs in
+      let moves = "moves", moves in
+      let roots = "roots", t.roots in
+      let cached = "cached", Cache.Debug.all_cached_clusters t.cache in
+      let all = [ junk; erased; available; refs; moves; roots ] in
       let leaked = List.fold_left diff whole_file (List.map snd all) in
       if cardinal leaked <> 0L then begin
         Printf.fprintf stderr "%s\n" (to_summary_string t);
@@ -328,18 +345,26 @@ module Debug = struct
       let rec cross xs = function
         | [] -> []
         | y :: ys -> List.map (fun x -> x, y) xs @ cross xs ys in
-      List.iter (fun ((x_name, x), (y_name, y)) ->
-        if x_name <> y_name then begin
-          let i = inter x y in
-          if cardinal i <> 0L then begin
-            Printf.fprintf stderr "%s\n" (to_summary_string t);
-            Printf.fprintf stderr "%s and %s are not disjoint\n" x_name y_name;
-            Printf.fprintf stderr "%s = %s\n" x_name (Sexplib.Sexp.to_string_hum (sexp_of_t x));
-            Printf.fprintf stderr "%s = %s\n" y_name (Sexplib.Sexp.to_string_hum (sexp_of_t y));
-            Printf.fprintf stderr "intersection = %s\n" (Sexplib.Sexp.to_string_hum (sexp_of_t i));
-            assert false
+      let check zs =
+        List.iter (fun ((x_name, x), (y_name, y)) ->
+          if x_name <> y_name then begin
+            let i = inter x y in
+            if cardinal i <> 0L then begin
+              Printf.fprintf stderr "%s\n" (to_summary_string t);
+              Printf.fprintf stderr "%s and %s are not disjoint\n" x_name y_name;
+              Printf.fprintf stderr "%s = %s\n" x_name (Sexplib.Sexp.to_string_hum (sexp_of_t x));
+              Printf.fprintf stderr "%s = %s\n" y_name (Sexplib.Sexp.to_string_hum (sexp_of_t y));
+              Printf.fprintf stderr "intersection = %s\n" (Sexplib.Sexp.to_string_hum (sexp_of_t i));
+              assert false
+            end
           end
-        end
-      ) (cross exclusive exclusive)
+        ) zs in
+      (* These must be disjoint *)
+      check @@ cross
+        [ junk; erased; available; refs; moves ]
+        [ junk; erased; available; refs; moves ];
+      check @@ cross
+        [ cached ]
+        [ junk; erased; available ];
     end
 end

@@ -942,7 +942,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     l1_iter 0L
     >>= fun () ->
 
-    let map = make ~free ~refs:(!refs) ~first_movable_cluster in
+    let map = make ~free ~refs:(!refs) ~first_movable_cluster ~cache:t.cache in
 
     Lwt.return (Ok map)
 

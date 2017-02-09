@@ -85,9 +85,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () ->
-        (* If these were metadata blocks (e.g. L2 table entries) then they might
-           be cached. Remove the overwritten block's cache entry just in case. *)
-        Cache.remove t.cache dst;
+        Cache.Debug.assert_not_cached t.cache dst;
         (* If the destination block was being moved, abort the move since the
            original copy has diverged. *)
         Qcow_cluster_map.cancel_move cluster_map dst;

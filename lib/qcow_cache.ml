@@ -14,6 +14,8 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
+open Qcow_types
+
 let src =
   let src = Logs.Src.create "qcow" ~doc:"qcow2-formatted BLOCK device" in
   Logs.Src.set_level src (Some Logs.Info);
@@ -53,3 +55,15 @@ let write t cluster data =
 
 let remove t cluster =
   t.clusters <- Int64Map.remove cluster t.clusters
+
+module Debug = struct
+  let assert_not_cached t cluster =
+    if Int64Map.mem cluster t.clusters then begin
+      Printf.fprintf stderr "Cluster %Ld still in the metadata cache\n" cluster;
+      assert false
+    end
+  let all_cached_clusters t =
+    Int64Map.fold (fun cluster _ set ->
+      Int64.IntervalSet.(add (Interval.make cluster cluster) set)
+    ) t.clusters Int64.IntervalSet.empty
+end

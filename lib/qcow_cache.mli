@@ -14,6 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
+open Qcow_types
 
 type t
 (** A cache of clusters *)
@@ -32,3 +33,9 @@ val write: t -> int64 -> Cstruct.t -> (unit, Mirage_block.write_error) result Lw
 
 val remove: t -> int64 -> unit
 (** [remove t cluster] drops any cache associated with [cluster] *)
+
+module Debug: sig
+  val assert_not_cached: t -> int64 -> unit
+
+  val all_cached_clusters: t -> Int64.IntervalSet.t
+end
