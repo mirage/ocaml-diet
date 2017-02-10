@@ -60,6 +60,7 @@ let random_write_discard_compact nr_clusters stop_after =
     let buffer_size = 1048576 in (* perform 1MB of I/O at a time, maximum *)
     let buffer_size_sectors = Int64.of_int (buffer_size / info.Mirage_block.sector_size) in
     let write_buffer = Cstruct.create buffer_size in
+    let read_buffer = Cstruct.create buffer_size in
 
     let write x n =
       assert (Int64.add x n <= nr_sectors);
@@ -122,21 +123,33 @@ let random_write_discard_compact nr_clusters stop_after =
           begin
             let n = Int64.(succ (sub y x)) in
             assert (Int64.add x n <= nr_sectors);
-            let buf = malloc ((Int64.to_int n) * info.Mirage_block.sector_size) in
-            B.read qcow x [ buf ]
-            >>= function
-            | Error _ -> failwith "read"
-            | Ok () ->
-              let rec for_each_sector x remaining =
-                if Cstruct.len remaining = 0 then () else begin
-                  let cluster = Int64.(div x (of_int sectors_per_cluster)) in
-                  let expected = p cluster in
-                  let sector = Cstruct.sub remaining 0 512 in
-                  check_contents x sector expected;
-                  for_each_sector (Int64.succ x) (Cstruct.shift remaining 512)
-                end in
-              for_each_sector x buf;
-              check p (SectorSet.remove i set)
+            let one_read x n =
+              assert (n <= buffer_size_sectors);
+              let buf = Cstruct.sub read_buffer 0 (Int64.to_int n * info.Mirage_block.sector_size) in
+              B.read qcow x [ buf ]
+              >>= function
+              | Error _ -> failwith "read"
+              | Ok () ->
+                let rec for_each_sector x remaining =
+                  if Cstruct.len remaining = 0 then () else begin
+                    let cluster = Int64.(div x (of_int sectors_per_cluster)) in
+                    let expected = p cluster in
+                    let sector = Cstruct.sub remaining 0 512 in
+                    check_contents x sector expected;
+                    for_each_sector (Int64.succ x) (Cstruct.shift remaining 512)
+                  end in
+                for_each_sector x buf;
+                Lwt.return_unit in
+            let rec loop x n =
+              if n = 0L then Lwt.return_unit else begin
+                let n' = min buffer_size_sectors n in
+                one_read x n'
+                >>= fun () ->
+                loop (Int64.add x n') (Int64.sub n n')
+              end in
+            loop x n
+            >>= fun () ->
+            check p (SectorSet.remove i set)
           end
         | exception Not_found ->
           Lwt.return_unit in
