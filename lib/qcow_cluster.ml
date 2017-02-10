@@ -43,7 +43,7 @@ let get_lock t cluster =
     if Int64Map.mem cluster t.locks
     then Int64Map.find cluster t.locks
     else begin
-      Qcow_rwlock.make (), 0
+      Qcow_rwlock.make (), 1
     end in
   t.locks <- Int64Map.add cluster (lock, refcount) t.locks;
   lock
