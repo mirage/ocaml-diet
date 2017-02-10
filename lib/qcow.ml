@@ -209,34 +209,37 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         a parallel thread allocating another cluster for the same purpose.
         *)
     let allocate_clusters t n f =
-      t.next_cluster <- Int64.succ @@ Qcow_cluster_map.get_last_block t.cluster_map;
-      if n = 0L then begin
-        (* Resync the file size only *)
-        let open Lwt_write_error.Infix in
-        resize_base t.base t.sector_size (Some(t.cluster_map, t.cluster_bits)) (Physical.make (t.next_cluster <| t.cluster_bits))
-        >>= fun () ->
-        Log.debug (fun f -> f "Resized file to %Ld clusters" t.next_cluster);
-        f (FreeClusters.empty, true)
-      end else begin
-        (* Take them from the free list if they are available *)
-        match Recycler.allocate t.recycler n with
-        | Some set ->
-          Log.debug (fun f -> f "Allocated %Ld clusters from free list" n);
-          f (set, true)
-        | None ->
-          let cluster = t.next_cluster in
-          t.next_cluster <- Int64.add t.next_cluster n;
-          let free = FreeClusters.Interval.make cluster Int64.(add cluster (pred n)) in
-          let set = FreeClusters.(add free empty) in
-          Qcow_cluster_map.with_roots t.cluster_map set
-            (fun () ->
-              Log.debug (fun f -> f "Soft allocated span of clusters from %Ld (length %Ld)" cluster n);
-              let open Lwt_write_error.Infix in
-              resize_base t.base t.sector_size (Some (t.cluster_map, t.cluster_bits)) (Physical.make (t.next_cluster <| t.cluster_bits))
-              >>= fun () ->
-              f (set, true)
-            )
-      end
+      let open Lwt_write_error.Infix in
+      (* Before we allocate, ftruncate the file. This ensures that blocks allocated
+         after t.next_cluster actually contain zeroes *)
+      let next_cluster_should_be = Int64.succ @@ Qcow_cluster_map.get_last_block t.cluster_map in
+      ( if next_cluster_should_be <> t.next_cluster then begin
+          Log.info (fun f -> f "Allocator: next_cluster = %Ld but should be %Ld, truncating file" t.next_cluster next_cluster_should_be);
+          t.next_cluster <- next_cluster_should_be;
+          (* Resync the file size only *)
+          resize_base t.base t.sector_size (Some(t.cluster_map, t.cluster_bits)) (Physical.make (t.next_cluster <| t.cluster_bits))
+          >>= fun () ->
+          Log.debug (fun f -> f "Resized file to %Ld clusters" t.next_cluster);
+          Lwt.return (Ok ())
+        end else Lwt.return (Ok ()) ) >>= fun () ->
+      (* Take them from the free list if they are available *)
+      match Recycler.allocate t.recycler n with
+      | Some set ->
+        Log.debug (fun f -> f "Allocated %Ld clusters from free list" n);
+        f (set, true)
+      | None ->
+        let cluster = t.next_cluster in
+        t.next_cluster <- Int64.add t.next_cluster n;
+        let free = FreeClusters.Interval.make cluster Int64.(add cluster (pred n)) in
+        let set = FreeClusters.(add free empty) in
+        Qcow_cluster_map.with_roots t.cluster_map set
+          (fun () ->
+            Log.debug (fun f -> f "Soft allocated span of clusters from %Ld (length %Ld)" cluster n);
+            let open Lwt_write_error.Infix in
+            resize_base t.base t.sector_size (Some (t.cluster_map, t.cluster_bits)) (Physical.make (t.next_cluster <| t.cluster_bits))
+            >>= fun () ->
+            f (set, true)
+          )
 
     module Refcount = struct
       (* The refcount table contains pointers to clusters which themselves
