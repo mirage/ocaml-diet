@@ -10,6 +10,7 @@ module Log = (val Logs.src_log src : Logs.LOG)
 open Qcow_types
 
 let ( <| ) = Int64.shift_left
+let ( |> ) = Int64.shift_right
 
 module Cache = Qcow_cache
 module Metadata = Qcow_metadata
@@ -25,7 +26,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     cache: Cache.t;
     locks: Qcow_cluster.t;
     metadata: Metadata.t;
-    cluster: Cstruct.t; (* a zero cluster for erasing *)
+    zero_buffer: Cstruct.t;
     mutable background_thread: unit Lwt.t;
     mutable need_to_flush: bool;
     need_to_flush_c: unit Lwt_condition.t;
@@ -33,17 +34,15 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   }
 
   let create ~base ~sector_size ~cluster_bits ~cache ~locks ~metadata =
-    let npages = 1 lsl (cluster_bits - 12) in
-    let pages = Io_page.(to_cstruct @@ get npages) in
-    let cluster = Cstruct.sub pages 0 (1 lsl cluster_bits) in
-    Cstruct.memset cluster 0;
+    let zero_buffer = Io_page.(to_cstruct @@ get 256) in (* 1 MiB *)
+    Cstruct.memset zero_buffer 0;
     let background_thread = Lwt.return_unit in
     let m = Lwt_mutex.create () in
     let cluster_map = None in
     let need_to_flush = false in
     let need_to_flush_c = Lwt_condition.create () in
     { base; sector_size; cluster_bits; cluster_map; cache; locks; metadata;
-      cluster; background_thread; need_to_flush; need_to_flush_c;
+      zero_buffer; background_thread; need_to_flush; need_to_flush_c;
       m }
 
   let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
@@ -124,37 +123,35 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   let erase t remaining =
     let open Lwt.Infix in
-    let rec loop remaining =
-      match Int64.IntervalSet.min_elt remaining with
-      | i ->
+    let intervals = Int64.IntervalSet.fold (fun i acc -> i :: acc) remaining [] in
+    let buffer_size_clusters = Int64.of_int (Cstruct.len t.zero_buffer) |> t.cluster_bits in
+    (* If any is an error, return it *)
+    let rec any_error = function
+      | [] -> Ok ()
+      | (Error e) :: _ -> Error e
+      | _ :: rest -> any_error rest in
+    Lwt_list.map_p
+      (fun i ->
         let x, y = Int64.IntervalSet.Interval.(x i, y i) in
-        Log.debug (fun f -> f "erasing clusters (%Ld -> %Ld)" x y);
-        let rec per_cluster x =
-          if x > y
-          then Lwt.return (Ok ())
-          else begin
-            let sector = Int64.(div (x <| t.cluster_bits) (of_int t.sector_size)) in
-            Qcow_cluster.with_write_lock t.locks x
-              (fun () ->
-                 B.write t.base sector [ t.cluster ]
-              )
-            >>= function
-            | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-            | Error `Disconnected -> Lwt.return (Error `Disconnected)
-            | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-            | Ok () ->
-              per_cluster (Int64.succ x)
-          end in
-        ( per_cluster x
-          >>= function
-          | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-          | Error `Disconnected -> Lwt.return (Error `Disconnected)
-          | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-          | Ok () ->
-            loop (Int64.IntervalSet.remove i remaining) )
-      | exception Not_found ->
-        Lwt.return (Ok ()) in
-    loop remaining
+        let n = Int64.(succ @@ sub y x) in
+        Log.debug (fun f -> f "erasing %Ld clusters (%Ld -> %Ld)" n x y);
+        let erase cluster n =
+          (* Erase [n] clusters starting from [cluster] *)
+          assert (n <= buffer_size_clusters);
+          let buf = Cstruct.sub t.zero_buffer 0 (Int64.to_int (n <| t.cluster_bits)) in
+          let sector = Int64.(div (cluster <| t.cluster_bits) (of_int t.sector_size)) in
+          (* No-one else is writing to this cluster so no locking is needed *)
+          B.write t.base sector [ buf ] in
+        let rec chop_into from n m =
+          if n = 0L then []
+          else if n > m then (from, m) :: (chop_into (Int64.add from m) (Int64.sub n m) m)
+          else [ from, n ] in
+        Lwt_list.map_p (fun (cluster, n) -> erase cluster n) (chop_into x n buffer_size_clusters)
+        >>= fun results ->
+        Lwt.return (any_error results)
+      ) intervals
+    >>= fun results ->
+    Lwt.return (any_error results)
 
   (* Run all threads in parallel, wait for all to complete, then iterate through
      the results and return the first failure we discover. *)
