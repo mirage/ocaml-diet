@@ -286,7 +286,7 @@ let pattern_cmd =
         numbered where 1 is every other cluster mapped and 2 has second half \
         of the file mapped and the first half unmapped.";
   ] @ help in
-  Term.(ret(pure Impl.pattern $ output $ size $ pattern_number)),
+  Term.(ret(pure Impl.pattern $ common_options_t $ trace $ output $ size $ pattern_number)),
   Term.info "pattern" ~sdocs:_common_options ~doc ~man
 
 let default_cmd =

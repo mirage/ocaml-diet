@@ -423,10 +423,15 @@ let create size strict_refcounts trace filename =
     | Ok _ -> return (`Ok ()) in
   Lwt_main.run t
 
-let pattern filename size number =
-  let module BLOCK = Block in
+let pattern common_options_t trace filename size number =
+  let block =
+     if trace
+     then (module TracedBlock: BLOCK)
+     else (module Block: BLOCK) in
+  let module BLOCK = (val block: BLOCK) in
   let module B = Qcow.Make(BLOCK)(Time) in
   let open Lwt in
+  let progress_cb = if common_options_t.Common.progress then Some progress_cb else None in
   let t =
     Lwt_unix.openfile filename [ Lwt_unix.O_CREAT ] 0o0644
     >>= fun fd ->
@@ -451,6 +456,8 @@ let pattern filename size number =
         let buf = Cstruct.sub page 0 sector_size in
         let rec loop sector =
           if sector >= info.Mirage_block.size_sectors then Lwt.return_unit else begin
+            let percent = Int64.(to_int (div (mul 100L sector) info.Mirage_block.size_sectors)) in
+            (match progress_cb with Some f -> f ~percent | None -> ());
             B.write qcow sector [ buf ]
             >>= function
             | Error _ -> Lwt.fail_with "qcow write error"
