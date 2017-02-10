@@ -57,29 +57,45 @@ let random_write_discard_compact nr_clusters stop_after =
     let empty = ref SectorSet.(add i empty) in
     let nr_iterations = ref 0 in
 
+    let buffer_size = 1048576 in (* perform 1MB of I/O at a time, maximum *)
+    let buffer_size_sectors = Int64.of_int (buffer_size / info.Mirage_block.sector_size) in
+    let write_buffer = Cstruct.create buffer_size in
+
     let write x n =
       assert (Int64.add x n <= nr_sectors);
-      let y = Int64.(add x (pred n)) in
-      let buf = malloc (info.Mirage_block.sector_size * (Int64.to_int n)) in
-      let rec for_each_sector x remaining =
-        if Cstruct.len remaining = 0 then () else begin
-          let cluster = Int64.(div x (of_int sectors_per_cluster)) in
-          let sector = Cstruct.sub remaining 0 512 in
-          (* Only write the first byte *)
-          Cstruct.BE.set_uint64 sector 0 cluster;
-          for_each_sector (Int64.succ x) (Cstruct.shift remaining 512)
+      let one_write x n =
+        assert (n <= buffer_size_sectors);
+        let buf = Cstruct.sub write_buffer 0 (Int64.to_int n * info.Mirage_block.sector_size) in
+        let rec for_each_sector x remaining =
+          if Cstruct.len remaining = 0 then () else begin
+            let cluster = Int64.(div x (of_int sectors_per_cluster)) in
+            let sector = Cstruct.sub remaining 0 512 in
+            (* Only write the first byte *)
+            Cstruct.BE.set_uint64 sector 0 cluster;
+            for_each_sector (Int64.succ x) (Cstruct.shift remaining 512)
+          end in
+        for_each_sector x buf;
+        B.write qcow x [ buf ]
+        >>= function
+        | Error _ -> failwith "write"
+        | Ok () -> Lwt.return_unit in
+      let rec loop x n =
+        if n = 0L then Lwt.return_unit else begin
+          let n' = min buffer_size_sectors n in
+          one_write x n'
+          >>= fun () ->
+          loop (Int64.add x n') (Int64.sub n n')
         end in
-      for_each_sector x buf;
-      B.write qcow x [ buf ]
-      >>= function
-      | Error _ -> failwith "write"
-      | Ok () ->
-        if n > 0L then begin
-          let i = SectorSet.Interval.make x y in
-          written := SectorSet.add i !written;
-          empty := SectorSet.remove i !empty;
-        end;
-        Lwt.return_unit in
+      loop x n
+      >>= fun () ->
+      if n > 0L then begin
+        let y = Int64.(add x (pred n)) in
+        let i = SectorSet.Interval.make x y in
+        written := SectorSet.add i !written;
+        empty := SectorSet.remove i !empty;
+      end;
+      Lwt.return_unit in
+
     let discard x n =
       assert (Int64.add x n <= nr_sectors);
       let y = Int64.(add x (pred n)) in
