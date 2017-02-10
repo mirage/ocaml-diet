@@ -65,9 +65,8 @@ let random_write_discard_compact nr_clusters stop_after =
         if Cstruct.len remaining = 0 then () else begin
           let cluster = Int64.(div x (of_int sectors_per_cluster)) in
           let sector = Cstruct.sub remaining 0 512 in
-          for i = 0 to Cstruct.len sector / 8 - 1 do
-            Cstruct.BE.set_uint64 sector (i * 8) cluster
-          done;
+          (* Only write the first byte *)
+          Cstruct.BE.set_uint64 sector 0 cluster;
           for_each_sector (Int64.succ x) (Cstruct.shift remaining 512)
         end in
       for_each_sector x buf;
@@ -95,11 +94,10 @@ let random_write_discard_compact nr_clusters stop_after =
       end;
       Lwt.return_unit in
     let check_contents sector buf expected =
-      for i = 0 to (Cstruct.len buf) / 8 - 1 do
-        let actual = Cstruct.BE.get_uint64 buf (i * 8) in
-        if actual <> expected
-        then failwith (Printf.sprintf "contents of sector %Ld incorrect: expected %Ld but actual %Ld" sector expected actual)
-      done in
+      (* Only check the first byte: assume the rest of the sector are the same *)
+      let actual = Cstruct.BE.get_uint64 buf 0 in
+      if actual <> expected
+      then failwith (Printf.sprintf "contents of sector %Ld incorrect: expected %Ld but actual %Ld" sector expected actual) in
     let check_all_clusters () =
       let rec check p set = match SectorSet.choose set with
         | i ->
