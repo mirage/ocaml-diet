@@ -274,6 +274,21 @@ let mapped_cmd =
   Term.(ret(pure Impl.mapped $ filename $ output_format $ ignore_zeroes)),
   Term.info "mapped" ~sdocs:_common_options ~doc ~man
 
+let pattern_number =
+  let doc = Printf.sprintf "Pattern number to write" in
+  Arg.(value & opt int 1 & info [ "pattern" ] ~doc)
+
+let pattern_cmd =
+  let doc = "Generate a .qcow2 with a test pattern" in
+  let man = [
+    `S "DESCRIPTION";
+    `P "Create a qcow2 file with a test pattern. The defined patterns are \
+        numbered where 1 is every other cluster mapped and 2 has second half \
+        of the file mapped and the first half unmapped.";
+  ] @ help in
+  Term.(ret(pure Impl.pattern $ output $ size $ pattern_number)),
+  Term.info "pattern" ~sdocs:_common_options ~doc ~man
+
 let default_cmd =
   let doc = "manipulate virtual disks stored in qcow2 files" in
   let man = help in
@@ -281,7 +296,8 @@ let default_cmd =
   Term.info "qcow-tool" ~version:"1.0.0" ~sdocs:_common_options ~doc ~man
 
 let cmds = [info_cmd; create_cmd; check_cmd; repair_cmd; encode_cmd; decode_cmd;
-  write_cmd; read_cmd; mapped_cmd; resize_cmd; discard_cmd; compact_cmd]
+  write_cmd; read_cmd; mapped_cmd; resize_cmd; discard_cmd; compact_cmd;
+  pattern_cmd ]
 
 let _ =
   Logs.set_reporter (Logs_fmt.reporter ());

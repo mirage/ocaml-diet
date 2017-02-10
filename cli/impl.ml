@@ -423,6 +423,48 @@ let create size strict_refcounts trace filename =
     | Ok _ -> return (`Ok ()) in
   Lwt_main.run t
 
+let pattern filename size number =
+  let module BLOCK = Block in
+  let module B = Qcow.Make(BLOCK)(Time) in
+  let open Lwt in
+  let t =
+    Lwt_unix.openfile filename [ Lwt_unix.O_CREAT ] 0o0644
+    >>= fun fd ->
+    Lwt_unix.close fd
+    >>= fun () ->
+    BLOCK.connect filename
+    >>= fun x ->
+    B.create x ~size ~lazy_refcounts:true ()
+    >>= function
+    | Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" filename)
+    | Ok qcow ->
+      begin match number with
+      | 1 ->
+        let h = B.header qcow in
+        B.get_info qcow
+        >>= fun info ->
+        let sector_size = info.Mirage_block.sector_size in
+        let cluster_bits = Int32.to_int h.Qcow.Header.cluster_bits in
+        let cluster_size = 1 lsl cluster_bits in
+        let cluster_size_sectors = cluster_size / sector_size in
+        let page = Io_page.(to_cstruct @@ get 1) in
+        let buf = Cstruct.sub page 0 sector_size in
+        let rec loop sector =
+          if sector >= info.Mirage_block.size_sectors then Lwt.return_unit else begin
+            B.write qcow sector [ buf ]
+            >>= function
+            | Error _ -> Lwt.fail_with "qcow write error"
+            | Ok () ->
+              (* every other cluster *)
+              loop Int64.(add sector (mul 2L (of_int cluster_size_sectors)))
+          end in
+        loop 0L
+        >>= fun () ->
+        Lwt.return (`Ok ())
+      | _ -> failwith (Printf.sprintf "Unknown pattern %d" number)
+      end in
+  Lwt_main.run t
+
 let resize trace filename new_size ignore_data_loss =
   let block =
      if trace
