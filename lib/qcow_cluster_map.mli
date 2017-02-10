@@ -126,6 +126,9 @@ val find: t -> cluster -> reference
 val with_roots: t -> Int64.IntervalSet.t -> (unit -> 'a Lwt.t) -> 'a Lwt.t
 (** [with_roots t clusters f] calls [f ()} with [clusters] registered as in-use. *)
 
+val get_moves: t -> Move.t list
+(** [get_moves t] calculates the block moves required to compact [t] *)
+
 val compact_s: (Move.t -> 'a -> ((bool * 'a), 'b) result Lwt.t ) -> t -> 'a
   -> ('a, 'b) result Lwt.t
 (** [compact_s f t acc] accumulates the result of [f move] where [move] is

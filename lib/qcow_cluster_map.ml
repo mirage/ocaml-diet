@@ -282,6 +282,29 @@ let with_roots t clusters f =
 
 open Result
 
+let get_moves t =
+  (* The last allocated block. Note if there are no data blocks this will
+     point to the last header block even though it is immovable. *)
+  let max_cluster = get_last_block t in
+  let refs = ref t.refs in
+  fst @@ Int64.IntervalSet.fold_individual
+    (fun cluster (moves, max_cluster) ->
+      (* A free block after the last allocated block will not be filled.
+         It will be erased from existence when the file is truncated at the
+         end. *)
+      if cluster >= max_cluster then (moves, max_cluster) else begin
+        (* find the last physical block *)
+        let last_block, rf = ClusterMap.max_binding (!refs) in
+
+        if cluster >= last_block then moves, last_block else begin
+          (* copy last_block into cluster and update rf *)
+          let move = { Move.src = last_block; dst = cluster } in
+          refs := ClusterMap.remove last_block @@ ClusterMap.add cluster rf (!refs);
+          move :: moves, last_block
+        end
+      end
+    ) t.junk ([], max_cluster)
+
 let compact_s f t acc =
   (* The last allocated block. Note if there are no data blocks this will
      point to the last header block even though it is immovable. *)

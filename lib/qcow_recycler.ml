@@ -121,15 +121,17 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             )
       )
 
+  (* If any is an error, return it *)
+  let rec any_error = function
+    | [] -> Ok ()
+    | (Error e) :: _ -> Error e
+    | _ :: rest -> any_error rest
+
   let erase t remaining =
     let open Lwt.Infix in
     let intervals = Int64.IntervalSet.fold (fun i acc -> i :: acc) remaining [] in
     let buffer_size_clusters = Int64.of_int (Cstruct.len t.zero_buffer) |> t.cluster_bits in
-    (* If any is an error, return it *)
-    let rec any_error = function
-      | [] -> Ok ()
-      | (Error e) :: _ -> Error e
-      | _ :: rest -> any_error rest in
+
     Lwt_list.map_p
       (fun i ->
         let x, y = Int64.IntervalSet.Interval.(x i, y i) in
@@ -365,18 +367,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         end
       | `Move nr_junk ->
         Log.debug (fun f -> f "block recycler: should compact up to %Ld clusters" nr_junk);
-        begin Qcow_cluster_map.compact_s
-          (fun m () ->
-            move t m
-            >>= function
-            | Error e -> Lwt.return (Error e)
-            | Ok () -> Lwt.return (Ok (false, ()))
-          ) cluster_map ()
-          >>= function
-          | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
-          | Error `Disconnected -> Lwt.fail_with "Disconnected"
-          | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
-          | Ok () -> loop ()
+        let moves = Qcow_cluster_map.get_moves cluster_map in
+        Lwt_list.map_p (move t) moves
+        >>= fun results ->
+        begin match any_error results with
+        | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
+        | Error `Disconnected -> Lwt.fail_with "Disconnected"
+        | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
+        | Ok () -> loop ()
         end
       | `Update_references ->
         Log.debug (fun f -> f "block recycler: need to update references to blocks");
