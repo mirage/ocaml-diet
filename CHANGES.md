@@ -1,3 +1,6 @@
+0.8.1 (2017-02-13)
+- fix error in META file
+
 0.8.0 (2017-02-13)
 - update to Mirage 3 APIs
 - now requires OCaml 4.03+
