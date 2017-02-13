@@ -13,7 +13,8 @@
  * OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
  *)
-module FromBlock = Error.FromBlock
+module Lwt_error = Error.Lwt_error
+module Lwt_write_error = Error.Lwt_write_error
 module FromResult = Error.FromResult
 
 open Qcow
@@ -27,11 +28,11 @@ module Block = UnsafeBlock
 let repair_refcounts path =
   let module B = Qcow.Make(Block)(Time) in
   let t =
-    let open FromBlock in
     Block.connect path
     >>= fun raw ->
     B.connect raw
     >>= fun qcow ->
+    let open Lwt_write_error.Infix in
     B.rebuild_refcount_table qcow
     >>= fun () ->
     let open Lwt.Infix in
@@ -39,10 +40,10 @@ let repair_refcounts path =
     >>= fun () ->
     Block.disconnect raw
     >>= fun () ->
-    Lwt.return (`Ok ()) in
+    Lwt.return (Ok ()) in
   t >>= function
-  | `Ok () -> Lwt.return ()
-  | `Error (`Msg x) -> failwith x
+  | Ok () -> Lwt.return ()
+  | Error (`Msg x) -> failwith x
 
 (* qemu-img will set version = `Three and leave an extra cluster
    presumably for extension headers *)
@@ -54,7 +55,6 @@ let read_write_header name size =
   let t =
     truncate path
     >>= fun () ->
-    let open FromBlock in
     Block.connect path
     >>= fun raw ->
     B.create raw ~size ()
@@ -62,17 +62,19 @@ let read_write_header name size =
     let open Lwt.Infix in
     repair_refcounts path
     >>= fun () ->
-    let open FromBlock in
     Qemu.Img.check path;
 
     let page = Io_page.(to_cstruct (get 1)) in
+    let open Lwt_error.Infix in
     Block.read raw 0L [ page ]
     >>= fun () ->
     let open FromResult in
     Qcow.Header.read page
     >>= fun (hdr, _) ->
-    Lwt.return (`Ok hdr) in
-  or_failwith @@ Lwt_main.run t
+    Lwt.return (Ok hdr) in
+  match Lwt_main.run t with
+  | Ok x -> x
+  | Error _ -> failwith "read_write_header"
 
 let additional = Some {
   Qcow.Header.dirty = true;
@@ -144,13 +146,14 @@ let check_file_contents path id _sector_size _size_sectors (start, length) () =
   let module Reader = Qcow.Make(RawReader)(Time) in
   let sector = Int64.div start 512L in
   (* This is the range that we expect to see written *)
-  let open FromBlock in
   RawReader.connect path
   >>= fun raw ->
   Reader.connect raw
   >>= fun b ->
   let expected = { Extent.start = sector; length = Int64.(div (of_int length) 512L) } in
-  Mirage_block.fold_mapped_s
+  let open Lwt_error.Infix in
+  let module F = Mirage_block_lwt.Fast_fold(Reader) in
+  F.mapped_s
     ~f:(fun bytes_seen ofs data ->
         let actual = { Extent.start = ofs; length = Int64.of_int (Cstruct.len data / 512) } in
         (* Any data we read now which wasn't expected must be full of zeroes *)
@@ -171,8 +174,8 @@ let check_file_contents path id _sector_size _size_sectors (start, length) () =
              done;
           ) common;
         let seen_this_time = 512 * List.(fold_left (+) 0 (map (fun e -> Int64.to_int e.Extent.length) common)) in
-        return (`Ok (bytes_seen + seen_this_time))
-      ) 0 (module Reader) b
+        return (bytes_seen + seen_this_time)
+      ) 0  b
   >>= fun total_bytes_seen ->
   assert_equal ~printer:string_of_int length total_bytes_seen;
   Reader.Debug.check_no_overlaps b
@@ -182,7 +185,7 @@ let check_file_contents path id _sector_size _size_sectors (start, length) () =
   >>= fun () ->
   RawReader.disconnect raw
   >>= fun () ->
-  Lwt.return (`Ok ())
+  Lwt.return (Ok ())
 
 let write_read_native sector_size size_sectors (start, length) () =
   let module RawWriter = Block in
@@ -192,9 +195,9 @@ let write_read_native sector_size size_sectors (start, length) () =
   let t =
     truncate path
     >>= fun () ->
-    let open FromBlock in
     RawWriter.connect path
     >>= fun raw ->
+    let open Lwt_write_error.Infix in
     Writer.create raw ~size:Int64.(mul size_sectors (of_int sector_size)) ()
     >>= fun b ->
 
@@ -205,6 +208,7 @@ let write_read_native sector_size size_sectors (start, length) () =
     Writer.write b sector (fragment 4096 buf)
     >>= fun () ->
     let buf' = malloc length in
+    let open Lwt_error.Infix in
     Writer.read b sector (fragment 4096 buf')
     >>= fun () ->
     let cmp a b = Cstruct.compare a b = 0 in
@@ -227,10 +231,11 @@ let write_discard_read_native sector_size size_sectors (start, length) () =
   let t =
     truncate path
     >>= fun () ->
-    let open FromBlock in
+    let open Lwt.Infix in
     RawWriter.connect path
     >>= fun raw ->
     let config = Writer.Config.create ~discard:true () in
+    let open Lwt_write_error.Infix in
     Writer.create raw ~size:Int64.(mul size_sectors (of_int sector_size)) ~config ()
     >>= fun b ->
 
@@ -243,6 +248,7 @@ let write_discard_read_native sector_size size_sectors (start, length) () =
     Writer.discard b ~sector ~n:(Int64.of_int (length / 512)) ()
     >>= fun () ->
     let buf' = malloc length in
+    let open Lwt_error.Infix in
     Writer.read b sector (fragment 4096 buf')
     >>= fun () ->
     (* Data has been discarded, so assume the implementation now guarantees
@@ -270,7 +276,7 @@ let write_read_qemu sector_size size_sectors (start, length) () =
   let t =
     truncate path
     >>= fun () ->
-    let open FromBlock in
+    let open Lwt.Infix in
     Writer.create path Int64.(mul size_sectors (of_int sector_size))
     >>= fun b ->
 
@@ -278,9 +284,11 @@ let write_read_qemu sector_size size_sectors (start, length) () =
     let id = get_id () in
     let buf = malloc length in
     Cstruct.memset buf (id mod 256);
+    let open Lwt_write_error.Infix in
     Writer.write b sector (fragment 4096 buf)
     >>= fun () ->
     let buf' = malloc length in
+    let open Lwt_error.Infix in
     Writer.read b sector (fragment 4096 buf')
     >>= fun () ->
     let cmp a b = Cstruct.compare a b = 0 in
@@ -298,9 +306,9 @@ let check_refcount_table_allocation () =
   let module B = Qcow.Make(Ramdisk)(Time) in
   let t =
     Ramdisk.destroy ~name:"test";
-    let open FromBlock in
     Ramdisk.connect ~name:"test"
     >>= fun ramdisk ->
+    let open Lwt_write_error.Infix in
     B.create ramdisk ~size:pib ()
     >>= fun b ->
 
@@ -313,16 +321,16 @@ let check_refcount_table_allocation () =
     let buf = malloc length in
     B.write b sector (fragment 4096 buf)
     >>= fun () ->
-    Lwt.return (`Ok ()) in
+    Lwt.return (Ok ()) in
   or_failwith @@ Lwt_main.run t
 
 let check_full_disk () =
   let module B = Qcow.Make(Ramdisk)(Time) in
   let t =
     Ramdisk.destroy ~name:"test";
-    let open FromBlock in
     Ramdisk.connect ~name:"test"
     >>= fun ramdisk ->
+    let open Lwt_write_error.Infix in
     B.create ramdisk ~size:gib ()
     >>= fun b ->
 
@@ -334,10 +342,10 @@ let check_full_disk () =
     let h = B.header b in
     let sectors_per_cluster = Int64.(div (shift_left 1L (Int32.to_int h.Header.cluster_bits)) 512L) in
     let rec loop sector =
-      if sector >= info.B.size_sectors
-      then Lwt.return (`Ok ())
+      if sector >= info.Mirage_block.size_sectors
+      then Lwt.return (Ok ())
       else begin
-        let open FromBlock in
+        let open Lwt_write_error.Infix in
         B.write b sector [ buf ]
         >>= fun () ->
         loop Int64.(add sector sectors_per_cluster)
@@ -353,13 +361,13 @@ let virtual_sizes = [
 ]
 
 let check_file path size =
+  let open Lwt.Infix in
   let info = Qemu.Img.info path in
   assert_equal ~printer:Int64.to_string size info.Qemu.Img.virtual_size;
   let module M = Qcow.Make(Block)(Time) in
   repair_refcounts path
   >>= fun () ->
   Qemu.Img.check path;
-  let open FromBlock in
   Block.connect path
   >>= fun b ->
   M.connect b
@@ -370,23 +378,20 @@ let check_file path size =
      https://github.com/djs55/qemu/commit/9ac8f24fde855c66b1378cee30791a4aef5c33ba
   assert_equal ~printer:string_of_bool dirty info.Qemu.Img.dirty_flag;
   *)
-  let open Lwt.Infix in
   M.disconnect qcow
   >>= fun () ->
   Block.disconnect b
   >>= fun () ->
-  let open FromBlock in
   (* Check the qemu-nbd wrapper works *)
   Qemu.Block.connect path
   >>= fun block ->
-  let open Lwt.Infix in
   Qemu.Block.get_info block
   >>= fun info ->
-  let size = Int64.(mul info.Qemu.Block.size_sectors (of_int info.Qemu.Block.sector_size)) in
+  let size = Int64.(mul info.Mirage_block.size_sectors (of_int info.Mirage_block.sector_size)) in
   assert_equal ~printer:Int64.to_string size size;
   Qemu.Block.disconnect block
   >>= fun () ->
-  Lwt.return (`Ok ())
+  Lwt.return (Ok ())
 
 let qemu_img size =
   let path = Filename.concat test_dir (Int64.to_string size) in
@@ -407,9 +412,9 @@ let qcow_tool size =
   let t =
     truncate path
     >>= fun () ->
-    let open FromBlock in
     Block.connect path
     >>= fun block ->
+    let open Lwt_write_error.Infix in
     B.create block ~size ()
     >>= fun qcow ->
     let open Lwt.Infix in
@@ -428,9 +433,9 @@ let qcow_tool_resize ?ignore_data_loss size_from size_to =
   let t =
     truncate path
     >>= fun () ->
-    let open FromBlock in
     Block.connect path
     >>= fun block ->
+    let open Lwt_write_error.Infix in
     B.create block ~size:size_from ()
     >>= fun qcow ->
     B.resize qcow ~new_size:size_to ?ignore_data_loss ()
@@ -451,9 +456,9 @@ let qcow_tool_bad_resize size_from size_to =
   let t =
     truncate path
     >>= fun () ->
-    let open FromBlock in
     Block.connect path
     >>= fun block ->
+    let open Lwt_write_error.Infix in
     B.create block ~size:size_from ()
     >>= fun qcow ->
     let open Lwt.Infix in
@@ -464,8 +469,8 @@ let qcow_tool_bad_resize size_from size_to =
     Block.disconnect block
     >>= fun () ->
     match result with
-    | `Ok () -> failwith (Printf.sprintf "Resize succeeded when it shouldn't: size_from = %Ld; size_to = %Ld" size_from size_to)
-    | `Error _ -> Lwt.return (`Ok ()) in
+    | Ok () -> failwith (Printf.sprintf "Resize succeeded when it shouldn't: size_from = %Ld; size_to = %Ld" size_from size_to)
+    | Error _ -> Lwt.return (Ok ()) in
   or_failwith @@ Lwt_main.run t
 
 let create_resize_equals_create size_from size_to =
@@ -476,9 +481,9 @@ let create_resize_equals_create size_from size_to =
   let t =
     truncate path2
     >>= fun () ->
-    let open FromBlock in
     Block.connect path2
     >>= fun block ->
+    let open Lwt_write_error.Infix in
     B.create block ~size:size_from ()
     >>= fun qcow ->
     B.resize qcow ~new_size:size_to ()
@@ -490,9 +495,9 @@ let create_resize_equals_create size_from size_to =
     >>= fun () ->
     truncate path1
     >>= fun () ->
-    let open FromBlock in
     Block.connect path1
     >>= fun block ->
+    let open Lwt_write_error.Infix in
     B.create block ~size:size_to ()
     >>= fun qcow ->
     let open Lwt.Infix in
@@ -501,7 +506,7 @@ let create_resize_equals_create size_from size_to =
     Block.disconnect block
     >>= fun () ->
     ignore(Utils.run "diff" [ path1; path2 ]);
-    Lwt.return (`Ok ()) in
+    Lwt.return (Ok ()) in
   or_failwith @@ Lwt_main.run t
 
 let range from upto =
@@ -517,10 +522,10 @@ let create_write_discard_all_compact clusters () =
   let t =
     truncate path
     >>= fun () ->
-    let open FromBlock in
     Block.connect path
     >>= fun block ->
     let config = B.Config.create ~discard:true () in
+    let open Lwt_write_error.Infix in
     B.create block ~size ~config ()
     >>= fun qcow ->
     let h = B.header qcow in
@@ -528,25 +533,25 @@ let create_write_discard_all_compact clusters () =
     let open Lwt.Infix in
     B.get_info qcow
     >>= fun info ->
-    let sectors_per_cluster = cluster_size / info.B.sector_size in
+    let sectors_per_cluster = cluster_size / info.Mirage_block.sector_size in
     (* write a bunch of clusters at the beginning *)
     let write_cluster idx =
       let cluster = malloc cluster_size in (* don't care about the contents *)
       B.write qcow Int64.(mul idx (of_int sectors_per_cluster)) [ cluster ]
       >>= function
-      | `Error _ -> failwith "write"
-      | `Ok () ->
+      | Error _ -> failwith "write"
+      | Ok () ->
         Lwt.return_unit in
     Lwt_list.iter_s write_cluster (range 0L clusters)
     >>= fun () ->
     (* discard everything *)
-    ( B.discard qcow ~sector:0L ~n:info.B.size_sectors ()
+    ( B.discard qcow ~sector:0L ~n:info.Mirage_block.size_sectors ()
       >>= function
-      | `Error _ -> failwith "discard"
-      | `Ok () -> Lwt.return_unit )
+      | Error _ -> failwith "discard"
+      | Ok () -> Lwt.return_unit )
     >>= fun () ->
     (* compact *)
-    let open FromBlock in
+    let open Lwt_write_error.Infix in
     B.compact qcow ()
     >>= fun _report ->
     let open Lwt.Infix in
@@ -554,7 +559,7 @@ let create_write_discard_all_compact clusters () =
     >>= fun () ->
     Block.disconnect block
     >>= fun () ->
-    Lwt.return (`Ok ()) in
+    Lwt.return (Ok ()) in
   or_failwith @@ Lwt_main.run t
 
 let create_write_discard_compact () =
@@ -566,10 +571,10 @@ let create_write_discard_compact () =
   let t =
     truncate path
     >>= fun () ->
-    let open FromBlock in
     Block.connect path
     >>= fun block ->
     let config = B.Config.create ~discard:true () in
+    let open Lwt_write_error.Infix in
     B.create block ~size ~config ()
     >>= fun qcow ->
     (* write a bunch of clusters at the beginning *)
@@ -578,7 +583,7 @@ let create_write_discard_compact () =
     let open Lwt.Infix in
     B.get_info qcow
     >>= fun info ->
-    let sectors_per_cluster = cluster_size / info.B.sector_size in
+    let sectors_per_cluster = cluster_size / info.Mirage_block.sector_size in
     let make_cluster idx =
       let cluster = malloc cluster_size in
       for i = 0 to cluster_size / 8 - 1 do
@@ -589,21 +594,21 @@ let create_write_discard_compact () =
       let cluster = make_cluster idx in
       B.write qcow Int64.(mul idx (of_int sectors_per_cluster)) [ cluster ]
       >>= function
-      | `Error _ -> failwith "write"
-      | `Ok () ->
+      | Error _ -> failwith "write"
+      | Ok () ->
         Lwt.return_unit in
     let discard_cluster idx =
       B.discard qcow ~sector:Int64.(mul idx (of_int sectors_per_cluster)) ~n:(Int64.of_int sectors_per_cluster) ()
       >>= function
-      | `Error _ -> failwith "discard"
-      | `Ok () ->
+      | Error _ -> failwith "discard"
+      | Ok () ->
         Lwt.return_unit in
     let read_cluster idx =
       let cluster = malloc cluster_size in
       B.read qcow Int64.(mul idx (of_int sectors_per_cluster)) [ cluster ]
       >>= function
-      | `Error _ -> failwith "read"
-      | `Ok () ->
+      | Error _ -> failwith "read"
+      | Ok () ->
         Lwt.return cluster in
     let check_contents cluster expected =
       for i = 0 to cluster_size / 8 - 1 do
@@ -657,7 +662,7 @@ let create_write_discard_compact () =
       ) second
     >>= fun () ->
     (* compact *)
-    let open FromBlock in
+    let open Lwt_write_error.Infix in
     B.compact qcow ()
     >>= fun _report ->
     let open Lwt.Infix in
@@ -682,7 +687,7 @@ let create_write_discard_compact () =
     >>= fun () ->
     Block.disconnect block
     >>= fun () ->
-    Lwt.return (`Ok ()) in
+    Lwt.return (Ok ()) in
   or_failwith @@ Lwt_main.run t
 
 let qcow_tool_suite =

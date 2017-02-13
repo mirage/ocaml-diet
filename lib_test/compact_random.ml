@@ -13,11 +13,11 @@
  * OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
  *)
-module FromBlock = Error.FromBlock
+module Lwt_error = Error.Lwt_error
+module Lwt_write_error = Error.Lwt_write_error
 module FromResult = Error.FromResult
 
 open Utils
-open Sizes
 
 module Block = UnsafeBlock
 
@@ -38,29 +38,29 @@ let random_write_discard_compact nr_clusters stop_after =
   let t =
     truncate path
     >>= fun () ->
-    let open FromBlock in
     Block.connect path
     >>= fun block ->
     let config = B.Config.create ~discard:true () in
     B.create block ~size ~lazy_refcounts:false ~config ()
-    >>= fun qcow ->
-    let open Lwt.Infix in
+    >>= function
+    | Error _ -> failwith "B.create failed"
+    | Ok qcow ->
     B.get_info qcow
     >>= fun info ->
-    let sectors_per_cluster = cluster_size / info.B.sector_size in
-    let nr_sectors = Int64.(div size (of_int info.B.sector_size)) in
+    let sectors_per_cluster = cluster_size / info.Mirage_block.sector_size in
+    let nr_sectors = Int64.(div size (of_int info.Mirage_block.sector_size)) in
 
     (* add to this set on write, remove on discard *)
     let module SectorSet = Qcow_diet.Make(Qcow_types.Int64) in
     let written = ref SectorSet.empty in
-    let i = SectorSet.Interval.make 0L (Int64.pred info.B.size_sectors) in
+    let i = SectorSet.Interval.make 0L (Int64.pred info.Mirage_block.size_sectors) in
     let empty = ref SectorSet.(add i empty) in
     let nr_iterations = ref 0 in
 
     let write x n =
       assert (Int64.add x n <= nr_sectors);
       let y = Int64.(add x (pred n)) in
-      let buf = malloc (info.B.sector_size * (Int64.to_int n)) in
+      let buf = malloc (info.Mirage_block.sector_size * (Int64.to_int n)) in
       let rec for_each_sector x remaining =
         if Cstruct.len remaining = 0 then () else begin
           let cluster = Int64.(div x (of_int sectors_per_cluster)) in
@@ -73,8 +73,8 @@ let random_write_discard_compact nr_clusters stop_after =
       for_each_sector x buf;
       B.write qcow x [ buf ]
       >>= function
-      | `Error _ -> failwith "write"
-      | `Ok () ->
+      | Error _ -> failwith "write"
+      | Ok () ->
         if n > 0L then begin
           let i = SectorSet.Interval.make x y in
           written := SectorSet.add i !written;
@@ -86,8 +86,8 @@ let random_write_discard_compact nr_clusters stop_after =
       let y = Int64.(add x (pred n)) in
       B.discard qcow ~sector:x ~n ()
       >>= function
-      | `Error _ -> failwith "discard"
-      | `Ok () ->
+      | Error _ -> failwith "discard"
+      | Ok () ->
       if n > 0L then begin
         let i = SectorSet.Interval.make x y in
         written := SectorSet.remove i !written;
@@ -108,11 +108,11 @@ let random_write_discard_compact nr_clusters stop_after =
           begin
             let n = Int64.(succ (sub y x)) in
             assert (Int64.add x n <= nr_sectors);
-            let buf = malloc ((Int64.to_int n) * info.B.sector_size) in
+            let buf = malloc ((Int64.to_int n) * info.Mirage_block.sector_size) in
             B.read qcow x [ buf ]
             >>= function
-            | `Error _ -> failwith "read"
-            | `Ok () ->
+            | Error _ -> failwith "read"
+            | Ok () ->
               let rec for_each_sector x remaining =
                 if Cstruct.len remaining = 0 then () else begin
                   let cluster = Int64.(div x (of_int sectors_per_cluster)) in
@@ -138,7 +138,7 @@ let random_write_discard_compact nr_clusters stop_after =
     Random.init 0;
     let rec loop () =
       incr nr_iterations;
-      if !nr_iterations = stop_after then Lwt.return (`Ok ()) else begin
+      if !nr_iterations = stop_after then Lwt.return (Ok ()) else begin
         let r = Random.int 21 in
         (* A random action: mostly a write or a discard, occasionally a compact *)
         ( if 0 <= r && r < 10 then begin
@@ -177,11 +177,11 @@ let random_write_discard_compact nr_clusters stop_after =
               (fun () ->
                 Lwt.pick [
                   t;
-                  Lwt_unix.sleep 5. >>= fun () -> Lwt.return (`Error (`Unknown "compact timeout"))
+                  Lwt_unix.sleep 5. >>= fun () -> Lwt.fail_with "compact timeout"
                 ]
                 >>= function
-                | `Error _ -> failwith "compact"
-                | `Ok _report -> Lwt.return_unit
+                | Error _ -> failwith "compact"
+                | Ok _report -> Lwt.return_unit
               ) (function
                 | Lwt.Canceled -> Lwt.return_unit
                 | e -> Lwt.fail e

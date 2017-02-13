@@ -14,22 +14,32 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
+open Result
 
-type 'a error = [ `Ok of 'a | `Error of [ `Msg of string ] ]
+module Lwt_error: sig
+  module Infix : sig
+    val ( >>= ) :
+      ('a, [> `Disconnected | `Unimplemented ]) result Lwt.t ->
+      ('a -> 'b Lwt.t) -> 'b Lwt.t
+  end
+end
 
-module FromBlock: sig
-  val ( >>= ): [< `Error of Mirage_block.Error.error | `Ok of 'a ] Lwt.t
-    -> ('a -> ([> `Error of [> `Msg of string ] ] as 'b) Lwt.t)
-    -> 'b Lwt.t
+module Lwt_write_error: sig
+  module Infix : sig
+    val ( >>= ) :
+      ('a, [> `Is_read_only | `Disconnected | `Unimplemented ]) result Lwt.t ->
+      ('a -> 'b Lwt.t) -> 'b Lwt.t
+  end
 end
 
 module Infix: sig
-  val ( >>= ) : [< `Error of 'a | `Ok of 'b ] Lwt.t
-    -> ('b -> ([> `Error of 'a ] as 'c) Lwt.t)
-    -> 'c Lwt.t
+  val ( >>= ) : ('a, 'b) result Lwt.t ->
+    ('a -> ('c, 'b) result Lwt.t) -> ('c, 'b) result Lwt.t
+
 end
 
 module FromResult: sig
-  val ( >>= ) :   ('a, 'b) Result.result -> ('a -> ([> `Error of 'b ] as 'c) Lwt.t) -> 'c Lwt.t
-
+  val ( >>= ) :
+             ('a, 'b) result ->
+             ('a -> ('c, 'b) result Lwt.t) -> ('c, 'b) result Lwt.t
 end

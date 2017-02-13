@@ -16,22 +16,37 @@
  *)
 open Lwt.Infix
 
-type 'a error = [ `Ok of 'a | `Error of [ `Msg of string ] ]
+module Lwt_error = struct
+  open Lwt.Infix
+  module Infix = struct
+    let ( >>= ) m f = m >>= function
+      | Ok x -> f x
+      | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
+      | Error `Disconnected -> Lwt.fail_with "Disconnected"
+      | Error _ -> Lwt.fail_with "Unknown error"
+  end
+end
 
-module FromBlock = struct
-  let (>>=) m f = m >>= function
-    | `Error e -> Lwt.return (`Error (`Msg (Mirage_block.Error.string_of_error e)))
-    | `Ok x -> f x
+module Lwt_write_error = struct
+  module Infix = struct
+    open Lwt.Infix
+    let ( >>= ) m f = m >>= function
+      | Ok x -> f x
+      | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
+      | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
+      | Error `Disconnected -> Lwt.fail_with "Disconnected"
+      | Error _ -> Lwt.fail_with "Unknown error"
+  end
 end
 
 module Infix = struct
   let (>>=) m f = m >>= function
-    | `Error e -> Lwt.return (`Error e)
-    | `Ok x -> f x
+    | Error e -> Lwt.return (Error e)
+    | Ok x -> f x
 end
 
 module FromResult = struct
   let (>>=) m f = match m with
-    | Result.Error x -> Lwt.return (`Error x)
+    | Result.Error x -> Lwt.return (Error x)
     | Result.Ok x -> f x
 end

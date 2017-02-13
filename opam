@@ -14,10 +14,13 @@ depends: [
   "cmdliner"
   "cstruct"
   "result"
-  "mirage-types-lwt" {< "3.0.0"}
+  "mirage-types-lwt" {>= "3.0.0"}
   "lwt"
   "mirage-block" {>= "0.2"}
+  "mirage-block-lwt"
   "mirage-block-unix" {>= "2.1.0"}
+  "mirage-time"
+  "mirage-time-lwt"
   "cmdliner"
   "sexplib"
   "logs"
@@ -40,4 +43,4 @@ build-test: [
   [ "ocaml" "pkg/pkg.ml" "build" "--pinned" "%{pinned}%" "--tests" "true" ]
   [ "ocaml" "pkg/pkg.ml" "test" ]
 ]
-available: [ocaml-version >= "4.02.0"]
+available: [ocaml-version >= "4.03.0"]

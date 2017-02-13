@@ -22,7 +22,7 @@ let src =
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-module Make(Time: V1_LWT.TIME) = struct
+module Make(Time: Mirage_time_lwt.S) = struct
 
   type t = {
     description: string;
@@ -49,7 +49,7 @@ module Make(Time: V1_LWT.TIME) = struct
     | false ->
       t.loop_running <- true;
       let rec loop () =
-        let timer = Time.sleep (float_of_int duration_ms /. 1000.0) in
+        let timer = Time.sleep_ns Int64.(mul 1_000_000L (of_int duration_ms)) in
         t.timer <- timer;
         Lwt.catch
           (fun () ->

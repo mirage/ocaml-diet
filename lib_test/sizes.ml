@@ -13,7 +13,6 @@
  * OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
  *)
-module FromBlock = Error.FromBlock
 
 let mib = Int64.mul 1024L 1024L
 let gib = Int64.mul mib 1024L

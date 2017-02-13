@@ -32,18 +32,18 @@ let read_lines oc =
   aux []
 
 let or_failwith = function
-  | `Ok x -> x
-  | `Error (`Msg m) -> failwith m
+  | Ok x -> x
+  | Error (`Msg m) -> failwith m
 
 let ignore_output (_: (string list * string list)) = ()
 
 type process = int * (in_channel * out_channel * in_channel) * string
 
 let check_exit_status cmdline = function
-  | Unix.WEXITED 0 -> `Ok ()
-  | Unix.WEXITED n -> debug "%s failed" cmdline; `Error (`Msg (cmdline ^ ": " ^ (string_of_int n)))
-  | Unix.WSIGNALED n -> debug "%s killed by signal %d" cmdline n; `Error (`Msg (cmdline ^ " killed by signal %d" ^ (string_of_int n)))
-  | Unix.WSTOPPED n -> debug "%s stopped by signal %d" cmdline n; `Error (`Msg (cmdline ^ " stopped by signal %d" ^ (string_of_int n)))
+  | Unix.WEXITED 0 -> Ok ()
+  | Unix.WEXITED n -> debug "%s failed" cmdline; Error (`Msg (cmdline ^ ": " ^ (string_of_int n)))
+  | Unix.WSIGNALED n -> debug "%s killed by signal %d" cmdline n; Error (`Msg (cmdline ^ " killed by signal %d" ^ (string_of_int n)))
+  | Unix.WSTOPPED n -> debug "%s stopped by signal %d" cmdline n; Error (`Msg (cmdline ^ " stopped by signal %d" ^ (string_of_int n)))
 
 let start cmd args : process =
   let stdin_r, stdin_w = Unix.pipe () in
@@ -80,13 +80,13 @@ let run cmd args =
   let out = read_lines oc in
   let err = read_lines ec in
   match wait' (pid, (oc, ic, ec), cmdline) with
-  | `Ok _ -> out, err
-  | `Error (`Msg m) -> failwith (m ^ "\n" ^ (String.concat "\n" out) ^ "\n" ^ (String.concat "\n" err))
+  | Ok _ -> out, err
+  | Error (`Msg m) -> failwith (m ^ "\n" ^ (String.concat "\n" out) ^ "\n" ^ (String.concat "\n" err))
 
 (* No need for data integrity during tests *)
 module UnsafeBlock = struct
   include Block
-  let flush _ = Lwt.return (`Ok ())
+  let flush _ = Lwt.return (Ok ())
 end
 
 let truncate path =
@@ -111,5 +111,5 @@ let malloc (length: int) =
 
 module Time = struct
   type 'a io = 'a Lwt.t
-  let sleep = Lwt_unix.sleep
+  let sleep_ns ns = Lwt_unix.sleep (Int64.to_float ns /. 1_000_000_000.0)
 end

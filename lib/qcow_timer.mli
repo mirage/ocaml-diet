@@ -15,7 +15,7 @@
  *
  *)
 
-module Make(Time: V1_LWT.TIME): sig
+module Make(Time: Mirage_time_lwt.S): sig
 
   type t
   (** A timer which runs a background task after a set duration. The timer can

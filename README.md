@@ -52,7 +52,7 @@ module Qcow_on_ramdisk :                                                        
       t ->
       int64 -> page_aligned_buffer list -> [ `Error of error | `Ok of unit ] io
     val create : Ramdisk.t -> int64 -> [ `Error of error | `Ok of t ] io
-    val connect : Ramdisk.t -> [ `Error of error | `Ok of t ] io
+    val connect : Ramdisk.t -> t io
     val resize : t -> int64 -> [ `Error of error | `Ok of unit ] io
     val seek_unmapped : t -> int64 -> [ `Error of error | `Ok of int64 ] io
     val seek_mapped : t -> int64 -> [ `Error of error | `Ok of int64 ] io

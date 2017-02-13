@@ -17,8 +17,8 @@
 module Error = Qcow_error
 module Header = Qcow_header
 
-module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) : sig
-  include V1_LWT.BLOCK
+module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
+  include Mirage_block_lwt.S
 
   module Config: sig
     type t = {
@@ -36,7 +36,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) : sig
     val to_string: t -> string
     (** Marshal a config into a string suitable for a command-line argument *)
 
-    val of_string: string -> [ `Ok of t | `Error of [ `Msg of string ] ]
+    val of_string: string -> (t, [ `Msg of string ]) result
     (** Parse the result of a previous [to_string] invocation *)
   end
 
@@ -51,17 +51,17 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) : sig
 
   val create: B.t -> size:int64 -> ?lazy_refcounts:bool
       -> ?config:Config.t -> unit
-      -> [ `Ok of t | `Error of error ] io
+      -> (t, write_error) result io
   (** [create block ~size ?lazy_refcounts ()] initialises a qcow-formatted
       image on [block] with virtual size [size] in bytes. By default the file
       will use lazy refcounts, but this can be overriden by supplying
       [~lazy_refcounts:false] *)
 
-  val connect: ?config:Config.t -> B.t -> [ `Ok of t | `Error of error ] io
+  val connect: ?config:Config.t -> B.t -> t io
   (** [connect ?config block] connects to an existing qcow-formatted image on
       [block]. *)
 
-  val resize: t -> new_size:int64 -> ?ignore_data_loss:bool -> unit -> [ `Ok of unit | `Error of error ] io
+  val resize: t -> new_size:int64 -> ?ignore_data_loss:bool -> unit -> (unit, write_error) result io
   (** [resize block new_size_bytes ?ignore_data_loss] changes the size of the
       qcow-formatted image to [new_size_bytes], rounded up to the next allocation
       unit. This function will fail with an error if the new size would be
@@ -77,27 +77,27 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) : sig
   (** Summary of the compaction run *)
 
   val compact: t -> ?progress_cb:(percent:int -> unit) -> unit ->
-    [ `Ok of compact_result | `Error of error ] io
+    (compact_result, write_error) result io
   (** [compact t ()] scans the disk for unused space and attempts to fill it
       and shrink the file. This is useful if the underlying block device doesn't
       support discard and we must emulate it. *)
 
-  val discard: t -> sector:int64 -> n:int64 -> unit -> [ `Ok of unit | `Error of error ] io
+  val discard: t -> sector:int64 -> n:int64 -> unit -> (unit, write_error) result io
   (** [discard sector n] signals that the [n] sectors starting at [sector]
       are no longer needed and the contents may be discarded. Note the contents
       may not actually be deleted: this is not a "secure erase". *)
 
-  val seek_unmapped: t -> int64 -> [ `Ok of int64 | `Error of error ] io
+  val seek_unmapped: t -> int64 -> (int64, error) result io
   (** [seek_unmapped t start] returns the offset of the next "hole": a region
       of the device which is guaranteed to be full of zeroes (typically
       guaranteed because it is unmapped) *)
 
-  val seek_mapped: t -> int64 -> [ `Ok of int64 | `Error of error ] io
+  val seek_mapped: t -> int64 -> (int64, error) result io
   (** [seek_mapped t start] returns the offset of the next region of the
       device which may have data in it (typically this is the next mapped
       region) *)
 
-  val rebuild_refcount_table: t -> [ `Ok of unit | `Error of error ] io
+  val rebuild_refcount_table: t -> (unit, write_error) result io
   (** [rebuild_refcount_table t] rebuilds the refcount table from scratch.
       Normally we won't update the refcount table live, for performance. *)
 
@@ -106,7 +106,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: V1_LWT.TIME) : sig
     used: int64; (** used sectors *)
   }
 
-  val check: t -> [ `Ok of check_result | `Error of error ] io
+  val check: t -> (check_result, error) result io
   (** [check t] performs sanity checks of the file, looking for errors *)
 
   val header: t -> Header.t
