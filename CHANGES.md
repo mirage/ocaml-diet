@@ -1,3 +1,8 @@
+0.8.0 (2017-02-13)
+- update to Mirage 3 APIs
+- now requires OCaml 4.03+
+- ensure the interval tree is kept balanced
+
 0.7.2 (2016-12-21)
 - if `discard` is not enabled, fail `discard` calls
 - if `discard` is enabled, enable lazy-refcounts and zero refcount clusters
