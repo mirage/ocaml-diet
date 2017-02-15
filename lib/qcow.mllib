@@ -16,4 +16,5 @@ Qcow_padded
 Qcow_cstructs
 Qcow_recycler
 Qcow_metadata
+Qcow_block_cache
 Qcow
