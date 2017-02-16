@@ -428,7 +428,8 @@ let pattern common_options_t trace filename size number =
      if trace
      then (module TracedBlock: BLOCK)
      else (module Block: BLOCK) in
-  let module BLOCK = (val block: BLOCK) in
+  let module Uncached = (val block: BLOCK) in
+  let module BLOCK = Qcow_block_cache.Make(Uncached) in
   let module B = Qcow.Make(BLOCK)(Time) in
   let open Lwt in
   let progress_cb = if common_options_t.Common.progress then Some progress_cb else None in
@@ -437,7 +438,9 @@ let pattern common_options_t trace filename size number =
     >>= fun fd ->
     Lwt_unix.close fd
     >>= fun () ->
-    BLOCK.connect filename
+    Uncached.connect filename
+    >>= fun uncached ->
+    BLOCK.connect uncached
     >>= fun x ->
     B.create x ~size ~lazy_refcounts:true ()
     >>= function
@@ -466,6 +469,8 @@ let pattern common_options_t trace filename size number =
               loop Int64.(add sector (mul 2L (of_int cluster_size_sectors)))
           end in
         loop 0L
+        >>= fun () ->
+        BLOCK.disconnect x
         >>= fun () ->
         Lwt.return (`Ok ())
       | _ -> failwith (Printf.sprintf "Unknown pattern %d" number)
