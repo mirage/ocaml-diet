@@ -1450,9 +1450,10 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let open Lwt in
     B.get_info base
     >>= fun base_info ->
-    (* make will use the file size to figure out where to allocate new clusters
-       therefore we must resize the backing device now *)
+    (* Erase existing contents *)
     let open Lwt_write_error.Infix in
+    resize_base base base_info.Mirage_block.sector_size None (Physical.make 0L)
+    >>= fun () ->
     let p = Physical.make next_free_byte in
     resize_base base base_info.Mirage_block.sector_size None p
     >>= fun () ->
