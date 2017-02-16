@@ -64,10 +64,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
 
   type t = {
     base: B.t;
+    mutable info: Mirage_block.info;
     sector_size: int;
     max_size_bytes: int64;
     mutable current_size_bytes: int64;
     mutable in_cache: Int64.IntervalSet.t;
+    mutable zeros: Int64.IntervalSet.t;
     mutable cache: Cstruct.t Int64.Map.t;
     locks: RangeLocks.t;
     mutable disconnect_request: bool;
@@ -75,7 +77,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     write_back_m: Lwt_mutex.t;
   }
 
-  let get_info t = B.get_info t.base
+  let get_info t = Lwt.return t.info
 
   let lazy_write_back t =
     Lwt_mutex.with_lock t.write_back_m
@@ -118,14 +120,15 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let sector_size = info.Mirage_block.sector_size in
     let current_size_bytes = 0L in
     let in_cache = Int64.IntervalSet.empty in
+    let zeros = Int64.IntervalSet.empty in
     let cache = Int64.Map.empty in
     let locks = RangeLocks.create () in
     let disconnect_request = false in
     let disconnect_m = Lwt_mutex.create () in
     let write_back_m = Lwt_mutex.create () in
     let t = {
-      base; sector_size; max_size_bytes; current_size_bytes; in_cache; cache;
-      locks; disconnect_request; disconnect_m; write_back_m;
+      base; info; sector_size; max_size_bytes; current_size_bytes; in_cache; cache;
+      zeros; locks; disconnect_request; disconnect_m; write_back_m;
     } in
     Lwt.return t
 
@@ -214,5 +217,28 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
         )
 
   let resize t new_size =
+    let open Lwt.Infix in
     B.resize t.base new_size
+    >>= function
+    | Error e -> Lwt.return (Error e)
+    | Ok () ->
+      (* If the file has become smaller, drop cached blocks beyond the new file
+         size *)
+      if new_size < t.info.Mirage_block.size_sectors then begin
+        let still_ok, to_drop = Int64.Map.partition (fun sector _ -> sector < new_size) t.cache in
+        let to_drop', nsectors = Int64.Map.fold (fun sector _ (set, count) ->
+          let i = Int64.IntervalSet.Interval.make sector sector in
+          Int64.IntervalSet.(add i set), count + 1
+        ) to_drop (Int64.IntervalSet.empty, 0) in
+        t.cache <- still_ok;
+        t.in_cache <- Int64.IntervalSet.diff t.in_cache to_drop';
+        t.current_size_bytes <- Int64.(sub t.current_size_bytes (mul (of_int t.sector_size) (of_int nsectors));)
+      end;
+      (* If the file has become bigger, we know the new blocks contain zeroes *)
+      if new_size > t.info.Mirage_block.size_sectors then begin
+        let i = Int64.IntervalSet.Interval.make t.info.Mirage_block.size_sectors (Int64.pred new_size) in
+        t.zeros <- Int64.IntervalSet.add i t.zeros;
+      end;
+      t.info <- { t.info with Mirage_block.size_sectors = new_size };
+      Lwt.return (Ok ())
 end
