@@ -75,6 +75,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     mutable disconnect_request: bool;
     disconnect_m: Lwt_mutex.t;
     write_back_m: Lwt_mutex.t;
+    zero: Cstruct.t;
   }
 
   let get_info t = Lwt.return t.info
@@ -82,6 +83,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
   let lazy_write_back t =
     Lwt_mutex.with_lock t.write_back_m
       (fun () ->
+        (* coalesce known-zeros together with data blocks *)
+        let all = Int64.IntervalSet.union t.in_cache t.zeros in
         Int64.IntervalSet.fold_s
           (fun i err -> match err with
             | Error e -> Lwt.return (Error e)
@@ -91,10 +94,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
                   let x, y = Int64.IntervalSet.Interval.(x i, y i) in
                   let rec bufs acc sector =
                     if sector > y then List.rev acc else begin
-                      assert(Int64.Map.mem sector t.cache);
-                      let buf = Int64.Map.find sector t.cache in
-                      t.in_cache <- Int64.IntervalSet.remove i t.in_cache;
-                      t.cache <- Int64.Map.remove sector t.cache;
+                      let buf =
+                        if Int64.Map.mem sector t.cache then begin
+                          let buf = Int64.Map.find sector t.cache in
+                          t.in_cache <- Int64.IntervalSet.remove i t.in_cache;
+                          t.cache <- Int64.Map.remove sector t.cache;
+                          buf
+                        end else t.zero in
                       bufs (buf :: acc) (Int64.succ sector)
                     end in
                   let bufs = bufs [] x in
@@ -102,7 +108,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
                   t.current_size_bytes <- Int64.sub t.current_size_bytes len;
                   B.write t.base x bufs
                 )
-          ) t.in_cache (Ok ())
+          ) all (Ok ())
       )
 
   let flush t =
@@ -126,9 +132,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     let disconnect_request = false in
     let disconnect_m = Lwt_mutex.create () in
     let write_back_m = Lwt_mutex.create () in
+    let zero = Cstruct.create sector_size in
+    Cstruct.memset zero 0;
     let t = {
       base; info; sector_size; max_size_bytes; current_size_bytes; in_cache; cache;
-      zeros; locks; disconnect_request; disconnect_m; write_back_m;
+      zeros; locks; disconnect_request; disconnect_m; write_back_m; zero;
     } in
     Lwt.return t
 
