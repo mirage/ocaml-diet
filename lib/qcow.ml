@@ -73,10 +73,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         | Ok () -> t
       ) (Ok ()) threads
 
-  module Int64Map = Map.Make(Int64)
-  module Int64Set = Set.Make(Int64)
-
-
   module Cache = Qcow_cache
   module Recycler = Qcow_recycler.Make(B)(Time)
   module Metadata = Qcow_metadata
@@ -98,13 +94,11 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   type t = {
     mutable h: Header.t;
     base: B.t;
-    base_info: Mirage_block.info;
     config: Config.t;
     info: Mirage_block.info;
     cache: Cache.t;
     locks: Qcow_cluster.t;
     recycler: Recycler.t;
-    mutable next_cluster: int64; (* when the file is extended *)
     metadata: Metadata.t;
     (* for convenience *)
     cluster_bits: int;
@@ -191,7 +185,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () ->
-      Log.debug (fun f -> f "Resized device to %Ld sectors of size %d" (Qcow_physical.to_bytes new_size) sector_size);
+      Log.debug (fun f -> f "Resized device to %Ld bytes" (Qcow_physical.to_bytes new_size));
       Lwt.return (Ok ())
     end
 
@@ -207,19 +201,31 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
         This must be called via Qcow_cluster.with_metadata_lock, to prevent
         a parallel thread allocating another cluster for the same purpose.
+        This also prevents the recycling thread from resizing the file
+        concurrently.
         *)
     let allocate_clusters t n f =
+      let open Lwt.Infix in
+      B.get_info t.base
+      >>= fun base_info ->
       let open Lwt_write_error.Infix in
-      (* Before we allocate, ftruncate the file. This ensures that blocks allocated
-         after t.next_cluster actually contain zeroes *)
-      let next_cluster_should_be = Int64.succ @@ Qcow_cluster_map.get_last_block t.cluster_map in
-      ( if next_cluster_should_be <> t.next_cluster then begin
-          Log.info (fun f -> f "Allocator: next_cluster = %Ld but should be %Ld, truncating file" t.next_cluster next_cluster_should_be);
-          t.next_cluster <- next_cluster_should_be;
+      let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
+      let limit = 256L in (* 16 MiB *)
+      let quantum = 512L in (* 32 MiB *)
+      let max_cluster_needed = Int64.add n @@ Qcow_cluster_map.get_last_block t.cluster_map in
+      let max_cluster = Int64.div base_info.Mirage_block.size_sectors sectors_per_cluster in
+      let max_cluster_should_be =
+        if Int64.sub max_cluster max_cluster_needed < limit
+        then Int64.add max_cluster quantum
+        else max_cluster in (* keep it the same *)
+      ( if max_cluster_should_be <> max_cluster then begin
+          Log.info (fun f -> f "Allocator: max_cluster = %Ld but should be %Ld, enlarging file" max_cluster max_cluster_should_be);
           (* Resync the file size only *)
-          resize_base t.base t.sector_size (Some(t.cluster_map, t.cluster_bits)) (Physical.make (t.next_cluster <| t.cluster_bits))
+          let p = Physical.make (max_cluster_should_be <| t.cluster_bits) in
+          let size_sectors = Physical.sector ~sector_size:t.sector_size p in
+          resize_base t.base t.sector_size (Some(t.cluster_map, t.cluster_bits)) p
           >>= fun () ->
-          Log.debug (fun f -> f "Resized file to %Ld clusters" t.next_cluster);
+          Log.debug (fun f -> f "Resized file to %Ld clusters (%Ld sectors)" max_cluster_should_be size_sectors);
           Lwt.return (Ok ())
         end else Lwt.return (Ok ()) ) >>= fun () ->
       (* Take them from the free list if they are available *)
@@ -228,16 +234,12 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Log.debug (fun f -> f "Allocated %Ld clusters from free list" n);
         f (set, true)
       | None ->
-        let cluster = t.next_cluster in
-        t.next_cluster <- Int64.add t.next_cluster n;
+        let cluster = Int64.succ @@ Qcow_cluster_map.get_last_block t.cluster_map in
         let free = FreeClusters.Interval.make cluster Int64.(add cluster (pred n)) in
         let set = FreeClusters.(add free empty) in
         Qcow_cluster_map.with_roots t.cluster_map set
           (fun () ->
             Log.debug (fun f -> f "Soft allocated span of clusters from %Ld (length %Ld)" cluster n);
-            let open Lwt_write_error.Infix in
-            resize_base t.base t.sector_size (Some (t.cluster_map, t.cluster_bits)) (Physical.make (t.next_cluster <| t.cluster_bits))
-            >>= fun () ->
             f (set, true)
           )
 
@@ -822,6 +824,13 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   let make_cluster_map t =
     let open Qcow_cluster_map in
+    let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
+    let open Lwt.Infix in
+    B.get_info t.base
+    >>= fun base_info ->
+    let max_cluster = Int64.div base_info.Mirage_block.size_sectors sectors_per_cluster in
+    let next_cluster = Int64.succ max_cluster in
+
     (* Iterate over the all clusters referenced from all the tables in the file
        and (a) construct a set of free clusters; and (b) construct a map of
        physical cluster back to virtual. The free set will show us the holes,
@@ -838,7 +847,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster_size = 1L <| t.cluster_bits in
     let max_possible_cluster = (Int64.round_up t.h.Header.size cluster_size) |> t.cluster_bits in
     let free = Qcow_bitmap.make_full
-      ~initial_size:(Int64.to_int t.next_cluster)
+      ~initial_size:(Int64.to_int max_cluster)
       ~maximum_size:(Int64.(to_int (mul 10L max_possible_cluster))) in
     (* Subtract the fixed structures at the beginning of the file *)
     Qcow_bitmap.(remove (Interval.make l1_table_start_cluster (Int64.(pred @@ add l1_table_start_cluster l1_table_clusters))) free);
@@ -848,7 +857,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       try
         Qcow_bitmap.min_elt free
       with
-      | Not_found -> t.next_cluster in
+      | Not_found -> next_cluster in
 
     let parse x =
       if x = Physical.unmapped then 0L else begin
@@ -857,7 +866,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       end in
 
     let mark rf cluster =
-      let max_cluster = Int64.pred t.next_cluster in
       let c, w = rf in
       if cluster > max_cluster then begin
         Log.err (fun f -> f "Found a reference to cluster %Ld outside the file (max cluster %Ld) from cluster %Ld.%d" cluster max_cluster c w);
@@ -998,7 +1006,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 Log.debug (fun f -> f "Disk clusters: %s" (to_summary_string map));
                 let start_last_block = get_last_block map in
 
-                let sector_size = Int64.of_int t.base_info.Mirage_block.sector_size in
+                let sector_size = Int64.of_int t.sector_size in
                 let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
                 let sectors_per_cluster = Int64.div (1L <| cluster_bits) sector_size in
 
@@ -1059,7 +1067,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
                 let last_block = get_last_block map in
                 Log.debug (fun f -> f "Shrink file so that last cluster was %Ld, now %Ld" start_last_block last_block);
-                t.next_cluster <- Int64.succ last_block;
 
                 let open Lwt_write_error.Infix in
                 Cluster.allocate_clusters t 0L (fun _ -> Lwt.return (Ok ())) (* takes care of the file size *)
@@ -1174,11 +1181,20 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let sector_size = base_info.Mirage_block.sector_size in
     let cluster_bits = Int32.to_int h.Header.cluster_bits in
     (* The first cluster is allocated after the L1 table *)
-    let size_bytes = Int64.(mul base_info.Mirage_block.size_sectors (of_int sector_size)) in
     let cluster_size = 1L <| cluster_bits in
     (* qemu-img will allocate a cluster by writing only a single sector to the end
-       of the file. Therefore we must round up: *)
-    let next_cluster = Int64.(div (round_up size_bytes cluster_size) cluster_size) in
+       of the file. We insist that the file is a whole number of clusters in size. *)
+    let sectors_per_cluster = Int64.(div (1L <| cluster_bits) (of_int sector_size)) in
+    let new_size_sectors = Int64.round_up base_info.Mirage_block.size_sectors sectors_per_cluster in
+    ( if new_size_sectors > base_info.Mirage_block.size_sectors then begin
+        Log.info (fun f -> f "rounding up file to a whole number of clusters (= %Ld sectors)" new_size_sectors);
+        B.resize base new_size_sectors
+        >>= function
+        | Error _ -> Lwt.fail_with "resizing file"
+        | Ok () -> Lwt.return_unit
+      end else Lwt.return_unit )
+    >>= fun () ->
+
     let locks = Qcow_cluster.make () in
     let read_cluster i =
       let buf = malloc h in
@@ -1225,8 +1241,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster_map = Qcow_cluster_map.zero in
     let cluster_map_m = Lwt_mutex.create () in
     let t' = {
-      h; base; info = info'; config; base_info;
-      locks; recycler; next_cluster;
+      h; base; info = info'; config;
+      locks; recycler;
       metadata; cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock;
       background_compact_timer; cluster_map; cluster_map_m;
     } in
@@ -1437,7 +1453,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     (* make will use the file size to figure out where to allocate new clusters
        therefore we must resize the backing device now *)
     let open Lwt_write_error.Infix in
-    resize_base base base_info.Mirage_block.sector_size None (Physical.make next_free_byte)
+    let p = Physical.make next_free_byte in
+    resize_base base base_info.Mirage_block.sector_size None p
     >>= fun () ->
     let open Lwt.Infix in
     make config base h
@@ -1449,13 +1466,14 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster = malloc t.h in
     Cstruct.memset cluster 0;
     let open Lwt.Infix in
-    B.write base (Physical.sector ~sector_size:t.base_info.Mirage_block.sector_size refcount_table_offset) [ cluster ]
+    B.write base (Physical.sector ~sector_size:t.sector_size refcount_table_offset) [ cluster ]
     >>= function
     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
     | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
     | Ok () ->
     let open Lwt_write_error.Infix in
+    let next_cluster = Int64.div next_free_byte cluster_size in
     let rec loop limit i =
       if i = limit
       then Lwt.return (Ok ())
@@ -1464,11 +1482,11 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         >>= fun () ->
         loop limit (Int64.succ i) in
     (* Increase the refcount of all header clusters i.e. those < next_free_cluster *)
-    loop t.next_cluster 0L
+    loop next_cluster 0L
     >>= fun () ->
     (* Write an initial empty L1 table *)
     let open Lwt.Infix in
-    B.write base (Physical.sector ~sector_size:t.base_info.Mirage_block.sector_size l1_table_offset) [ cluster ]
+    B.write base (Physical.sector ~sector_size:t.sector_size l1_table_offset) [ cluster ]
     >>= function
     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
@@ -1617,8 +1635,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let assert_no_leaked_blocks t =
       Qcow_cluster_map.Debug.assert_no_leaked_blocks t.cluster_map
-
-    let set_next_cluster t x = t.next_cluster <- x
 
     let flush t =
       let open Lwt.Infix in

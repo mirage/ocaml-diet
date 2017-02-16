@@ -73,8 +73,6 @@ module type DEBUG = sig
 
   val check_no_overlaps: t -> (unit, error) result Lwt.t
 
-  val set_next_cluster: t -> int64 -> unit
-
   val assert_no_leaked_blocks: t -> unit
 
   val flush: t -> (unit, error) result Lwt.t
