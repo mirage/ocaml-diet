@@ -22,6 +22,7 @@ depends: [
   "mirage-time"
   "mirage-time-lwt"
   "cmdliner"
+  "sha"
   "sexplib"
   "logs"
   "fmt"

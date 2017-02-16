@@ -350,6 +350,48 @@ let repair unsafe_buffering filename =
     | Ok x -> Lwt.return (`Ok x)
   )
 
+let sha _common_options_t filename =
+  let module B = Qcow.Make(Block)(Time) in
+  let open Lwt in
+  let t =
+    Block.connect filename
+    >>= fun x ->
+    B.connect x
+    >>= fun x ->
+    B.get_info x
+    >>= fun info ->
+    let ctx = Sha1.init () in
+    let update_cstruct c =
+      let b' : (int, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t = Obj.magic c.Cstruct.buffer in
+      if c.Cstruct.off = 0 && c.Cstruct.len = (Bigarray.Array1.dim b')
+      then Sha1.update_buffer ctx b'
+      else begin
+        let c' = Cstruct.create (Cstruct.len c) in
+        Cstruct.blit c 0 c' 0 (Cstruct.len c);
+        let b' : (int, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t = Obj.magic c'.Cstruct.buffer in
+        Sha1.update_buffer ctx b'
+      end in
+    let buf = Io_page.(to_cstruct @@ get 1024) in
+    let buf_sectors = Int64.of_int (Cstruct.len buf / info.Mirage_block.sector_size) in
+    let rec loop sector =
+      let remaining = Int64.sub info.Mirage_block.size_sectors sector in
+      if remaining = 0L then Lwt.return_unit else begin
+        let n = min buf_sectors remaining in
+        let buf = Cstruct.sub buf 0 (Int64.to_int n * info.Mirage_block.sector_size) in
+        B.read x sector [ buf ]
+        >>= function
+        | Error _ -> Lwt.fail_with (Printf.sprintf "Failed to read sector %Ld" sector)
+        | Ok () ->
+          update_cstruct buf;
+          loop (Int64.add sector n)
+      end in
+    loop 0L
+    >>= fun () ->
+    let digest = Sha1.finalize ctx in
+    Printf.printf "%s\n" (Sha1.to_hex digest);
+    return (`Ok ()) in
+  Lwt_main.run t
+
 let decode filename output =
   let module B = Qcow.Make(Block)(Time) in
   let open Lwt in
