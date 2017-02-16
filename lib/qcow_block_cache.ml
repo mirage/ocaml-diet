@@ -95,8 +95,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
                       t.cache <- Int64.Map.remove sector t.cache;
                       bufs (buf :: acc) (Int64.succ sector)
                     end in
+                  let bufs = bufs [] x in
+                  let len = Int64.of_int @@ Cstructs.len bufs in
                   t.current_size_bytes <- Int64.sub t.current_size_bytes len;
-                  B.write t.base x (bufs [] x)
+                  B.write t.base x bufs
                 )
           ) t.in_cache (Ok ())
       )
