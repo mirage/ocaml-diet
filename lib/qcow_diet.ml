@@ -101,7 +101,7 @@ let create x y l r =
   let cardinal = Elt.(succ (y - x) + (cardinal l) + (cardinal r)) in
   Node { x; y; l; r; h; cardinal }
 
-let node x y l r =
+let rec node x y l r =
   let hl = height l and hr = height r in
   let open Pervasives in
   if hl > hr + 2 then begin
@@ -109,21 +109,21 @@ let node x y l r =
     | Empty -> assert false
     | Node { x = lx; y = ly; l = ll; r = lr; _ } ->
       if height ll >= (height lr)
-      then create lx ly ll (create x y lr r)
+      then node lx ly ll (node x y lr r)
       else match lr with
         | Empty -> assert false
         | Node { x = lrx; y = lry; l = lrl; r = lrr; _ } ->
-          create lrx lry (create lx ly ll lrl) (create x y lrr r)
+          node lrx lry (node lx ly ll lrl) (node x y lrr r)
   end else if hr > hl + 2 then begin
     match r with
     | Empty -> assert false
     | Node { x = rx; y = ry; l = rl; r = rr; _ } ->
       if height rr >= height rl
-      then create rx ry (create x y l rl) rr
+      then node rx ry (node x y l rl) rr
       else match rl with
         | Empty -> assert false
         | Node { x = rlx; y = rly; l = rll; r = rlr; _ } ->
-          create rlx rly (create x y l rll) (create rx ry rlr rr)
+          node rlx rly (node x y l rll) (node rx ry rlr rr)
   end else create x y l r
 
   let depth tree =
@@ -376,8 +376,10 @@ let node x y l r =
       let r = remove (n.y, y) n.r in
       merge l r
     (* completely within *)
-    | Node n when eq y n.y -> Node { n with y = pred x }
-    | Node n when eq x n.x -> Node { n with x = succ y }
+    | Node n when eq y n.y ->
+      node n.x (pred x) n.l n.r
+    | Node n when eq x n.x ->
+      node (succ y) n.y n.l n.r
     | Node n ->
       assert (n.x <= pred x);
       assert (succ y <= n.y);
