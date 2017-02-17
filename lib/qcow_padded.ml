@@ -33,12 +33,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
       let available_sectors = Int64.(sub (div buf_len (of_int base_info.Mirage_block.sector_size)) missing_sectors) in
       let bytes = Int64.(to_int (mul available_sectors (of_int base_info.Mirage_block.sector_size))) in
       let open Lwt.Infix in
-      B.read base base_sector (Cstructs.sub buf 0 bytes)
+      ( if bytes > 0
+        then B.read base base_sector (Cstructs.sub buf 0 bytes)
+        else Lwt.return (Ok ()) )
       >>= function
       | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Ok () ->
-        Cstructs.(memset (shift buf bytes) 0);
+        Cstructs.(memset (shift buf (max 0 bytes)) 0);
         Lwt.return (Ok ())
     end else begin
       B.read base base_sector buf
