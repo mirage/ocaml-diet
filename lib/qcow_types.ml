@@ -86,8 +86,7 @@ module Int64 = struct
     let sexp_of_t = sexp_of__t
     let t_of_sexp = _t_of_sexp
 
-    let to_int64 x = x
-    let of_int64 x = x
+
   end
   module IntervalSet = Qcow_diet.Make(M)
   module Map = Map.Make(M)
@@ -123,6 +122,13 @@ module Int = struct
     let div x y = x / y
     let to_int64 = Int64.of_int
     let of_int64 = Int64.to_int
+    let to_int x = x
+    let of_int x = x
+    let to_string = string_of_int
+    let shift_left x n = x lsl n
+    let shift_right_logical x n = x lsr n
+    let logor x y = x lor y
+    let rem x y = x mod y
   end
   module IntervalSet = Qcow_diet.Make(M)
   module Map = Map.Make(M)
@@ -132,4 +138,4 @@ module Int = struct
 
 end
 
-module Cluster = Int64
+module Cluster = Int

@@ -88,7 +88,11 @@ module Cluster : sig
   val of_int: int -> t
   val to_int: t -> int
   val to_string: t -> string
-
+  val shift_left: t -> int -> t
+  val shift_right_logical: t -> int -> t
+  val logor: t -> t -> t
+  val rem: t -> t -> t
+  
   val round_up: t -> t -> t
   (** [round_up value to] rounds [value] to the next multiple of [to] *)
 
