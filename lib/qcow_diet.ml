@@ -448,11 +448,12 @@ module Test = struct
       | 0 -> set, diet
       | m ->
         let r = Random.int n in
+        let r' = Random.int (n - r) + r in
         let add = Random.bool () in
-        let set, diet' =
-          if add
-          then IntSet.add r set, IntDiet.add (IntDiet.Interval.make r r) diet
-          else IntSet.remove r set, IntDiet.remove (IntDiet.Interval.make r r) diet in
+        let rec range from upto =
+          if from > upto then [] else from :: (range (from + 1) upto) in
+        let set = List.fold_left (fun set elt -> (if add then IntSet.add else IntSet.remove) elt set) set (range r r') in
+        let diet' = (if add then IntDiet.add else IntDiet.remove) (IntDiet.Interval.make r r') diet in
         begin
           try
             IntDiet.Invariant.check diet';
@@ -482,7 +483,7 @@ module Test = struct
     end
 
   let test_adds () =
-    for _ = 1 to 1000 do
+    for _ = 1 to 100 do
       let set, diet = make_random 1000 1000 in
       begin
         try
@@ -497,7 +498,7 @@ module Test = struct
     done
 
   let test_operator set_op diet_op () =
-    for _ = 1 to 1000 do
+    for _ = 1 to 100 do
       let set1, diet1 = make_random 1000 1000 in
       let set2, diet2 = make_random 1000 1000 in
       check_equals set1 diet1;
