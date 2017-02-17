@@ -89,8 +89,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     }
   end
 
-  module Timer = Qcow_timer.Make(Time)
-
   type t = {
     mutable h: Header.t;
     base: B.t;
@@ -106,7 +104,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     mutable lazy_refcounts: bool; (* true if we are omitting refcounts right now *)
     mutable stats: Stats.t;
     metadata_lock: Qcow_rwlock.t; (* held to stop the world during compacts and resizes *)
-    background_compact_timer: Timer.t;
     mutable cluster_map: Qcow_cluster_map.t; (* a live map of the allocated storage *)
     cluster_map_m: Lwt_mutex.t;
   }
@@ -754,7 +751,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       end
 
   let read t sector bufs =
-    Timer.cancel t.background_compact_timer;
     let open Lwt_error.Infix in
     Qcow_rwlock.with_read_lock t.metadata_lock
       (fun () ->
@@ -785,7 +781,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       )
 
   let write t sector bufs =
-    Timer.cancel t.background_compact_timer;
     let open Lwt_write_error.Infix in
     Qcow_rwlock.with_read_lock t.metadata_lock
       (fun () ->
@@ -1222,29 +1217,13 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let stats = Stats.zero in
     let metadata_lock = Qcow_rwlock.make () in
     let t = ref None in
-    let background_compact_timer = Timer.make ~description:"compact" ~f:(fun () ->
-      match !t with
-      | None ->
-        Lwt.return_unit
-      | Some t ->
-        (* Don't schedule another compact until the nr_unmapped is above the
-           threshold again. *)
-        t.stats.Stats.nr_unmapped <- 0L;
-        compact t ()
-        >>= function
-        | Ok _report ->
-          Lwt.return_unit
-        | Error _e ->
-          Log.err (fun f -> f "background compaction returned error");
-          Lwt.return_unit
-      ) () in
     let cluster_map = Qcow_cluster_map.zero in
     let cluster_map_m = Lwt_mutex.create () in
     let t' = {
       h; base; info = info'; config;
       locks; recycler;
       metadata; cache; sector_size; cluster_bits; lazy_refcounts; stats; metadata_lock;
-      background_compact_timer; cluster_map; cluster_map_m;
+      cluster_map; cluster_map_m;
     } in
     Lwt_error.or_fail_with @@ make_cluster_map t'
     >>= fun cluster_map ->
@@ -1371,7 +1350,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Lwt.return (Error `Unimplemented)
       end else Lwt.return (Ok ()) )
     >>= fun () ->
-    Timer.cancel t.background_compact_timer;
     Qcow_rwlock.with_read_lock t.metadata_lock
       (fun () ->
         (* we can only discard whole clusters. We will explicitly zero non-cluster
@@ -1401,12 +1379,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           end in
         loop sector' n'
       )
-    >>= fun () ->
-    match t.config.Config.compact_after_unmaps with
-    | Some sectors when t.stats.Stats.nr_unmapped > sectors ->
-      Timer.restart ~duration_ms:t.config.Config.compact_ms t.background_compact_timer;
-      Lwt.return (Ok ())
-    | _ -> Lwt.return (Ok ())
 
   let create base ~size ?(lazy_refcounts=true) ?(config = Config.default) () =
     let version = `Three in
