@@ -16,6 +16,7 @@
  *)
 
 open Sexplib.Std
+open Qcow_types
 
 let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right_logical
@@ -35,6 +36,7 @@ let is_mutable t = t |> 63 = 1L
 let is_compressed t = (t <| 1) |> 63 = 1L
 
 let shift t bytes =
+  let bytes = Int64.of_int bytes in
   let bytes' = (t <| 2) |> 2 in
   let is_mutable = is_mutable t in
   let is_compressed = is_compressed t in
@@ -53,11 +55,11 @@ let to_sector ~sector_size t =
 
 let to_bytes t = (t <| 2) |> 2
 
-let add = Int64.add
+let add x y = Int64.add x (Int64.of_int y)
 
 let cluster ~cluster_bits t =
   let x = (t <| 2) |> 2 in
-  Int64.(div x (1L <| cluster_bits))
+  Cluster.of_int64 @@ Int64.(div x (1L <| cluster_bits))
 
 let within_cluster ~cluster_bits t =
   let x = (t <| 2) |> 2 in

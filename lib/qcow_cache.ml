@@ -23,21 +23,19 @@ let src =
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-module Int64Map = Map.Make(Int64)
-
 type t = {
-  read_cluster: int64 -> (Cstruct.t, Mirage_block.error) result Lwt.t;
-  write_cluster: int64 -> Cstruct.t -> (unit, Mirage_block.write_error) result Lwt.t;
-  mutable clusters: Cstruct.t Int64Map.t;
+  read_cluster: Cluster.t -> (Cstruct.t, Mirage_block.error) result Lwt.t;
+  write_cluster: Cluster.t -> Cstruct.t -> (unit, Mirage_block.write_error) result Lwt.t;
+  mutable clusters: Cstruct.t Cluster.Map.t;
 }
 
 let create ~read_cluster ~write_cluster () =
-  let clusters = Int64Map.empty in
+  let clusters = Cluster.Map.empty in
   { read_cluster; write_cluster; clusters }
 
 let read t cluster =
-  if Int64Map.mem cluster t.clusters then begin
-    let data = Int64Map.find cluster t.clusters in
+  if Cluster.Map.mem cluster t.clusters then begin
+    let data = Cluster.Map.find cluster t.clusters in
     Lwt.return (Ok data)
   end else begin
     let open Lwt.Infix in
@@ -45,25 +43,27 @@ let read t cluster =
     >>= function
     | Error e -> Lwt.return (Error e)
     | Ok data ->
-      t.clusters <- Int64Map.add cluster data t.clusters;
+      t.clusters <- Cluster.Map.add cluster data t.clusters;
       Lwt.return (Ok data)
   end
 
 let write t cluster data =
-  t.clusters <- Int64Map.add cluster data t.clusters;
+  t.clusters <- Cluster.Map.add cluster data t.clusters;
   t.write_cluster cluster data
 
 let remove t cluster =
-  t.clusters <- Int64Map.remove cluster t.clusters
+  if Cluster.Map.mem cluster t.clusters
+  then Printf.fprintf stderr "Dropping cache for cluster %s\n" (Cluster.to_string cluster);
+  t.clusters <- Cluster.Map.remove cluster t.clusters
 
 module Debug = struct
   let assert_not_cached t cluster =
-    if Int64Map.mem cluster t.clusters then begin
-      Printf.fprintf stderr "Cluster %Ld still in the metadata cache\n" cluster;
+    if Cluster.Map.mem cluster t.clusters then begin
+      Printf.fprintf stderr "Cluster %s still in the metadata cache\n" (Cluster.to_string cluster);
       assert false
     end
   let all_cached_clusters t =
-    Int64Map.fold (fun cluster _ set ->
-      Int64.IntervalSet.(add (Interval.make cluster cluster) set)
-    ) t.clusters Int64.IntervalSet.empty
+    Cluster.Map.fold (fun cluster _ set ->
+      Cluster.IntervalSet.(add (Interval.make cluster cluster) set)
+    ) t.clusters Cluster.IntervalSet.empty
 end

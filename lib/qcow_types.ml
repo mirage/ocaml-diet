@@ -85,6 +85,9 @@ module Int64 = struct
     type _t = int64 [@@deriving sexp]
     let sexp_of_t = sexp_of__t
     let t_of_sexp = _t_of_sexp
+
+    let to_int64 x = x
+    let of_int64 x = x
   end
   module IntervalSet = Qcow_diet.Make(M)
   module Map = Map.Make(M)
@@ -106,3 +109,27 @@ module Int64 = struct
     return (Cstruct.shift buf 8)
 
 end
+
+module Int = struct
+  module M = struct
+    type t = int [@@deriving sexp]
+    let zero = 0
+    let succ x = x + 1
+    let pred x = x - 1
+    let add x y = x + y
+    let sub x y = x - y
+    let compare (x: t) (y: t) = Pervasives.compare x y
+    let mul x y = x * y
+    let div x y = x / y
+    let to_int64 = Int64.of_int
+    let of_int64 = Int64.to_int
+  end
+  module IntervalSet = Qcow_diet.Make(M)
+  module Map = Map.Make(M)
+  include M
+
+  let round_up x size = mul (div (add x (pred size)) size) size
+
+end
+
+module Cluster = Int64

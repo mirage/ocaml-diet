@@ -14,6 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
+open Qcow_types
 
 type t
 (** Qcow metadata: clusters containing references and clusters containing
@@ -34,13 +35,13 @@ val set_cluster_map: t -> Qcow_cluster_map.t -> unit
 (** Set the associated cluster map (which will be updated on every cluster
     write) *)
 
-type cluster
+type contents
 
 module Refcounts: sig
   type t
   (** A cluster full of 16bit refcounts *)
 
-  val of_cluster: cluster -> t
+  val of_contents: contents -> t
   (** Interpret the given cluster as a refcount cluster *)
 
   val get: t -> int -> int
@@ -54,7 +55,7 @@ module Physical: sig
   type t
   (** A cluster full of 64 bit cluster pointers *)
 
-  val of_cluster: cluster -> t
+  val of_contents: contents -> t
   (** Interpret the given cluster as a cluster of 64 bit pointers *)
 
   val get: t -> int -> Qcow_physical.t
@@ -67,12 +68,12 @@ module Physical: sig
   (** [len t] returns the number of physical addresses within [t] *)
 end
 
-val erase: cluster -> unit
+val erase: contents -> unit
 (** Set the cluster contents to zeroes *)
 
-val read: t -> int64 -> (cluster -> ('a, error) result Lwt.t) -> ('a, error) result Lwt.t
+val read: t -> Cluster.t -> (contents -> ('a, error) result Lwt.t) -> ('a, error) result Lwt.t
 (** Read the contents of the given cluster and provide them to the given function *)
 
-val update: t -> int64 -> (cluster -> (unit, write_error) result Lwt.t) -> (unit, write_error) result Lwt.t
+val update: t -> Cluster.t -> (contents -> (unit, write_error) result Lwt.t) -> (unit, write_error) result Lwt.t
 (** Read the contents of the given cluster, transform them through the given
     function and write the results back to disk *)

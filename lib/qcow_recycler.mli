@@ -33,14 +33,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S): sig
     ?compact_after_unmaps:int64 -> unit -> unit
   (** Start a background thread which will perform block recycling *)
 
-  val allocate: t -> int64 -> Int64.IntervalSet.t option
+  val allocate: t -> Cluster.t -> Cluster.IntervalSet.t option
   (** [allocate t n] returns [n] clusters which are ready for re-use. If there
       are not enough clusters free then this returns None. *)
 
-  val erase: t -> Int64.IntervalSet.t -> (unit, B.write_error) result Lwt.t
+  val erase: t -> Cluster.IntervalSet.t -> (unit, B.write_error) result Lwt.t
   (** Write zeroes over the specified set of clusters *)
 
-  val copy: t -> int64 -> int64 -> (unit, B.write_error) result Lwt.t
+  val copy: t -> Cluster.t -> Cluster.t -> (unit, B.write_error) result Lwt.t
   (** [copy src dst] copies the cluster [src] to [dst] *)
 
   val move: t -> Qcow_cluster_map.Move.t -> (unit, B.write_error) result Lwt.t

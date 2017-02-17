@@ -14,25 +14,16 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
-let src =
-  let src = Logs.Src.create "qcow" ~doc:"qcow2-formatted BLOCK device" in
-  Logs.Src.set_level src (Some Logs.Info);
-  src
-
-module Log = (val Logs.src_log src : Logs.LOG)
-
-module Int64Map = Map.Make(Int64)
-
-type cluster = int64
+open Qcow_types
 
 type t = {
-  mutable locks: (Qcow_rwlock.t * int) Int64Map.t;
+  mutable locks: (Qcow_rwlock.t * int) Cluster.Map.t;
   metadata_m: Lwt_mutex.t;
   (** held during metadata changing operations *)
 }
 
 let make () =
-  let locks = Int64Map.empty in
+  let locks = Cluster.Map.empty in
   let metadata_m = Lwt_mutex.create () in
   { locks; metadata_m  }
 
@@ -40,22 +31,22 @@ let with_metadata_lock t = Lwt_mutex.with_lock t.metadata_m
 
 let get_lock t cluster =
   let lock, refcount =
-    if Int64Map.mem cluster t.locks
-    then Int64Map.find cluster t.locks
+    if Cluster.Map.mem cluster t.locks
+    then Cluster.Map.find cluster t.locks
     else begin
       Qcow_rwlock.make (), 0
     end in
-  t.locks <- Int64Map.add cluster (lock, refcount + 1) t.locks;
+  t.locks <- Cluster.Map.add cluster (lock, refcount + 1) t.locks;
   lock
 
 let put_lock t cluster =
   (* put_lock is always called after get_lock *)
-  assert (Int64Map.mem cluster t.locks);
-  let lock, refcount = Int64Map.find cluster t.locks in
+  assert (Cluster.Map.mem cluster t.locks);
+  let lock, refcount = Cluster.Map.find cluster t.locks in
   t.locks <-
     if refcount = 1
-    then Int64Map.remove cluster t.locks
-    else Int64Map.add cluster (lock, refcount - 1) t.locks
+    then Cluster.Map.remove cluster t.locks
+    else Cluster.Map.add cluster (lock, refcount - 1) t.locks
 
 let with_lock t cluster f =
   let lock = get_lock t cluster in

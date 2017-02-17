@@ -15,9 +15,7 @@
  *
  *)
 
-(* TODO:
-   - represent 0L as a None
-   	*)
+open Qcow_types
 
 type t [@@deriving sexp]
 (** A physical address within the backing disk *)
@@ -32,7 +30,7 @@ val is_mutable: t -> bool
 val unmapped: t
 (** An unmapped physical address *)
 
-val shift: t -> int64 -> t
+val shift: t -> int -> t
 (** [shift t bytes] adds [bytes] to t, maintaining other properties *)
 
 val make: ?is_mutable:bool -> ?is_compressed:bool -> int64 -> t
@@ -40,7 +38,7 @@ val make: ?is_mutable:bool -> ?is_compressed:bool -> int64 -> t
     which meand there are no snapshots implying that directly writing to this
     		offset is ok; and [is_compressed = false]. *)
 
-val add: t -> int64 -> t
+val add: t -> int -> t
 (** Add a byte offset to a physical address *)
 
 val to_sector: sector_size:int -> t -> int64 * int
@@ -52,7 +50,7 @@ val sector: sector_size:int -> t -> int64
 val to_bytes: t -> int64
 (** Return the byte offset on disk *)
 
-val cluster: cluster_bits:int -> t -> int64
+val cluster: cluster_bits:int -> t -> Cluster.t
 (** Return the cluster containing the address *)
 
 val within_cluster: cluster_bits:int -> t -> int

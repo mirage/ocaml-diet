@@ -51,15 +51,16 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster_map = match t.cluster_map with
       | Some x -> x
       | None -> assert false in
-    match Int64.IntervalSet.take (Qcow_cluster_map.Available.get cluster_map) n with
+    match Cluster.IntervalSet.take (Qcow_cluster_map.Available.get cluster_map) n with
     | Some (set, _free) ->
-      Log.debug (fun f -> f "Allocated %Ld clusters from free list" n);
+      Log.debug (fun f -> f "Allocated %s clusters from free list" (Cluster.to_string n));
       Qcow_cluster_map.Available.remove cluster_map set;
       Some set
     | None ->
       None
 
   let copy_already_locked t src dst =
+    let src = Cluster.to_int64 src and dst = Cluster.to_int64 dst in
     let cluster_map = match t.cluster_map with
       | Some x -> x
       | None -> assert false in
@@ -84,10 +85,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () ->
-        Cache.Debug.assert_not_cached t.cache dst;
+        Cache.Debug.assert_not_cached t.cache (Cluster.of_int64 dst);
         (* If the destination block was being moved, abort the move since the
            original copy has diverged. *)
-        Qcow_cluster_map.cancel_move cluster_map dst;
+        Qcow_cluster_map.cancel_move cluster_map (Cluster.of_int64 dst);
         Lwt.return (Ok ())
 
   let copy t src dst =
@@ -129,12 +130,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   let erase t remaining =
     let open Lwt.Infix in
-    let intervals = Int64.IntervalSet.fold (fun i acc -> i :: acc) remaining [] in
+    let intervals = Cluster.IntervalSet.fold (fun i acc -> i :: acc) remaining [] in
     let buffer_size_clusters = Int64.of_int (Cstruct.len t.zero_buffer) |> t.cluster_bits in
 
     Lwt_list.map_p
       (fun i ->
-        let x, y = Int64.IntervalSet.Interval.(x i, y i) in
+        let x, y = Cluster.IntervalSet.Interval.(x i, y i) in
+        let x = Cluster.to_int64 x and y = Cluster.to_int64 y in
         let n = Int64.(succ @@ sub y x) in
         Log.debug (fun f -> f "erasing %Ld clusters (%Ld -> %Ld)" n x y);
         let erase cluster n =
@@ -174,7 +176,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       (fun () ->
 
     let flushed =
-      Int64.Map.fold (fun _src move acc ->
+      Cluster.Map.fold (fun _src move acc ->
         match move.state with
         | Flushed -> move :: acc
         | _ -> acc
@@ -190,28 +192,39 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           | exception Not_found ->
             (* FIXME: block was probably discarded, but we'd like to avoid this case
                by construction *)
-            Log.err (fun f -> f "Not_found reference to cluster %Ld (moving to %Ld)"
-              src dst
+            Log.err (fun f -> f "Not_found reference to cluster %s (moving to %s)"
+              (Cluster.to_string src) (Cluster.to_string dst)
             );
             assert false
           | a, b -> a, b in
 
             Metadata.update t.metadata ref_cluster
               (fun c ->
-                if not(Int64.Map.mem src (moves cluster_map)) then begin
-                  Log.warn (fun f -> f "Not rewriting reference in %Ld :%d from %Ld to %Ld: move as been cancelled" ref_cluster ref_cluster_within src dst);
+                if not(Cluster.Map.mem src (moves cluster_map)) then begin
+                  Log.warn (fun f -> f "Not rewriting reference in %s :%d from %s to %s: move as been cancelled"
+                    (Cluster.to_string ref_cluster) ref_cluster_within
+                    (Cluster.to_string src) (Cluster.to_string dst)
+                  );
                   Lwt.return (Ok ())
                 end else begin
-                  let addresses = Metadata.Physical.of_cluster c in
+                  let addresses = Metadata.Physical.of_contents c in
                   (* Read the current value in the referencing cluster as a sanity check *)
                   let old_reference = Metadata.Physical.get addresses ref_cluster_within in
                   let old_cluster = Qcow_physical.cluster ~cluster_bits:t.cluster_bits old_reference in
                   if old_cluster <> src then begin
-                    Log.err (fun f -> f "Rewriting reference in %Ld :%d from %Ld to %Ld, old reference actually pointing to %Ld" ref_cluster ref_cluster_within src dst old_cluster);
+                    Log.err (fun f -> f "Rewriting reference in %s :%d from %s to %s, old reference actually pointing to %s"
+                      (Cluster.to_string ref_cluster) ref_cluster_within
+                      (Cluster.to_string src) (Cluster.to_string dst)
+                      (Cluster.to_string old_cluster)
+                    );
                     assert false
                   end;
-                  Log.debug (fun f -> f "Rewriting reference in %Ld :%d from %Ld to %Ld" ref_cluster ref_cluster_within src dst);
+                  Log.debug (fun f -> f "Rewriting reference in %s :%d from %s to %s"
+                    (Cluster.to_string ref_cluster) ref_cluster_within
+                    (Cluster.to_string src) (Cluster.to_string dst)
+                  );
                   (* Preserve any flags but update the pointer *)
+                  let dst = Cluster.to_int64 dst in
                   let new_reference = Qcow_physical.make ~is_mutable:(Qcow_physical.is_mutable old_reference) ~is_compressed:(Qcow_physical.is_compressed old_reference) (dst <| t.cluster_bits) in
                   Metadata.Physical.set addresses ref_cluster_within new_reference;
                   Lwt.return (Ok ())
@@ -250,7 +263,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       (* Walk over the snapshot of moves before the flush and update. This
          ensures we don't accidentally advance the state of moves which appeared
          after the flush. *)
-      let junk = Int64.Map.fold (fun src (move: move) junk ->
+      let junk = Cluster.Map.fold (fun src (move: move) junk ->
         match move.state with
         | Copying ->
           junk
@@ -259,8 +272,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           junk
         | Referenced ->
           Qcow_cluster_map.complete_move cluster_map move.move;
-          Int64.IntervalSet.(add (Interval.make src src) junk)
-        ) moves Int64.IntervalSet.empty in
+          Cluster.IntervalSet.(add (Interval.make src src) junk)
+        ) moves Cluster.IntervalSet.empty in
       Qcow_cluster_map.Junk.add cluster_map junk;
       Qcow_cluster_map.Available.add cluster_map erased;
       Qcow_cluster_map.Erased.remove cluster_map erased;
@@ -303,11 +316,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let last_block = ref (Qcow_cluster_map.get_last_block cluster_map) in
     let rec wait_for_work () =
       let junk = Qcow_cluster_map.Junk.get cluster_map in
-      let nr_junk = Int64.IntervalSet.cardinal junk in
+      let nr_junk = Cluster.to_int64 @@ Cluster.IntervalSet.cardinal junk in
       let erased = Qcow_cluster_map.Erased.get cluster_map in
-      let nr_erased = Int64.IntervalSet.cardinal erased in
+      let nr_erased = Cluster.to_int64 @@ Cluster.IntervalSet.cardinal erased in
       let available = Qcow_cluster_map.Available.get cluster_map in
-      let nr_available = Int64.IntervalSet.cardinal available in
+      let nr_available = Cluster.to_int64 @@ Cluster.IntervalSet.cardinal available in
       (* Apply the threshold to the total clusters erased, which includes those
          marked as available *)
       let total_erased = Int64.add nr_erased nr_available in
@@ -317,14 +330,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         if total_erased < keep_erased && nr_junk > 0L then begin
           (* Take some of the junk and erase it *)
           let n = min nr_junk (Int64.sub keep_erased total_erased) in
-          match Int64.IntervalSet.take junk n with
+          match Cluster.IntervalSet.take junk (Cluster.of_int64 n) with
           | None -> None
           | Some (to_erase, _) -> Some (`Erase to_erase)
         end else None in
       (* If we need to update references, do that next *)
       let middle_priority =
         let flushed =
-          Int64.Map.fold (fun _src move acc ->
+          Cluster.Map.fold (fun _src move acc ->
             match move.Qcow_cluster_map.state with
             | Qcow_cluster_map.Flushed -> true
             | _ -> acc
@@ -354,7 +367,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       wait_for_work ()
       >>= function
       | `Erase to_erase ->
-        Log.debug (fun f -> f "block recycler: should erase %Ld clusters" (Int64.IntervalSet.cardinal to_erase));
+        Log.debug (fun f -> f "block recycler: should erase %s clusters" (Cluster.to_string @@ Cluster.IntervalSet.cardinal to_erase));
         begin erase t to_erase
         >>= function
         | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
@@ -389,7 +402,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | `Resize ->
         Qcow_cluster.with_metadata_lock t.locks
           (fun () ->
-            let new_last_block = Qcow_cluster_map.get_last_block cluster_map in
+            let new_last_block = Cluster.to_int64 @@ Qcow_cluster_map.get_last_block cluster_map in
             Log.debug (fun f -> f "block recycler: resize for last_block = %Ld" new_last_block);
             let new_size = Physical.make (Int64.succ new_last_block <| t.cluster_bits) in
             let sector = Physical.sector ~sector_size:t.sector_size new_size in

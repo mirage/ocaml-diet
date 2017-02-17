@@ -20,22 +20,22 @@ type t
 (** A cache of clusters *)
 
 val create:
-  read_cluster:(int64 -> (Cstruct.t, Mirage_block.error) result Lwt.t) ->
-  write_cluster:(int64 -> Cstruct.t -> (unit, Mirage_block.write_error) result Lwt.t) ->
+  read_cluster:(Cluster.t -> (Cstruct.t, Mirage_block.error) result Lwt.t) ->
+  write_cluster:(Cluster.t -> Cstruct.t -> (unit, Mirage_block.write_error) result Lwt.t) ->
   unit -> t
 (** Create a cache of clusters, given the read/write functions *)
 
-val read: t -> int64 -> (Cstruct.t, Mirage_block.error) result Lwt.t
+val read: t -> Cluster.t -> (Cstruct.t, Mirage_block.error) result Lwt.t
 (** [read t cluster] returns the data in [cluster] *)
 
-val write: t -> int64 -> Cstruct.t -> (unit, Mirage_block.write_error) result Lwt.t
+val write: t -> Cluster.t -> Cstruct.t -> (unit, Mirage_block.write_error) result Lwt.t
 (** [write t cluster data] writes [data] to [cluster] *)
 
-val remove: t -> int64 -> unit
+val remove: t -> Cluster.t -> unit
 (** [remove t cluster] drops any cache associated with [cluster] *)
 
 module Debug: sig
-  val assert_not_cached: t -> int64 -> unit
+  val assert_not_cached: t -> Cluster.t -> unit
 
-  val all_cached_clusters: t -> Int64.IntervalSet.t
+  val all_cached_clusters: t -> Cluster.IntervalSet.t
 end

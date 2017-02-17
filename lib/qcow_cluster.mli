@@ -14,20 +14,18 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
+open Qcow_types
 
 type t
 (** A set of per-cluster read and write locks *)
 
-type cluster = int64
-(** A cluster number *)
-
 val make: unit -> t
 (** Create a set of locks *)
 
-val with_read_lock: t -> cluster -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+val with_read_lock: t -> Cluster.t -> (unit -> 'a Lwt.t) -> 'a Lwt.t
 (** [with_read_lock t f] executes [f ()] with the lock held for reading *)
 
-val with_write_lock: t -> cluster -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+val with_write_lock: t -> Cluster.t -> (unit -> 'a Lwt.t) -> 'a Lwt.t
 (** [with_write_lock t f] executes [f ()] with the lock held for writing *)
 
 val with_metadata_lock: t -> (unit -> 'a Lwt.t) -> 'a Lwt.t

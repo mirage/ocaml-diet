@@ -47,22 +47,22 @@ type t = {
   c: unit Lwt_condition.t;
 }
 
-type cluster = {
+type contents = {
   t: t;
   data: Cstruct.t;
-  cluster: int64;
+  cluster: Cluster.t;
 }
 
 module Refcounts = struct
-  type t = cluster
-  let of_cluster x = x
+  type t = contents
+  let of_contents x = x
   let get t n = Cstruct.BE.get_uint16 t.data (2 * n)
   let set t n v = Cstruct.BE.set_uint16 t.data (2 * n) v
 end
 
 module Physical = struct
-  type t = cluster
-  let of_cluster x = x
+  type t = contents
+  let of_contents x = x
   let get t n = Qcow_physical.read (Cstruct.shift t.data (8 * n))
   let set t n v =
     begin match t.t.cluster_map with
@@ -72,12 +72,12 @@ module Physical = struct
         let existing = Qcow_physical.read (Cstruct.shift t.data (8 * n)) in
         let cluster = Qcow_physical.cluster ~cluster_bits:t.t.cluster_bits existing in
         let v' = Qcow_physical.cluster ~cluster_bits:t.t.cluster_bits v in
-        Log.debug (fun f -> f "Physical.set %Ld:%d -> %s%s" t.cluster n
-                      (if v = Qcow_physical.unmapped then "unmapped" else Int64.to_string v')
-                      (if cluster <> 0L then ", unmapping " ^ (Int64.to_string cluster) else "")
+        Log.debug (fun f -> f "Physical.set %s:%d -> %s%s" (Cluster.to_string t.cluster) n
+                      (if v = Qcow_physical.unmapped then "unmapped" else Cluster.to_string v')
+                      (if cluster <> Cluster.zero then ", unmapping " ^ (Cluster.to_string cluster) else "")
                   );
-        if cluster <> 0L then begin
-          let i = Int64.IntervalSet.(add (Interval.make cluster cluster) empty) in
+        if cluster <> Cluster.zero then begin
+          let i = Cluster.IntervalSet.(add (Interval.make cluster cluster) empty) in
           Qcow_cluster_map.Junk.add m i;
           Qcow_cluster_map.remove m cluster;
         end;

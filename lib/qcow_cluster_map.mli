@@ -38,14 +38,10 @@ type move_state =
       block can be recycled. *)
 (** Describes the state of a block move *)
 
-type cluster = int64
-
-type reference = cluster * int (* cluster * index within cluster *)
-
-module ClusterMap: Map.S with type key = cluster
+type reference = Cluster.t * int (* cluster * index within cluster *)
 
 module Move: sig
-  type t = { src: cluster; dst: cluster }
+  type t = { src: Cluster.t; dst: Cluster.t }
   (** An instruction to move the contents from cluster [src] to cluster [dst] *)
 end
 
@@ -56,21 +52,21 @@ type move = {
 (** describes the state of an in-progress block move *)
 
 module type MutableSet = sig
-  val get: t -> Int64.IntervalSet.t
+  val get: t -> Cluster.IntervalSet.t
   (** [get t] query the current contents of the set *)
 
-  val add: t -> Int64.IntervalSet.t -> unit
+  val add: t -> Cluster.IntervalSet.t -> unit
   (** [add t more] adds [more] to the set *)
 
-  val remove: t -> Int64.IntervalSet.t -> unit
+  val remove: t -> Cluster.IntervalSet.t -> unit
   (** [remove t less] removes [less] from the set *)
 end
 
 val zero: t
 (** A cluster map for a zero-length disk *)
 
-val make: free:Qcow_bitmap.t -> refs:reference ClusterMap.t -> cache:Qcow_cache.t
-  -> first_movable_cluster:cluster -> t
+val make: free:Qcow_bitmap.t -> refs:reference Cluster.Map.t -> cache:Qcow_cache.t
+  -> first_movable_cluster:Cluster.t -> t
 (** Given a set of free clusters, and the first cluster which can be moved
     (i.e. that isn't fixed header), construct an empty cluster map. *)
 
@@ -80,14 +76,14 @@ val total_used: t -> int64
 val total_free: t -> int64
 (** Return the number of tracked free clusters *)
 
-val resize: t -> cluster -> unit
+val resize: t -> Cluster.t -> unit
 (** [resize t new_size_clusters] is called when the file is to be resized. *)
 
-val add: t -> reference -> cluster -> unit
+val add: t -> reference -> Cluster.t -> unit
 (** [add t ref cluster] marks [cluster] as in-use and notes the reference from
     [reference]. *)
 
-val remove: t -> cluster -> unit
+val remove: t -> Cluster.t -> unit
 (** [remove t cluster] marks [cluster] as free and invalidates any reference
     to it (e.g. in response to a discard) *)
 
@@ -107,12 +103,12 @@ val wait: t -> unit Lwt.t
     - available could be used
     - a move might require a reference update *)
 
-val moves: t -> move Int64.Map.t
+val moves: t -> move Cluster.Map.t
 
 val set_move_state: t -> Move.t -> move_state -> unit
 (** Update the state of the given move operation *)
 
-val cancel_move: t -> int64 -> unit
+val cancel_move: t -> Cluster.t -> unit
 (** [cancel_move cluster] cancels any in-progress move of cluster [cluster].
     This should be called with the cluster write lock held whenever there has
     been a change in the contents of [cluster] *)
@@ -120,10 +116,10 @@ val cancel_move: t -> int64 -> unit
 val complete_move: t -> Move.t -> unit
 (** [complete_move t move] marks the move as complete. *)
 
-val find: t -> cluster -> reference
+val find: t -> Cluster.t -> reference
 (** [find t cluster] returns the reference to [cluster], or raises [Not_found] *)
 
-val with_roots: t -> Int64.IntervalSet.t -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+val with_roots: t -> Cluster.IntervalSet.t -> (unit -> 'a Lwt.t) -> 'a Lwt.t
 (** [with_roots t clusters f] calls [f ()} with [clusters] registered as in-use. *)
 
 val get_moves: t -> Move.t list
@@ -134,7 +130,7 @@ val compact_s: (Move.t -> 'a -> ((bool * 'a), 'b) result Lwt.t ) -> t -> 'a
 (** [compact_s f t acc] accumulates the result of [f move] where [move] is
     the next cluster move needed to perform a compaction of [t].. *)
 
-val get_last_block: t -> int64
+val get_last_block: t -> Cluster.t
 (** [get_last_block t] is the last allocated block in [t]. Note if there are no
     data blocks this will point to the last header block even though it is
     immovable. *)

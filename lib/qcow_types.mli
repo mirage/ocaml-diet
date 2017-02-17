@@ -58,3 +58,41 @@ module Int64 : sig
 
   include Qcow_s.SERIALISABLE with type t := t
 end
+
+module Int : sig
+  type t = int [@@deriving sexp]
+
+  val of_int64: int64 -> t
+  val to_int64: t -> int64
+
+  val round_up: t -> t -> t
+  (** [round_up value to] rounds [value] to the next multiple of [to] *)
+
+  module IntervalSet: Qcow_s.INTERVAL_SET with type elt = t
+  module Map: Map.S with type key = t
+
+end
+
+module Cluster : sig
+  type t [@@deriving sexp]
+
+  val zero: t
+  val pred: t -> t
+  val succ: t -> t
+  val add: t -> t -> t
+  val sub: t -> t -> t
+  val mul: t -> t -> t
+  val div: t -> t -> t
+  val of_int64: int64 -> t
+  val to_int64: t -> int64
+  val of_int: int -> t
+  val to_int: t -> int
+  val to_string: t -> string
+
+  val round_up: t -> t -> t
+  (** [round_up value to] rounds [value] to the next multiple of [to] *)
+
+  module IntervalSet: Qcow_s.INTERVAL_SET with type elt = t
+  module Map: Map.S with type key = t
+
+end
