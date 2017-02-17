@@ -230,9 +230,9 @@ let write t rest =
   >>= fun rest ->
   Int32.write t.l1_size rest
   >>= fun rest ->
-  Int64.write (Physical.to_bytes t.l1_table_offset) rest
+  Int64.write (Int64.of_int @@ Physical.to_bytes t.l1_table_offset) rest
   >>= fun rest ->
-  Int64.write (Physical.to_bytes t.refcount_table_offset) rest
+  Int64.write (Int64.of_int @@ Physical.to_bytes t.refcount_table_offset) rest
   >>= fun rest ->
   Int32.write t.refcount_table_clusters rest
   >>= fun rest ->

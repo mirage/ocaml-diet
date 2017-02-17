@@ -33,7 +33,7 @@ val unmapped: t
 val shift: t -> int -> t
 (** [shift t bytes] adds [bytes] to t, maintaining other properties *)
 
-val make: ?is_mutable:bool -> ?is_compressed:bool -> int64 -> t
+val make: ?is_mutable:bool -> ?is_compressed:bool -> int -> t
 (** Create an address at the given byte offset. This defaults to [is_mutable = true]
     which meand there are no snapshots implying that directly writing to this
     		offset is ok; and [is_compressed = false]. *)
@@ -47,7 +47,7 @@ val to_sector: sector_size:int -> t -> int64 * int
 val sector: sector_size:int -> t -> int64
 (** Return the sector on disk containing the address *)
 
-val to_bytes: t -> int64
+val to_bytes: t -> int
 (** Return the byte offset on disk *)
 
 val cluster: cluster_bits:int -> t -> Cluster.t

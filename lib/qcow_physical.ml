@@ -18,61 +18,65 @@
 open Sexplib.Std
 open Qcow_types
 
-let ( <| ) = Int64.shift_left
-let ( |> ) = Int64.shift_right_logical
+let ( <| ) = Cluster.shift_left
+let ( |> ) = Cluster.shift_right_logical
 
-type t = int64 (* the encoded form on the disk *)
+type t = Cluster.t (* the encoded form on the disk *)
 
-let unmapped = 0L
+let unmapped = Cluster.zero
+
+let one = Cluster.succ Cluster.zero
 
 let make ?(is_mutable = false) ?(is_compressed = false) x =
+  let x = Cluster.of_int x in
   let bytes = (x <| 2) |> 2 in
-  let is_mutable = if is_mutable then 1L <| 63 else 0L in
-  let is_compressed = if is_compressed then 1L <| 62 else 0L in
-  Int64.(logor (logor bytes is_mutable) is_compressed)
+  let is_mutable = if is_mutable then one <| 63 else Cluster.zero in
+  let is_compressed = if is_compressed then one <| 62 else Cluster.zero in
+  Cluster.(logor (logor bytes is_mutable) is_compressed)
 
-let is_mutable t = t |> 63 = 1L
+let is_mutable t = t |> 63 <> Cluster.zero
 
-let is_compressed t = (t <| 1) |> 63 = 1L
+let is_compressed t = (t <| 1) |> 63 <> Cluster.zero
 
 let shift t bytes =
-  let bytes = Int64.of_int bytes in
+  let bytes = Cluster.of_int bytes in
   let bytes' = (t <| 2) |> 2 in
   let is_mutable = is_mutable t in
   let is_compressed = is_compressed t in
-  make ~is_mutable ~is_compressed (Int64.add bytes' bytes)
+  make ~is_mutable ~is_compressed (Cluster.(to_int @@ add bytes' bytes))
 
 let sector ~sector_size t =
   let x = (t <| 2) |> 2 in
-  Int64.(div x (of_int sector_size))
+  Cluster.(to_int64 @@ div x (of_int sector_size))
 
 (* Take an offset and round it down to the nearest physical sector, returning
    the sector number and an offset within the sector *)
 let to_sector ~sector_size t =
   let x = (t <| 2) |> 2 in
-  Int64.(div x (of_int sector_size)),
-  Int64.(to_int (rem x (of_int sector_size)))
+  Cluster.(to_int64 @@ div x (of_int sector_size)),
+  Cluster.(to_int (rem x (of_int sector_size)))
 
-let to_bytes t = (t <| 2) |> 2
+let to_bytes t = Cluster.to_int ((t <| 2) |> 2)
 
-let add x y = Int64.add x (Int64.of_int y)
+let add x y = Cluster.add x (Cluster.of_int y)
 
 let cluster ~cluster_bits t =
   let x = (t <| 2) |> 2 in
-  Cluster.of_int64 @@ Int64.(div x (1L <| cluster_bits))
+  Cluster.(div x (one <| cluster_bits))
 
 let within_cluster ~cluster_bits t =
   let x = (t <| 2) |> 2 in
-  Int64.(to_int (rem x (1L <| cluster_bits))) / 8
+  Cluster.(to_int (rem x (one <| cluster_bits))) / 8
 
 let read rest =
-  Cstruct.BE.get_uint64 rest 0
+  Cluster.of_int64 @@ Cstruct.BE.get_uint64 rest 0
 
 let write t rest =
+  let t = Cluster.to_int64 t in
   Cstruct.BE.set_uint64 rest 0 t
 
 type _t = {
-  bytes: int64;
+  bytes: Cluster.t;
   is_mutable: bool;
   is_compressed: bool;
 } [@@deriving sexp]
@@ -86,8 +90,8 @@ let sexp_of_t t =
 
 let t_of_sexp s =
   let _t = _t_of_sexp s in
-  let is_mutable = if _t.is_mutable then 1L <| 63 else 0L in
-  let is_compressed = if _t.is_compressed then 1L <| 62 else 0L in
-  Int64.(logor (logor _t.bytes is_mutable) is_compressed)
+  let is_mutable = if _t.is_mutable then one <| 63 else Cluster.zero in
+  let is_compressed = if _t.is_compressed then one <| 62 else Cluster.zero in
+  Cluster.(logor (logor _t.bytes is_mutable) is_compressed)
 
 let to_string t = Sexplib.Sexp.to_string (sexp_of_t t)

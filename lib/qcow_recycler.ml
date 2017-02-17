@@ -224,8 +224,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                     (Cluster.to_string src) (Cluster.to_string dst)
                   );
                   (* Preserve any flags but update the pointer *)
-                  let dst = Cluster.to_int64 dst in
-                  let new_reference = Qcow_physical.make ~is_mutable:(Qcow_physical.is_mutable old_reference) ~is_compressed:(Qcow_physical.is_compressed old_reference) (dst <| t.cluster_bits) in
+                  let dst = Cluster.to_int dst lsl t.cluster_bits in
+                  let new_reference = Qcow_physical.make ~is_mutable:(Qcow_physical.is_mutable old_reference) ~is_compressed:(Qcow_physical.is_compressed old_reference) dst in
                   Metadata.Physical.set addresses ref_cluster_within new_reference;
                   Lwt.return (Ok ())
                 end
@@ -402,9 +402,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | `Resize ->
         Qcow_cluster.with_metadata_lock t.locks
           (fun () ->
-            let new_last_block = Cluster.to_int64 @@ Qcow_cluster_map.get_last_block cluster_map in
-            Log.debug (fun f -> f "block recycler: resize for last_block = %Ld" new_last_block);
-            let new_size = Physical.make (Int64.succ new_last_block <| t.cluster_bits) in
+            let new_last_block = 1 + (Cluster.to_int @@ Qcow_cluster_map.get_last_block cluster_map) in
+            Log.debug (fun f -> f "block recycler: resize for last_block = %d" new_last_block);
+            let new_size = Physical.make (new_last_block lsl t.cluster_bits) in
             let sector = Physical.sector ~sector_size:t.sector_size new_size in
             let cluster = Physical.cluster ~cluster_bits:t.cluster_bits new_size in
             Qcow_cluster_map.resize cluster_map cluster;
@@ -412,7 +412,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             >>= function
             | Error _ -> Lwt.fail_with "resize"
             | Ok () ->
-            Log.debug (fun f -> f "Resized device to %Ld sectors of size %d" (Qcow_physical.to_bytes new_size) t.sector_size);
+            Log.debug (fun f -> f "Resized device to %d sectors of size %d" (Qcow_physical.to_bytes new_size) t.sector_size);
             Lwt.return_unit
           ) >>= fun () ->
           loop ()

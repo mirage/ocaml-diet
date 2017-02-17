@@ -17,6 +17,26 @@
 open Sexplib.Std
 open Qcow_error
 
+module type NUM = sig
+  type t
+  val zero: t
+  val pred: t -> t
+  val succ: t -> t
+  val add: t -> t -> t
+  val sub: t -> t -> t
+  val mul: t -> t -> t
+  val div: t -> t -> t
+  val of_int64: int64 -> t
+  val to_int64: t -> int64
+  val of_int: int -> t
+  val to_int: t -> int
+  val to_string: t -> string
+  val shift_left: t -> int -> t
+  val shift_right_logical: t -> int -> t
+  val logor: t -> t -> t
+  val rem: t -> t -> t
+end
+
 let big_enough_for name buf needed =
   let length = Cstruct.len buf in
   if length < needed
@@ -86,7 +106,8 @@ module Int64 = struct
     let sexp_of_t = sexp_of__t
     let t_of_sexp = _t_of_sexp
 
-
+    let to_int64 x = x
+    let of_int64 x = x
   end
   module IntervalSet = Qcow_diet.Make(M)
   module Map = Map.Make(M)
@@ -125,10 +146,10 @@ module Int = struct
     let to_int x = x
     let of_int x = x
     let to_string = string_of_int
-    let shift_left x n = x lsl n
-    let shift_right_logical x n = x lsr n
+    let shift_left x n = assert (x > 0); x lsl n
+    let shift_right_logical x n = assert (x > 0); x lsr n
     let logor x y = x lor y
-    let rem x y = x mod y
+    let rem x y = assert (x > 0); x mod y
   end
   module IntervalSet = Qcow_diet.Make(M)
   module Map = Map.Make(M)
@@ -138,4 +159,4 @@ module Int = struct
 
 end
 
-module Cluster = Int
+module Cluster = Int64
