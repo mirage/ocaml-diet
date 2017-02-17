@@ -93,22 +93,29 @@ let handle_common common_options_t =
 let spinner = [| '-'; '\\'; '|'; '/' |]
 let spinner_idx = ref 0
 let progress_bar_width = 70
+let last_percent = ref (-1)
+let last_spinner_time = ref (Unix.gettimeofday ())
 let progress_cb ~percent =
-  let line = Bytes.make (progress_bar_width + 8) '\000' in
+  let now = Unix.gettimeofday () in
+  if now -. (!last_spinner_time) > 0.5 || !last_percent <> percent then begin
+    last_percent := percent;
+    last_spinner_time := now;
+    let line = Bytes.make (progress_bar_width + 8) '\000' in
 
-  let len = (progress_bar_width * percent) / 100 in
-  for i = 0 to len - 1 do
-    Bytes.set line (4 + i) (if i = len - 1 then '>' else '#')
-  done;
-  Bytes.set line 0 '[';
-  Bytes.set line 1 spinner.(!spinner_idx);
-  Bytes.set line 2 ']';
-  Bytes.set line 3 ' ';
-  spinner_idx := (!spinner_idx + 1) mod (Array.length spinner);
-  let percent' = Printf.sprintf "%3d%%" percent in
-  String.blit percent' 0 line (progress_bar_width + 4) 4;
-  Printf.printf "\r%s%!" (Bytes.to_string line);
-  if percent = 100 then Printf.printf "\n"
+    let len = (progress_bar_width * percent) / 100 in
+    for i = 0 to len - 1 do
+      Bytes.set line (4 + i) (if i = len - 1 then '>' else '#')
+    done;
+    Bytes.set line 0 '[';
+    Bytes.set line 1 spinner.(!spinner_idx);
+    Bytes.set line 2 ']';
+    Bytes.set line 3 ' ';
+    spinner_idx := (!spinner_idx + 1) mod (Array.length spinner);
+    let percent' = Printf.sprintf "%3d%%" percent in
+    String.blit percent' 0 line (progress_bar_width + 4) 4;
+    Printf.printf "\r%s%!" (Bytes.to_string line);
+    if percent = 100 then Printf.printf "\n"
+  end
 
 let mib = Int64.mul 1024L 1024L
 
