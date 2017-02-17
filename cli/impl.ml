@@ -503,6 +503,8 @@ let pattern common_options_t trace filename size number =
           if sector >= info.Mirage_block.size_sectors then Lwt.return_unit else begin
             let percent = Int64.(to_int (div (mul 100L sector) info.Mirage_block.size_sectors)) in
             (match progress_cb with Some f -> f ~percent | None -> ());
+            (* Mark each sector with the sector number *)
+            Cstruct.BE.set_uint64 buf 0 sector;
             B.write qcow sector [ buf ]
             >>= function
             | Error _ -> Lwt.fail_with "qcow write error"
