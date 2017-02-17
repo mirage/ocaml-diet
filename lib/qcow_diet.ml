@@ -32,6 +32,7 @@ end
 
 exception Interval_pairs_should_be_ordered of string
 exception Intervals_should_not_overlap of string
+exception Intervals_should_not_be_adjacent of string
 exception Height_not_equals_depth of string
 exception Unbalanced of string
 exception Cardinal of string
@@ -43,6 +44,8 @@ let _ =
         Some ("Pairs within each interval should be ordered: " ^ txt)
       | Intervals_should_not_overlap txt ->
         Some ("Intervals should be ordered without overlap: " ^ txt)
+      | Intervals_should_not_be_adjacent txt ->
+        Some ("Intervals should not be adjacent: " ^ txt)
       | Height_not_equals_depth txt ->
         Some ("The height is not being maintained correctly: " ^ txt)
       | Unbalanced txt ->
@@ -159,6 +162,27 @@ let node x y l r =
         no_overlap l;
         no_overlap r
 
+    let rec no_adjacent t =
+      let biggest = function
+        | Empty -> None
+        | Node { y; _ } -> Some y in
+      let smallest = function
+        | Empty -> None
+        | Node { x; _ } -> Some x in
+     match t with
+      | Empty -> ()
+      | Node { x; y; l; r; _ } ->
+        begin match biggest l with
+        | Some ly when Elt.succ ly >= x -> raise (Intervals_should_not_be_adjacent (to_string_internal t))
+        | _ -> ()
+        end;
+        begin match smallest r with
+        | Some rx when Elt.pred rx <= y -> raise (Intervals_should_not_be_adjacent (to_string_internal t))
+        | _ -> ()
+        end;
+        no_adjacent l;
+        no_adjacent r
+
     (* The height is being stored correctly *)
     let rec height_equals_depth t =
       if height t <> (depth t) then raise (Height_not_equals_depth (to_string_internal t));
@@ -195,7 +219,8 @@ let node x y l r =
       no_overlap t;
       height_equals_depth t;
       balanced t;
-      check_cardinal t
+      check_cardinal t;
+      no_adjacent t
   end
 
   let empty = Empty
@@ -497,12 +522,18 @@ module Test = struct
     let open IntDiet in
     assert (elements @@ diff (add (9, 9) @@ add (5, 7) empty) (add (7, 9) empty) = [5; 6])
 
+  let test_adjacent_1 () =
+    let open IntDiet in
+    let set = add (9, 9) @@ add (8, 8) empty in
+    IntDiet.Invariant.check set
+
   let test_depth () = check_depth 1048576
 
   let all = [
     "adding an element to the right", test_add_1;
     "removing an element on the left", test_remove_1;
     "removing an elements from two intervals", test_remove_2;
+    "test adjacent intervals are coalesced", test_adjacent_1;
     "logarithmic depth", test_depth;
     "adding and removing elements acts like a Set", test_adds;
     "union", test_operator IntSet.union IntDiet.union;
