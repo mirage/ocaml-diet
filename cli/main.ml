@@ -282,9 +282,10 @@ let pattern_cmd =
   let doc = "Generate a .qcow2 with a test pattern" in
   let man = [
     `S "DESCRIPTION";
-    `P "Create a qcow2 file with a test pattern. The defined patterns are \
-        numbered where 1 is every other cluster mapped and 2 has second half \
-        of the file mapped and the first half unmapped.";
+    `P "Create a qcow2 file with a test pattern.";
+    `P "Pattern 1: write to every other cluster to stress the metadata datastructure.";
+    `P "Pattern 2: write to the whole disk and then discard every other cluster \
+        to produce the worst case for compaction.";
   ] @ help in
   Term.(ret(pure Impl.pattern $ common_options_t $ trace $ output $ size $ pattern_number)),
   Term.info "pattern" ~sdocs:_common_options ~doc ~man

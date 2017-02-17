@@ -484,19 +484,22 @@ let pattern common_options_t trace filename size number =
     >>= fun uncached ->
     BLOCK.connect uncached
     >>= fun x ->
-    B.create x ~size ~lazy_refcounts:true ()
+    let config = B.Config.create ~discard:true () in
+    B.create x ~size ~lazy_refcounts:true ~config ()
     >>= function
     | Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" filename)
     | Ok qcow ->
+      let h = B.header qcow in
+      B.get_info qcow
+      >>= fun info ->
+      let sector_size = info.Mirage_block.sector_size in
+      let cluster_bits = Int32.to_int h.Qcow.Header.cluster_bits in
+      let cluster_size = 1 lsl cluster_bits in
+      let cluster_size_sectors = cluster_size / sector_size in
       begin match number with
       | 1 ->
-        let h = B.header qcow in
-        B.get_info qcow
-        >>= fun info ->
-        let sector_size = info.Mirage_block.sector_size in
-        let cluster_bits = Int32.to_int h.Qcow.Header.cluster_bits in
-        let cluster_size = 1 lsl cluster_bits in
-        let cluster_size_sectors = cluster_size / sector_size in
+        (* write to every other cluster: this should be worst case for the
+           interval tree structure. *)
         let page = Io_page.(to_cstruct @@ get 1) in
         let buf = Cstruct.sub page 0 sector_size in
         let rec loop sector =
@@ -508,6 +511,48 @@ let pattern common_options_t trace filename size number =
             B.write qcow sector [ buf ]
             >>= function
             | Error _ -> Lwt.fail_with "qcow write error"
+            | Ok () ->
+              (* every other cluster *)
+              loop Int64.(add sector (mul 2L (of_int cluster_size_sectors)))
+          end in
+        loop 0L
+        >>= fun () ->
+        BLOCK.disconnect x
+        >>= fun () ->
+        Lwt.return (`Ok ())
+      | 2 ->
+        (* write to every cluster, and then discard every other cluster: this
+           should be worst case for the compactor *)
+        let pages = Io_page.(to_cstruct @@ get 1024) in (* 4 MiB *)
+        Cstruct.memset pages 0;
+        let sectors = Cstruct.len pages / sector_size in
+        let rec loop sector =
+          if sector >= info.Mirage_block.size_sectors then Lwt.return_unit else begin
+            let percent = Int64.(to_int (div (mul 50L sector) info.Mirage_block.size_sectors)) in
+            (match progress_cb with Some f -> f ~percent | None -> ());
+            let to_write = min sectors Int64.(to_int (sub info.Mirage_block.size_sectors sector)) in
+            let buf = Cstruct.sub pages 0 (to_write * sector_size) in
+            let rec watermark n =
+              if n >= to_write then () else begin
+                Cstruct.BE.set_uint64 buf (n * sector_size) Int64.(add sector (of_int n));
+                watermark (n + 1)
+              end in
+            watermark to_write;
+            B.write qcow sector [ buf ]
+            >>= function
+            | Error _ -> Lwt.fail_with "qcow write error"
+            | Ok () ->
+              loop Int64.(add sector (of_int to_write))
+          end in
+        loop 0L
+        >>= fun () ->
+        let rec loop sector =
+          if sector >= info.Mirage_block.size_sectors then Lwt.return_unit else begin
+            let percent = 50 + Int64.(to_int (div (mul 50L sector) info.Mirage_block.size_sectors)) in
+            (match progress_cb with Some f -> f ~percent | None -> ());
+            B.discard qcow ~sector ~n:(Int64.of_int cluster_size_sectors) ()
+            >>= function
+            | Error _ -> Lwt.fail_with "qcow discard error"
             | Ok () ->
               (* every other cluster *)
               loop Int64.(add sector (mul 2L (of_int cluster_size_sectors)))
