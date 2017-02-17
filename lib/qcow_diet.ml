@@ -315,11 +315,11 @@ let rec node x y l r =
     match t with
     | Empty -> node x y Empty Empty
     (* completely to the left *)
-    | Node n when y < n.x ->
+    | Node n when y < (Elt.pred n.x) ->
       let l = add (x, y) n.l in
       node n.x n.y l n.r
     (* completely to the right *)
-    | Node n when n.y < x ->
+    | Node n when (Elt.succ n.y) < x ->
       let r = add (x, y) n.r in
       node n.x n.y n.l r
     (* overlap on the left only *)
