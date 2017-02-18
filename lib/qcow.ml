@@ -817,39 +817,54 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   let write t sector bufs =
     let open Lwt_write_error.Infix in
+    let cluster_size = 1L <| t.cluster_bits in
+    let sectors_per_cluster = (1 lsl t.cluster_bits) / t.sector_size in
     Qcow_rwlock.with_read_lock t.metadata_lock
       (fun () ->
-        let cluster_size = 1L <| t.cluster_bits in
         let byte = Int64.(mul sector (of_int t.info.Mirage_block.sector_size)) in
-        iter_p (fun (byte, buf) ->
-
+        Error.Lwt_error.List.map_p
+          (fun (byte, buf) ->
             let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
-            ( ClusterIO.walk_readonly t vaddr
-              >>= function
-              | None ->
-                (* Only the first write to this area needs to allocate, so it's ok
-                   to make this a little slower *)
-                ClusterIO.walk_and_allocate t vaddr
-              | Some offset' ->
-                Lwt.return (Ok offset') )
-            >>= fun offset' ->
-            let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
-            let cluster = Physical.cluster ~cluster_bits:t.cluster_bits offset' in
-            let open Lwt.Infix in
-            Locks.with_write_lock t.locks cluster
-              (fun () ->
-                (* Cancel any in-progress move since the data will be stale *)
-                Qcow_cluster_map.cancel_move t.cluster_map cluster;
-                B.write t.base base_sector [ buf ]
-                >>= function
-                | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-                | Error `Disconnected -> Lwt.return (Error `Disconnected)
-                | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-                | Ok () ->
-                Log.debug (fun f -> f "Written user data to cluster %s" (Cluster.to_string @@ Physical.cluster ~cluster_bits:t.cluster_bits offset'));
-                Lwt.return (Ok ())
-              )
+            ClusterIO.walk_readonly t vaddr
+            >>= function
+            | None ->
+              (* Only the first write to this area needs to allocate, so it's ok
+                 to make this a little slower *)
+              ClusterIO.walk_and_allocate t vaddr
+              >>= fun offset' ->
+              let sector = Physical.sector ~sector_size:t.sector_size offset' in
+              Lwt.return (Ok { sector; bufs = [ buf ] })
+            | Some offset' ->
+              let sector = Physical.sector ~sector_size:t.sector_size offset' in
+              Lwt.return (Ok { sector; bufs = [ buf ] })
           ) (chop_into_aligned cluster_size byte bufs)
+        >>= fun work' ->
+        (* work may contain contiguous items *)
+        let work = coalesce_into_adjacent t.sector_size work' in
+        iter_p (fun work ->
+          let first = Cluster.of_int64 Int64.(div work.sector (of_int sectors_per_cluster)) in
+          let last_sector = Int64.(add work.sector (of_int (Cstructs.len work.bufs / t.sector_size))) in
+          let last_sector' = Int64.(round_up last_sector (of_int sectors_per_cluster)) in
+          let last = Cluster.of_int64 Int64.(div last_sector' (of_int sectors_per_cluster)) in
+          let open Lwt.Infix in
+          Locks.with_write_locks t.locks ~first ~last
+            (fun () ->
+              (* Cancel any in-progress move since the data will be stale *)
+              let rec loop n =
+                if n > last then () else begin
+                  Qcow_cluster_map.cancel_move t.cluster_map n;
+                  loop (Cluster.succ n)
+                end in
+              loop first;
+              B.write t.base work.sector work.bufs
+              >>= function
+              | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+              | Error `Disconnected -> Lwt.return (Error `Disconnected)
+              | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+              | Ok () ->
+              Lwt.return (Ok ())
+            )
+          ) work
       )
 
   let make_cluster_map t =
