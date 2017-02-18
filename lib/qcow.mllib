@@ -9,7 +9,7 @@ Qcow_diet
 Qcow_bitmap
 Qcow_rwlock
 Qcow_cache
-Qcow_cluster
+Qcow_locks
 Qcow_cluster_map
 Qcow_padded
 Qcow_cstructs

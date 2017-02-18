@@ -26,7 +26,7 @@ type write_error = [ Mirage_block.write_error | `Msg of string ]
 val make:
   cache:Qcow_cache.t
   -> cluster_bits:int
-  -> locks:Qcow_cluster.t
+  -> locks:Qcow_locks.t
   -> unit -> t
 (** Construct a qcow metadata structure given a set of cluster read/write/flush
     operations *)

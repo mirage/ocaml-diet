@@ -34,13 +34,14 @@ module Log = (val Logs.src_log src : Logs.LOG)
 module Lwt_error = Qcow_error.Lwt_error
 module Lwt_write_error = Qcow_error.Lwt_write_error
 module Cache = Qcow_cache
+module Locks = Qcow_locks
 
 type error = [ Mirage_block.error | `Msg of string ]
 type write_error = [ Mirage_block.write_error | `Msg of string ]
 
 type t = {
   cache: Cache.t;
-  locks: Qcow_cluster.t;
+  locks: Locks.t;
   mutable cluster_map: Qcow_cluster_map.t option; (* free/ used space map *)
   cluster_bits: int;
   m: Lwt_mutex.t;
@@ -102,7 +103,7 @@ let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
     lock held. *)
 let read t cluster f =
   let open Lwt_error.Infix in
-  Qcow_cluster.with_read_lock t.locks cluster
+  Locks.with_read_lock t.locks cluster
     (fun () ->
        Cache.read t.cache cluster
        >>= fun data ->
@@ -113,7 +114,7 @@ let read t cluster f =
     back the results, all with the lock held. *)
 let update t cluster f =
   let open Lwt_write_error.Infix in
-  Qcow_cluster.with_write_lock t.locks cluster
+  Locks.with_write_lock t.locks cluster
     (fun () ->
        (* Cancel any in-progress move since the data will be stale *)
        begin match t.cluster_map with

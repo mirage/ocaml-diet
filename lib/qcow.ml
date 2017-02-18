@@ -20,6 +20,7 @@ module Error = Qcow_error
 module Header = Qcow_header
 module Virtual = Qcow_virtual
 module Physical = Qcow_physical
+module Locks = Qcow_locks
 
 let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right_logical
@@ -93,7 +94,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     config: Config.t;
     info: Mirage_block.info;
     cache: Cache.t;
-    locks: Qcow_cluster.t;
+    locks: Locks.t;
     recycler: Recycler.t;
     metadata: Metadata.t;
     (* for convenience *)
@@ -194,7 +195,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         [f] must cause the clusters to be registered in the cluster map from
         file metadata, otherwise the clusters could be immediately collected.
 
-        This must be called via Qcow_cluster.with_metadata_lock, to prevent
+        This must be called via Locks.with_metadata_lock, to prevent
         a parallel thread allocating another cluster for the same purpose.
         This also prevents the recycling thread from resizing the file
         concurrently.
@@ -604,7 +605,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
        racing with us then we may or may not see the mapping. *)
     let walk_readonly t a =
       let open Lwt_error.Infix in
-      Qcow_cluster.with_metadata_lock t.locks
+      Locks.with_metadata_lock t.locks
         (fun () ->
           read_l1_table t a.Virtual.l1_index
           >>= fun l2_table_offset ->
@@ -642,7 +643,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
        entries as we go. *)
     let walk_and_allocate t a =
       let open Lwt_write_error.Infix in
-      Qcow_cluster.with_metadata_lock t.locks
+      Locks.with_metadata_lock t.locks
         (fun () ->
            read_l1_table t a.Virtual.l1_index
            >>= fun l2_offset ->
@@ -709,7 +710,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
       let walk_and_deallocate t a =
         let open Lwt_write_error.Infix in
-        Qcow_cluster.with_metadata_lock t.locks
+        Locks.with_metadata_lock t.locks
           (fun () ->
             read_l1_table t a.Virtual.l1_index
             >>= fun l2_offset ->
@@ -771,7 +772,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
               let cluster = Physical.cluster ~cluster_bits:t.cluster_bits offset' in
               let open Lwt.Infix in
-              Qcow_cluster.with_read_lock t.locks cluster
+              Locks.with_read_lock t.locks cluster
                 (fun () ->
                   B.read t.base base_sector [ buf ]
                 )
@@ -803,7 +804,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             let base_sector, _ = Physical.to_sector ~sector_size:t.sector_size offset' in
             let cluster = Physical.cluster ~cluster_bits:t.cluster_bits offset' in
             let open Lwt.Infix in
-            Qcow_cluster.with_write_lock t.locks cluster
+            Locks.with_write_lock t.locks cluster
               (fun () ->
                 (* Cancel any in-progress move since the data will be stale *)
                 Qcow_cluster_map.cancel_move t.cluster_map cluster;
@@ -1195,7 +1196,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       end else Lwt.return_unit )
     >>= fun () ->
 
-    let locks = Qcow_cluster.make () in
+    let locks = Locks.make () in
     let read_cluster i =
       let buf = malloc h in
       let cluster = Cluster.to_int64 i in

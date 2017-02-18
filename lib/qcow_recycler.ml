@@ -13,6 +13,7 @@ let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right
 
 module Cache = Qcow_cache
+module Locks = Qcow_locks
 module Metadata = Qcow_metadata
 module Physical = Qcow_physical
 
@@ -24,7 +25,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     cluster_bits: int;
     mutable cluster_map: Qcow_cluster_map.t option; (* free/ used space map *)
     cache: Cache.t;
-    locks: Qcow_cluster.t;
+    locks: Locks.t;
     metadata: Metadata.t;
     zero_buffer: Cstruct.t;
     mutable background_thread: unit Lwt.t;
@@ -92,9 +93,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Lwt.return (Ok ())
 
   let copy t src dst =
-    Qcow_cluster.with_read_lock t.locks src
+    Locks.with_read_lock t.locks src
       (fun () ->
-         Qcow_cluster.with_write_lock t.locks dst
+         Locks.with_write_lock t.locks dst
            (fun () ->
              copy_already_locked t src dst
            )
@@ -107,9 +108,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     Qcow_cluster_map.(set_move_state cluster_map move Copying);
     let src, dst = Qcow_cluster_map.Move.(move.src, move.dst) in
     let open Lwt.Infix in
-    Qcow_cluster.with_read_lock t.locks src
+    Locks.with_read_lock t.locks src
       (fun () ->
-         Qcow_cluster.with_write_lock t.locks dst
+         Locks.with_write_lock t.locks dst
            (fun () ->
              copy_already_locked t src dst
              >>= function
@@ -172,7 +173,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | None -> assert false (* by construction, see `make` *)
       | Some x -> x in
     let open Qcow_cluster_map in
-    Qcow_cluster.with_metadata_lock t.locks
+    Locks.with_metadata_lock t.locks
       (fun () ->
 
     let flushed =
@@ -400,7 +401,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           | Ok _nr_updated -> loop ()
         end
       | `Resize ->
-        Qcow_cluster.with_metadata_lock t.locks
+        Locks.with_metadata_lock t.locks
           (fun () ->
             let new_last_block = 1 + (Cluster.to_int @@ Qcow_cluster_map.get_last_block cluster_map) in
             Log.debug (fun f -> f "block recycler: resize for last_block = %d" new_last_block);

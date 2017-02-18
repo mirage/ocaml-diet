@@ -21,7 +21,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S): sig
   (** A cluster recycling engine *)
 
   val create: base:B.t -> sector_size:int -> cluster_bits:int
-    -> cache:Qcow_cache.t -> locks:Qcow_cluster.t
+    -> cache:Qcow_cache.t -> locks:Qcow_locks.t
     -> metadata:Qcow_metadata.t -> t
   (** Initialise a cluster recycler over the given block device *)
 
