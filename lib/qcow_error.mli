@@ -31,6 +31,8 @@ val error_msg: ('a, unit, string, ('b, [> `Msg of string ]) result) format4 -> '
 
 val ( >>= ) : ('a, 'b) result -> ('a -> ('c, 'b) result) -> ('c, 'b) result
 
+val any: (unit, 'b) result list -> (unit, 'b) result
+
 module Lwt_error: sig
   module Infix: sig
     val ( >>= ) :

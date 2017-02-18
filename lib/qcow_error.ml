@@ -30,6 +30,11 @@ let ( >>= ) m f = match m with
   | Error x -> Error x
   | Ok x -> f x
 
+let rec any = function
+  | [] -> Ok ()
+  | (Error e) :: _ -> Error e
+  | _ :: rest -> any rest
+
 module Lwt_error = struct
   open Lwt.Infix
   module Infix = struct

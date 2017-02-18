@@ -12,6 +12,7 @@ open Qcow_types
 let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right
 
+module Error = Qcow_error
 module Cache = Qcow_cache
 module Locks = Qcow_locks
 module Metadata = Qcow_metadata
@@ -123,12 +124,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             )
       )
 
-  (* If any is an error, return it *)
-  let rec any_error = function
-    | [] -> Ok ()
-    | (Error e) :: _ -> Error e
-    | _ :: rest -> any_error rest
-
   let erase t remaining =
     let open Lwt.Infix in
     let intervals = Cluster.IntervalSet.fold (fun i acc -> i :: acc) remaining [] in
@@ -153,10 +148,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           else [ from, n ] in
         Lwt_list.map_p (fun (cluster, n) -> erase cluster n) (chop_into x n buffer_size_clusters)
         >>= fun results ->
-        Lwt.return (any_error results)
+        Lwt.return (Error.any results)
       ) intervals
     >>= fun results ->
-    Lwt.return (any_error results)
+    Lwt.return (Error.any results)
 
   (* Run all threads in parallel, wait for all to complete, then iterate through
      the results and return the first failure we discover. *)
@@ -384,7 +379,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         let moves = Qcow_cluster_map.get_moves cluster_map in
         Lwt_list.map_p (move t) moves
         >>= fun results ->
-        begin match any_error results with
+        begin match Error.any results with
         | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
         | Error `Disconnected -> Lwt.fail_with "Disconnected"
         | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
