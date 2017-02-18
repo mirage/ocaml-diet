@@ -52,6 +52,21 @@ module Lwt_error = struct
     | Error `Unimplemented -> Lwt.fail_with "unimplemented"
     | Error `Disconnected -> Lwt.fail_with "disconnected"
     | Ok x -> Lwt.return x
+
+  module List = struct
+    let map_p f xs =
+      let threads = List.map f xs in
+      Lwt_list.fold_left_s (fun acc t ->
+        t >>= fun x ->
+        match acc, x with
+        | Error e, _ -> Lwt.return (Error e)
+        | _, Error e -> Lwt.return (Error e)
+        | Ok acc, Ok x -> Lwt.return (Ok (x :: acc))
+      ) (Ok []) threads
+      >>= function
+      | Error e -> Lwt.return (Error e)
+      | Ok xs -> Lwt.return (Ok (List.rev xs))
+  end
 end
 
 module Lwt_write_error = struct

@@ -58,6 +58,18 @@ let with_read_lock t cluster f =
       Qcow_rwlock.with_read_lock rw f
     )
 
+let with_read_locks t ~first ~last f =
+  let rec loop n =
+    if n > last
+    then f ()
+    else
+      with_lock t n
+        (fun rw ->
+          Qcow_rwlock.with_read_lock rw
+            (fun () -> loop (Cluster.succ n))
+        ) in
+  loop first
+
 let with_write_lock t cluster f =
   with_lock t cluster
     (fun rw ->

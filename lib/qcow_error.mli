@@ -47,6 +47,13 @@ module Lwt_error: sig
     ('a, [< `Disconnected | `Msg of string | `Unimplemented ]) result Lwt.t ->
     'a Lwt.t
 
+  module List: sig
+    val map_p: ('a -> ('b, 'error) result Lwt.t) -> 'a list -> ('b list, 'error) result Lwt.t
+    (** [map_p f xs] computes [f x] where [x \in xs] concurrently and returns
+        a list of successful results or the first error encountered. All threads
+        will have terminated by the time the function returns. *)
+  end
+
 end
 
 module Lwt_write_error : sig
