@@ -82,6 +82,9 @@ module Int64 = Qcow_int64
 
 module Int = Qcow_int
 
+(*
 module Cluster = struct
   include Qcow_word_size.Cluster
 end
+*)
+module Cluster = Qcow_int64
