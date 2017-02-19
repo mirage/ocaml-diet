@@ -146,10 +146,10 @@ module Int = struct
     let to_int x = x
     let of_int x = x
     let to_string = string_of_int
-    let shift_left x n = assert (x > 0); x lsl n
-    let shift_right_logical x n = assert (x > 0); x lsr n
+    let shift_left x n = x lsl n
+    let shift_right_logical x n = x lsr n
     let logor x y = x lor y
-    let rem x y = assert (x > 0); x mod y
+    let rem x y = x mod y
   end
   module IntervalSet = Qcow_diet.Make(M)
   module Map = Map.Make(M)
@@ -159,4 +159,4 @@ module Int = struct
 
 end
 
-module Cluster = Int64
+module Cluster = Int
