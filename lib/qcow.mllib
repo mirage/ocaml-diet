@@ -2,6 +2,9 @@ Qcow_config
 Qcow_header
 Qcow_error
 Qcow_types
+Qcow_int
+Qcow_int64
+Qcow_word_size
 Qcow_virtual
 Qcow_physical
 Qcow_s

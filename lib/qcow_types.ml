@@ -17,26 +17,6 @@
 open Sexplib.Std
 open Qcow_error
 
-module type NUM = sig
-  type t
-  val zero: t
-  val pred: t -> t
-  val succ: t -> t
-  val add: t -> t -> t
-  val sub: t -> t -> t
-  val mul: t -> t -> t
-  val div: t -> t -> t
-  val of_int64: int64 -> t
-  val to_int64: t -> int64
-  val of_int: int -> t
-  val to_int: t -> int
-  val to_string: t -> string
-  val shift_left: t -> int -> t
-  val shift_right_logical: t -> int -> t
-  val logor: t -> t -> t
-  val rem: t -> t -> t
-end
-
 let big_enough_for name buf needed =
   let length = Cstruct.len buf in
   if length < needed
@@ -98,65 +78,10 @@ module Int32 = struct
     return (Cstruct.shift buf 4)
 end
 
-module Int64 = struct
-  module M = struct
-    include Int64
+module Int64 = Qcow_int64
 
-    type _t = int64 [@@deriving sexp]
-    let sexp_of_t = sexp_of__t
-    let t_of_sexp = _t_of_sexp
+module Int = Qcow_int
 
-    let to_int64 x = x
-    let of_int64 x = x
-  end
-  module IntervalSet = Qcow_diet.Make(M)
-  module Map = Map.Make(M)
-  include M
-
-  let round_up x size = mul (div (add x (pred size)) size) size
-
-  let sizeof _ = 8
-
-  let read buf =
-    big_enough_for "Int64.read" buf 8
-    >>= fun () ->
-    return (Cstruct.BE.get_uint64 buf 0, Cstruct.shift buf 8)
-
-  let write t buf =
-    big_enough_for "Int64.read" buf 8
-    >>= fun () ->
-    Cstruct.BE.set_uint64 buf 0 t;
-    return (Cstruct.shift buf 8)
-
+module Cluster = struct
+  include Qcow_word_size.Cluster
 end
-
-module Int = struct
-  module M = struct
-    type t = int [@@deriving sexp]
-    let zero = 0
-    let succ x = x + 1
-    let pred x = x - 1
-    let add x y = x + y
-    let sub x y = x - y
-    let compare (x: t) (y: t) = Pervasives.compare x y
-    let mul x y = x * y
-    let div x y = x / y
-    let to_int64 = Int64.of_int
-    let of_int64 = Int64.to_int
-    let to_int x = x
-    let of_int x = x
-    let to_string = string_of_int
-    let shift_left x n = x lsl n
-    let shift_right_logical x n = x lsr n
-    let logor x y = x lor y
-    let rem x y = x mod y
-  end
-  module IntervalSet = Qcow_diet.Make(M)
-  module Map = Map.Make(M)
-  include M
-
-  let round_up x size = mul (div (add x (pred size)) size) size
-
-end
-
-module Cluster = Int

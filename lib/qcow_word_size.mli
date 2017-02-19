@@ -1,5 +1,5 @@
 (*
- * Copyright (C) 2015 David Scott <dave@recoil.org>
+ * Copyright (C) 2017 David Scott <dave@recoil.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -14,40 +14,10 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
-(** Parsers and printers for types used in qcow2 fields *)
 
-open Sexplib
+(** Host system word size dependent types *)
 
-val big_enough_for: string -> Cstruct.t -> int -> unit Qcow_error.t
-(** [big_enough_for name buf length] returns an error with a log message
-    if buffer [buf] is smaller than [length]. The [name] will be included
-    in the error message. *)
-
-module Int8 : sig
-  type t = int [@@deriving sexp]
-
-  include Qcow_s.SERIALISABLE with type t := t
-end
-
-module Int16 : sig
-  type t = int [@@deriving sexp]
-
-  include Qcow_s.SERIALISABLE with type t := t
-end
-
-module Int32 : sig
-  include module type of Int32
-
-  val t_of_sexp: Sexp.t -> t
-  val sexp_of_t: t -> Sexp.t
-
-  include Qcow_s.SERIALISABLE with type t := t
-end
-
-module Int64 : module type of Qcow_int64
-module Int : module type of Qcow_int
-
-module Cluster : sig
+module Cluster: sig
   type t [@@deriving sexp]
 
   include Qcow_s.NUM with type t := t
@@ -57,5 +27,4 @@ module Cluster : sig
 
   module IntervalSet: Qcow_s.INTERVAL_SET with type elt = t
   module Map: Map.S with type key = t
-
 end
