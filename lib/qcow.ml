@@ -1071,57 +1071,75 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                       last_percent := percent
                     end in
 
-                compact_s
-                  (fun move () ->
-                    let open Lwt.Infix in
-                    update_progress ();
-                    Recycler.move t.recycler move
-                    >>= function
-                    | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-                    | Error `Disconnected -> Lwt.return (Error `Disconnected)
-                    | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-                    | Ok () -> Lwt.return (Ok (not !cancel_requested, ()))
-                  ) map ()
-                >>= fun () ->
+                let one_pass () =
+                  compact_s
+                    (fun move () ->
+                      let open Lwt.Infix in
+                      update_progress ();
+                      Recycler.move t.recycler move
+                      >>= function
+                      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+                      | Error `Disconnected -> Lwt.return (Error `Disconnected)
+                      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+                      | Ok () -> Lwt.return (Ok (not !cancel_requested, ()))
+                    ) map ()
+                  >>= fun () ->
 
-                (* Flush now so that if we crash after updating some of the references, the
-                   destination blocks will contain the correct data. *)
-                let open Lwt.Infix in
-                Recycler.flush t.recycler
-                >>= function
-                | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-                | Error `Disconnected -> Lwt.return (Error `Disconnected)
-                | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-                | Ok () ->
-                let open Lwt_write_error.Infix in
+                  (* Flush now so that if we crash after updating some of the references, the
+                     destination blocks will contain the correct data. *)
+                  let open Lwt.Infix in
+                  Recycler.flush t.recycler
+                  >>= function
+                  | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+                  | Error `Disconnected -> Lwt.return (Error `Disconnected)
+                  | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+                  | Ok () ->
+                  let open Lwt_write_error.Infix in
 
-                Recycler.update_references t.recycler
+                  Recycler.update_references t.recycler
+                  >>= fun refs_updated ->
+
+                  (* Flush now so that the pointers are persisted before we truncate the file *)
+                  let open Lwt.Infix in
+                  Recycler.flush t.recycler
+                  >>= function
+                  | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+                  | Error `Disconnected -> Lwt.return (Error `Disconnected)
+                  | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+                  | Ok () -> Lwt.return (Ok refs_updated) in
+                one_pass ()
                 >>= fun refs_updated ->
-
-                (* Flush now so that the pointers are persisted before we truncate the file *)
-                let open Lwt.Infix in
-                Recycler.flush t.recycler
-                >>= function
-                | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-                | Error `Disconnected -> Lwt.return (Error `Disconnected)
-                | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-                | Ok () ->
+                Log.info (fun f -> f "Pass 1: %Ld references updated" refs_updated);
+                (* modifying a L2 metadata block will have cancelled the move, so
+                   perform an additional pass. *)
+                one_pass ()
+                >>= fun refs_updated' ->
+                Log.info (fun f -> f "Pass 2: %Ld references updated" refs_updated');
+                one_pass ()
+                >>= fun refs_updated'' ->
+                if refs_updated'' <> 0L
+                then Log.err (fun f -> f "Failed to reach a fixed point after %Ld, %Ld and %Ld block moves"
+                  refs_updated refs_updated' refs_updated'');
 
                 let last_block = get_last_block map in
                 Log.debug (fun f -> f "Shrink file so that last cluster was %s, now %s" (Cluster.to_string start_last_block) (Cluster.to_string last_block));
 
                 let open Lwt_write_error.Infix in
-                ClusterIO.allocate_clusters t 0 (fun _ -> Lwt.return (Ok ())) (* takes care of the file size *)
+                let p = Physical.make ((Cluster.to_int last_block + 1) lsl t.cluster_bits) in
+                let size_sectors = Physical.sector ~sector_size:t.sector_size p in
+                resize_base t.base t.sector_size (Some(t.cluster_map, t.cluster_bits)) p
                 >>= fun () ->
+                Log.debug (fun f -> f "Resized file to %s clusters (%Ld sectors)" (Cluster.to_string last_block) size_sectors);
 
                 progress_cb ~percent:100;
 
-                let copied = Int64.mul refs_updated sectors_per_cluster in (* one ref per block *)
+                let total_refs_updated = Int64.(add (add refs_updated refs_updated') refs_updated'') in
+                let copied = Int64.(mul total_refs_updated sectors_per_cluster) in (* one ref per block *)
                 let old_size = Int64.mul (Cluster.to_int64 start_last_block) sectors_per_cluster in
                 let new_size = Int64.mul (Cluster.to_int64 last_block) sectors_per_cluster in
                 let report = { refs_updated; copied; old_size; new_size } in
                 Log.info (fun f -> f "%Ld sectors copied, %Ld references updated, file shrunk by %Ld sectors"
-                  copied refs_updated (Int64.sub old_size new_size)
+                  copied total_refs_updated (Int64.sub old_size new_size)
                 );
                 Lwt.return (Ok report)
             )
