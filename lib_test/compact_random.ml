@@ -59,8 +59,8 @@ let random_write_discard_compact nr_clusters stop_after =
 
     let buffer_size = 1048576 in (* perform 1MB of I/O at a time, maximum *)
     let buffer_size_sectors = Int64.of_int (buffer_size / info.Mirage_block.sector_size) in
-    let write_buffer = Cstruct.create buffer_size in
-    let read_buffer = Cstruct.create buffer_size in
+    let write_buffer = Io_page.(to_cstruct @@ get (buffer_size / page_size)) in
+    let read_buffer = Io_page.(to_cstruct @@ get (buffer_size / page_size)) in
 
     let write x n =
       assert (Int64.add x n <= nr_sectors);
