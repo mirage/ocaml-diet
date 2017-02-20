@@ -867,6 +867,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           ) work
       )
 
+  exception Reference_outside_file of int64 * int64
+
   let make_cluster_map t =
     let open Qcow_cluster_map in
     let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
@@ -914,8 +916,9 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       if cluster > max_cluster then begin
         Log.err (fun f -> f "Found a reference to cluster %s outside the file (max cluster %s) from cluster %s.%d"
           (Cluster.to_string cluster) (Cluster.to_string max_cluster) (Cluster.to_string c) w);
-        failwith (Printf.sprintf "Found a reference to cluster %s outside the file (max cluster %s) from cluster %s.%d"
-          (Cluster.to_string cluster) (Cluster.to_string max_cluster) (Cluster.to_string c) w);
+        let src = Int64.add (Int64.of_int w) (Cluster.to_int64 c <| (Int32.to_int t.h.Header.cluster_bits)) in
+        let dst = Cluster.to_int64 cluster <| (Int32.to_int t.h.Header.cluster_bits) in
+        raise (Reference_outside_file(src, dst))
       end;
       let c, w = rf in
       if cluster = Cluster.zero then () else begin
@@ -1009,18 +1012,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     free: int64;
     used: int64;
   }
-
-  let check t =
-    let open Lwt_error.Infix in
-    Qcow_rwlock.with_write_lock t.metadata_lock
-      (fun () ->
-        let open Qcow_cluster_map in
-        make_cluster_map t
-        >>= fun block_map ->
-        let free = total_free block_map in
-        let used = total_used block_map in
-        Lwt.return (Ok { free; used })
-      )
 
   type compact_result = {
       copied:       int64;
@@ -1334,14 +1325,38 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Ok (h, _) ->
         make config base h
         >>= fun t ->
-        ( if config.Config.check_on_connect then begin
-            Lwt_error.or_fail_with @@ check t
-            >>= fun { free; used } ->
-            Log.info (fun f -> f "image has %Ld free sectors and %Ld used sectors" free used);
-            Lwt.return_unit
-          end else Lwt.return_unit )
-        >>= fun () ->
+        make_cluster_map t
+        >>= function
+        | Error (`Reference_outside_file (src, dst)) -> Lwt.fail_with (Printf.sprintf "reference from %Ld to outside file %Ld: image is corrupt" src dst)
+        | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
+        | Error `Disconnected -> Lwt.fail_with "Disconnected"
+        | Error (`Msg m) -> Lwt.fail_with m
+        | Ok block_map ->
+        let open Qcow_cluster_map in
+        let free = total_free block_map in
+        let used = total_used block_map in
+        Log.info (fun f -> f "image has %Ld free sectors and %Ld used sectors" free used);
         Lwt.return t
+
+  let check base =
+    let open Lwt.Infix in
+    connect base
+    >>= fun t ->
+    let open Qcow_cluster_map in
+    Lwt.catch
+      (fun () ->
+        make_cluster_map t
+        >>= function
+        | Error `Disconnected -> Lwt.return (Error `Disconnected)
+        | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+        | Error (`Msg m) -> Lwt.return (Error (`Msg m))
+        | Ok block_map ->
+        let free = total_free block_map in
+        let used = total_used block_map in
+        Lwt.return (Ok { free; used })
+      ) (function
+        | Reference_outside_file(src, dst) -> Lwt.return (Error (`Reference_outside_file(src, dst)))
+        | e -> Lwt.fail e)
 
   let resize t ~new_size:requested_size_bytes ?(ignore_data_loss=false) () =
     Qcow_rwlock.with_write_lock t.metadata_lock

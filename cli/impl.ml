@@ -188,18 +188,43 @@ let check filename =
   let module B = Qcow.Make(Block)(Time) in
   let open Lwt in
   let t =
-    Block.connect filename
-    >>= fun x ->
-    B.connect x
-    >>= fun x ->
-    B.check x
-    >>= function
-    | Error _ -> failwith (Printf.sprintf "Qcow consistency check failed on %s" filename)
-    | Ok x ->
-      Printf.printf "Qcow file seems intact.\n";
-      Printf.printf "Total free blocks: %Ld\n" x.B.free;
-      Printf.printf "Total used blocks: %Ld\n" x.B.used;
-      return (`Ok ()) in
+  let rec retry = function
+    | 0 ->
+      Printf.fprintf stderr "Warning: file is being concurrently modified\n";
+      Printf.fprintf stderr "We found no concrete problems, but the file is being modified too\n";
+      Printf.fprintf stderr "quickly for us to read a consistent view.\n";
+      return (`Ok ())
+    | n ->
+      Block.connect filename
+      >>= fun block ->
+      B.check block
+      >>= function
+      | Error (`Reference_outside_file(src, dst)) ->
+        begin
+          Block.disconnect block
+          >>= fun () ->
+          Block.connect filename
+          >>= fun block ->
+          Block.get_info block
+          >>= fun info ->
+          let size = Int64.(mul info.Mirage_block.size_sectors (of_int info.Mirage_block.sector_size)) in
+          if dst > size then begin
+            Printf.fprintf stderr "Error: detected a reference outside the file, from %Ld to %Ld while the file size is %Ld\n%!" src dst size;
+            exit 1
+          end else begin
+            (* The file has grown, try again *)
+            Block.disconnect block
+            >>= fun () ->
+            retry (n - 1)
+          end
+        end
+      | Error _ -> failwith (Printf.sprintf "Qcow consistency check failed on %s" filename)
+      | Ok x ->
+        Printf.printf "Qcow file seems intact.\n";
+        Printf.printf "Total free blocks: %Ld\n" x.B.free;
+        Printf.printf "Total used blocks: %Ld\n" x.B.used;
+        return (`Ok ()) in
+        retry 5 in
   Lwt_main.run t
 
 exception Non_zero
