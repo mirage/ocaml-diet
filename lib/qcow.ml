@@ -867,6 +867,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           ) work
       )
 
+  exception Reference_outside_file of int64 * int64
+
   let make_cluster_map t =
     let open Qcow_cluster_map in
     let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
@@ -914,8 +916,9 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       if cluster > max_cluster then begin
         Log.err (fun f -> f "Found a reference to cluster %s outside the file (max cluster %s) from cluster %s.%d"
           (Cluster.to_string cluster) (Cluster.to_string max_cluster) (Cluster.to_string c) w);
-        failwith (Printf.sprintf "Found a reference to cluster %s outside the file (max cluster %s) from cluster %s.%d"
-          (Cluster.to_string cluster) (Cluster.to_string max_cluster) (Cluster.to_string c) w);
+        let src = Int64.add (Int64.of_int w) (Cluster.to_int64 c <| (Int32.to_int t.h.Header.cluster_bits)) in
+        let dst = Cluster.to_int64 cluster <| (Int32.to_int t.h.Header.cluster_bits) in
+        raise (Reference_outside_file(src, dst))
       end;
       let c, w = rf in
       if cluster = Cluster.zero then () else begin
@@ -1015,15 +1018,20 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       (fun () ->
         let open Lwt.Infix in
         let open Qcow_cluster_map in
-        make_cluster_map t
-        >>= function
-        | Error `Disconnected -> Lwt.return (Error `Disconnected)
-        | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-        | Error (`Msg m) -> Lwt.return (Error (`Msg m))
-        | Ok block_map ->
-        let free = total_free block_map in
-        let used = total_used block_map in
-        Lwt.return (Ok { free; used })
+        Lwt.catch
+          (fun () ->
+            make_cluster_map t
+            >>= function
+            | Error `Disconnected -> Lwt.return (Error `Disconnected)
+            | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+            | Error (`Msg m) -> Lwt.return (Error (`Msg m))
+            | Ok block_map ->
+            let free = total_free block_map in
+            let used = total_used block_map in
+            Lwt.return (Ok { free; used })
+          ) (function
+            | Reference_outside_file(src, dst) -> Lwt.return (Error (`Reference_outside_file(src, dst)))
+            | e -> Lwt.fail e)
       )
 
   type compact_result = {
