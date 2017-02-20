@@ -1,5 +1,5 @@
 (*
- * Copyright (C) 2016 David Scott <dave@recoil.org>
+ * Copyright (C) 2017 Docker Inc
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -15,30 +15,11 @@
  *
  *)
 
-module type ELT = sig
-  type t [@@deriving sexp]
-  (** The type of the set elements. *)
+module Make(B: Qcow_s.RESIZABLE_BLOCK): sig
+  (** A block device which is padded with virtual zeroes so that reads beyond
+      the current end don't fail. *)
 
-  include Set.OrderedType with type t := t
-
-  val zero: t
-  (** The zeroth element *)
-
-  val pred: t -> t
-  (** Predecessor of an element *)
-
-  val succ: t -> t
-  (** Successor of an element *)
-
-  val sub: t -> t -> t
-  (** [sub a b] returns [a] - [b] *)
-
-  val add: t -> t -> t
-  (** [add a b] returns [a] + [b] *)
-end
-
-module Make(Elt: ELT): Qcow_s.INTERVAL_SET with type elt = Elt.t
-
-module Test: sig
-  val all: (string * (unit -> unit)) list
+  include Qcow_s.RESIZABLE_BLOCK
+    with type t = B.t
+     and type page_aligned_buffer = Cstruct.t
 end

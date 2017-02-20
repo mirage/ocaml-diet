@@ -16,6 +16,7 @@
  *)
 module Error = Qcow_error
 module Header = Qcow_header
+module Physical = Qcow_physical
 
 module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
   include Mirage_block_lwt.S
@@ -23,15 +24,18 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
   module Config: sig
     type t = {
       discard: bool; (** true if `discard` will be enabled at runtime *)
+      keep_erased: int64 option; (** size of erased free pool in sectors *)
       compact_after_unmaps: int64 option; (** automatically compact after n sectors are unmapped *)
       compact_ms: int; (** if automatically compacting, wait for this many milliseconds *)
       check_on_connect: bool; (** perform an integrity check on connect *)
     }
     (** Runtime configuration of a device *)
 
-    val create: ?discard:bool -> ?compact_after_unmaps:int64 ->
+    val create: ?discard:bool ->
+      ?keep_erased:int64 ->
+      ?compact_after_unmaps:int64 ->
       ?compact_ms:int -> ?check_on_connect:bool -> unit -> t
-    (** [create ?discard ?compact_after_unmaps ?compact_ms ()] constructs a runtime configuration *)
+    (** [create ?discard ?keep_erased ?compact_after_unmaps ?compact_ms ()] constructs a runtime configuration *)
 
     val to_string: t -> string
     (** Marshal a config into a string suitable for a command-line argument *)
@@ -120,5 +124,5 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
 
   module Debug: Qcow_s.DEBUG
     with type t = t
-     and type error = error
+     and type error = write_error
 end

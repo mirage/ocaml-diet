@@ -73,7 +73,9 @@ module type DEBUG = sig
 
   val check_no_overlaps: t -> (unit, error) result Lwt.t
 
-  val set_next_cluster: t -> int64 -> unit
+  val assert_no_leaked_blocks: t -> unit
+
+  val flush: t -> (unit, error) result Lwt.t
 end
 
 module type INTERVAL_SET = sig
@@ -105,6 +107,9 @@ module type INTERVAL_SET = sig
   val is_empty: t -> bool
   (** Test whether a set is empty or not *)
 
+  val cardinal: t -> elt
+  (** [cardinal t] is the number of elements in the set [t] *)
+
   val mem: elt -> t -> bool
   (** [mem elt t] tests whether [elt] is in set [t] *)
 
@@ -113,6 +118,9 @@ module type INTERVAL_SET = sig
 
   val fold_s: (interval -> 'a -> 'a Lwt.t) -> t -> 'a -> 'a Lwt.t
   (** [fold_s f t acc] folds [f] across all the intervals in [t] *)
+
+  val fold_individual: (elt -> 'a -> 'a) -> t -> 'a -> 'a
+  (** [fold_individual f t acc] folds [f] across all the individual elements of [t] *)
 
   val add: interval -> t -> t
   (** [add interval t] returns the set consisting of [t] plus [interval] *)
@@ -131,6 +139,10 @@ module type INTERVAL_SET = sig
   val choose: t -> interval
   (** [choose t] returns one interval, or raises Not_found if the set is empty *)
 
+  val take: t -> elt -> (t * t) option
+  (** [take n] returns [Some a, b] where [cardinal a = n] and [diff t a = b]
+      or [None] if [cardinal t < n] *)
+
   val union: t -> t -> t
   (** set union *)
 
@@ -139,4 +151,24 @@ module type INTERVAL_SET = sig
 
   val inter: t -> t -> t
   (** set intersection *)
+end
+
+module type NUM = sig
+  type t
+  val zero: t
+  val pred: t -> t
+  val succ: t -> t
+  val add: t -> t -> t
+  val sub: t -> t -> t
+  val mul: t -> t -> t
+  val div: t -> t -> t
+  val of_int64: int64 -> t
+  val to_int64: t -> int64
+  val of_int: int -> t
+  val to_int: t -> int
+  val to_string: t -> string
+  val shift_left: t -> int -> t
+  val shift_right_logical: t -> int -> t
+  val logor: t -> t -> t
+  val rem: t -> t -> t
 end

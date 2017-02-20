@@ -78,25 +78,13 @@ module Int32 = struct
     return (Cstruct.shift buf 4)
 end
 
-module Int64 = struct
-  include Int64
+module Int64 = Qcow_int64
 
-  type _t = int64 [@@deriving sexp]
-  let sexp_of_t = sexp_of__t
-  let t_of_sexp = _t_of_sexp
+module Int = Qcow_int
 
-  let round_up x size = mul (div (add x (pred size)) size) size
-
-  let sizeof _ = 8
-
-  let read buf =
-    big_enough_for "Int64.read" buf 8
-    >>= fun () ->
-    return (Cstruct.BE.get_uint64 buf 0, Cstruct.shift buf 8)
-
-  let write t buf =
-    big_enough_for "Int64.read" buf 8
-    >>= fun () ->
-    Cstruct.BE.set_uint64 buf 0 t;
-    return (Cstruct.shift buf 8)
+(*
+module Cluster = struct
+  include Qcow_word_size.Cluster
 end
+*)
+module Cluster = Qcow_int64

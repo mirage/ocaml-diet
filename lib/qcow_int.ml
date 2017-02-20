@@ -1,5 +1,5 @@
 (*
- * Copyright (C) 2016 David Scott <dave@recoil.org>
+ * Copyright (C) 2015 David Scott <dave@recoil.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -14,31 +14,30 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
+open Sexplib.Std
 
-module type ELT = sig
-  type t [@@deriving sexp]
-  (** The type of the set elements. *)
-
-  include Set.OrderedType with type t := t
-
-  val zero: t
-  (** The zeroth element *)
-
-  val pred: t -> t
-  (** Predecessor of an element *)
-
-  val succ: t -> t
-  (** Successor of an element *)
-
-  val sub: t -> t -> t
-  (** [sub a b] returns [a] - [b] *)
-
-  val add: t -> t -> t
-  (** [add a b] returns [a] + [b] *)
+module M = struct
+  type t = int [@@deriving sexp]
+  let zero = 0
+  let succ x = x + 1
+  let pred x = x - 1
+  let add x y = x + y
+  let sub x y = x - y
+  let compare (x: t) (y: t) = Pervasives.compare x y
+  let mul x y = x * y
+  let div x y = x / y
+  let to_int64 = Int64.of_int
+  let of_int64 = Int64.to_int
+  let to_int x = x
+  let of_int x = x
+  let to_string = string_of_int
+  let shift_left x n = x lsl n
+  let shift_right_logical x n = x lsr n
+  let logor x y = x lor y
+  let rem x y = x mod y
 end
+module IntervalSet = Qcow_diet.Make(M)
+module Map = Map.Make(M)
+include M
 
-module Make(Elt: ELT): Qcow_s.INTERVAL_SET with type elt = Elt.t
-
-module Test: sig
-  val all: (string * (unit -> unit)) list
-end
+let round_up x size = mul (div (add x (pred size)) size) size

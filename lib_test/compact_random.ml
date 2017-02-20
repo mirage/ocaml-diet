@@ -40,7 +40,7 @@ let random_write_discard_compact nr_clusters stop_after =
     >>= fun () ->
     Block.connect path
     >>= fun block ->
-    let config = B.Config.create ~discard:true () in
+    let config = B.Config.create ~keep_erased:2048L ~discard:true () in
     B.create block ~size ~lazy_refcounts:false ~config ()
     >>= function
     | Error _ -> failwith "B.create failed"
@@ -57,30 +57,46 @@ let random_write_discard_compact nr_clusters stop_after =
     let empty = ref SectorSet.(add i empty) in
     let nr_iterations = ref 0 in
 
+    let buffer_size = 1048576 in (* perform 1MB of I/O at a time, maximum *)
+    let buffer_size_sectors = Int64.of_int (buffer_size / info.Mirage_block.sector_size) in
+    let write_buffer = Io_page.(to_cstruct @@ get (buffer_size / page_size)) in
+    let read_buffer = Io_page.(to_cstruct @@ get (buffer_size / page_size)) in
+
     let write x n =
       assert (Int64.add x n <= nr_sectors);
-      let y = Int64.(add x (pred n)) in
-      let buf = malloc (info.Mirage_block.sector_size * (Int64.to_int n)) in
-      let rec for_each_sector x remaining =
-        if Cstruct.len remaining = 0 then () else begin
-          let cluster = Int64.(div x (of_int sectors_per_cluster)) in
-          let sector = Cstruct.sub remaining 0 512 in
-          for i = 0 to Cstruct.len sector / 8 - 1 do
-            Cstruct.BE.set_uint64 sector (i * 8) cluster
-          done;
-          for_each_sector (Int64.succ x) (Cstruct.shift remaining 512)
+      let one_write x n =
+        assert (n <= buffer_size_sectors);
+        let buf = Cstruct.sub write_buffer 0 (Int64.to_int n * info.Mirage_block.sector_size) in
+        let rec for_each_sector x remaining =
+          if Cstruct.len remaining = 0 then () else begin
+            let cluster = Int64.(div x (of_int sectors_per_cluster)) in
+            let sector = Cstruct.sub remaining 0 512 in
+            (* Only write the first byte *)
+            Cstruct.BE.set_uint64 sector 0 cluster;
+            for_each_sector (Int64.succ x) (Cstruct.shift remaining 512)
+          end in
+        for_each_sector x buf;
+        B.write qcow x [ buf ]
+        >>= function
+        | Error _ -> failwith "write"
+        | Ok () -> Lwt.return_unit in
+      let rec loop x n =
+        if n = 0L then Lwt.return_unit else begin
+          let n' = min buffer_size_sectors n in
+          one_write x n'
+          >>= fun () ->
+          loop (Int64.add x n') (Int64.sub n n')
         end in
-      for_each_sector x buf;
-      B.write qcow x [ buf ]
-      >>= function
-      | Error _ -> failwith "write"
-      | Ok () ->
-        if n > 0L then begin
-          let i = SectorSet.Interval.make x y in
-          written := SectorSet.add i !written;
-          empty := SectorSet.remove i !empty;
-        end;
-        Lwt.return_unit in
+      loop x n
+      >>= fun () ->
+      if n > 0L then begin
+        let y = Int64.(add x (pred n)) in
+        let i = SectorSet.Interval.make x y in
+        written := SectorSet.add i !written;
+        empty := SectorSet.remove i !empty;
+      end;
+      Lwt.return_unit in
+
     let discard x n =
       assert (Int64.add x n <= nr_sectors);
       let y = Int64.(add x (pred n)) in
@@ -95,11 +111,10 @@ let random_write_discard_compact nr_clusters stop_after =
       end;
       Lwt.return_unit in
     let check_contents sector buf expected =
-      for i = 0 to (Cstruct.len buf) / 8 - 1 do
-        let actual = Cstruct.BE.get_uint64 buf (i * 8) in
-        if actual <> expected
-        then failwith (Printf.sprintf "contents of sector %Ld incorrect: expected %Ld but actual %Ld" sector expected actual)
-      done in
+      (* Only check the first byte: assume the rest of the sector are the same *)
+      let actual = Cstruct.BE.get_uint64 buf 0 in
+      if actual <> expected
+      then failwith (Printf.sprintf "contents of sector %Ld incorrect: expected %Ld but actual %Ld" sector expected actual) in
     let check_all_clusters () =
       let rec check p set = match SectorSet.choose set with
         | i ->
@@ -108,21 +123,33 @@ let random_write_discard_compact nr_clusters stop_after =
           begin
             let n = Int64.(succ (sub y x)) in
             assert (Int64.add x n <= nr_sectors);
-            let buf = malloc ((Int64.to_int n) * info.Mirage_block.sector_size) in
-            B.read qcow x [ buf ]
-            >>= function
-            | Error _ -> failwith "read"
-            | Ok () ->
-              let rec for_each_sector x remaining =
-                if Cstruct.len remaining = 0 then () else begin
-                  let cluster = Int64.(div x (of_int sectors_per_cluster)) in
-                  let expected = p cluster in
-                  let sector = Cstruct.sub remaining 0 512 in
-                  check_contents x sector expected;
-                  for_each_sector (Int64.succ x) (Cstruct.shift remaining 512)
-                end in
-              for_each_sector x buf;
-              check p (SectorSet.remove i set)
+            let one_read x n =
+              assert (n <= buffer_size_sectors);
+              let buf = Cstruct.sub read_buffer 0 (Int64.to_int n * info.Mirage_block.sector_size) in
+              B.read qcow x [ buf ]
+              >>= function
+              | Error _ -> failwith "read"
+              | Ok () ->
+                let rec for_each_sector x remaining =
+                  if Cstruct.len remaining = 0 then () else begin
+                    let cluster = Int64.(div x (of_int sectors_per_cluster)) in
+                    let expected = p cluster in
+                    let sector = Cstruct.sub remaining 0 512 in
+                    check_contents x sector expected;
+                    for_each_sector (Int64.succ x) (Cstruct.shift remaining 512)
+                  end in
+                for_each_sector x buf;
+                Lwt.return_unit in
+            let rec loop x n =
+              if n = 0L then Lwt.return_unit else begin
+                let n' = min buffer_size_sectors n in
+                one_read x n'
+                >>= fun () ->
+                loop (Int64.add x n') (Int64.sub n n')
+              end in
+            loop x n
+            >>= fun () ->
+            check p (SectorSet.remove i set)
           end
         | exception Not_found ->
           Lwt.return_unit in
@@ -138,7 +165,13 @@ let random_write_discard_compact nr_clusters stop_after =
     Random.init 0;
     let rec loop () =
       incr nr_iterations;
+      B.Debug.assert_no_leaked_blocks qcow;
       if !nr_iterations = stop_after then Lwt.return (Ok ()) else begin
+        (* Call flush so any erased blocks become reusable *)
+        B.Debug.flush qcow
+        >>= function
+        | Error _ -> failwith "flush"
+        | Ok () ->
         let r = Random.int 21 in
         (* A random action: mostly a write or a discard, occasionally a compact *)
         ( if 0 <= r && r < 10 then begin
@@ -150,7 +183,7 @@ let random_write_discard_compact nr_clusters stop_after =
               write sector n;
               Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "write timeout")
             ]
-          end else if 10 <= r && r < 20 then begin
+          end else begin
             let sector = Random.int64 nr_sectors in
             let n = Random.int64 (Int64.sub nr_sectors sector) in
             if !debug then Printf.fprintf stderr "discard %Ld %Ld\n%!" sector n;
@@ -159,33 +192,6 @@ let random_write_discard_compact nr_clusters stop_after =
               discard sector n;
               Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "discard timeout")
             ]
-          end else begin
-            if !debug then Printf.fprintf stderr "compact\n%!";
-            let cancel_at_percent = Random.int 300 in
-            Printf.printf "x%!";
-            let th = ref None in
-            let progress_cb ~percent =
-              if percent >= cancel_at_percent then match !th with
-                | Some th' ->
-                  th := None;
-                  Printf.printf "X%!";
-                  Lwt.cancel th'
-                | None -> () in
-            let t = B.compact ~progress_cb qcow () in
-            th := Some t;
-            Lwt.catch
-              (fun () ->
-                Lwt.pick [
-                  t;
-                  Lwt_unix.sleep 5. >>= fun () -> Lwt.fail_with "compact timeout"
-                ]
-                >>= function
-                | Error _ -> failwith "compact"
-                | Ok _report -> Lwt.return_unit
-              ) (function
-                | Lwt.Canceled -> Lwt.return_unit
-                | e -> Lwt.fail e
-              )
           end )
         >>= fun () ->
         check_all_clusters ();

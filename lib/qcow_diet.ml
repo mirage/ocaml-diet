@@ -23,14 +23,19 @@ open Sexplib.Std
 module type ELT = sig
   type t [@@deriving sexp]
   val compare: t -> t -> int
+  val zero: t
   val pred: t -> t
   val succ: t -> t
+  val sub: t -> t -> t
+  val add: t -> t -> t
 end
 
 exception Interval_pairs_should_be_ordered of string
 exception Intervals_should_not_overlap of string
+exception Intervals_should_not_be_adjacent of string
 exception Height_not_equals_depth of string
 exception Unbalanced of string
+exception Cardinal of string
 
 let _ =
   Printexc.register_printer
@@ -39,16 +44,26 @@ let _ =
         Some ("Pairs within each interval should be ordered: " ^ txt)
       | Intervals_should_not_overlap txt ->
         Some ("Intervals should be ordered without overlap: " ^ txt)
+      | Intervals_should_not_be_adjacent txt ->
+        Some ("Intervals should not be adjacent: " ^ txt)
       | Height_not_equals_depth txt ->
         Some ("The height is not being maintained correctly: " ^ txt)
       | Unbalanced txt ->
         Some ("The tree has become imbalanced: " ^ txt)
+      | Cardinal txt ->
+        Some ("The cardinal value stored in the node is wrong: " ^ txt)
       | _ ->
         None
     )
 
 module Make(Elt: ELT) = struct
   type elt = Elt.t [@@deriving sexp]
+
+  module Elt = struct
+    include Elt
+    let ( - ) = sub
+    let ( + ) = add
+  end
 
   type interval = elt * elt
 
@@ -70,18 +85,23 @@ module Make(Elt: ELT) = struct
   type t =
     | Empty
     | Node: node -> t
-  and node = { x: elt; y: elt; l: t; r: t; h: int }
+  and node = { x: elt; y: elt; l: t; r: t; h: int; cardinal: elt }
   [@@deriving sexp]
 
   let height = function
     | Empty -> 0
     | Node n -> n.h
 
+  let cardinal = function
+    | Empty -> Elt.zero
+    | Node n -> n.cardinal
+
 let create x y l r =
   let h = max (height l) (height r) + 1 in
-  Node { x; y; l; r; h }
+  let cardinal = Elt.(succ (y - x) + (cardinal l) + (cardinal r)) in
+  Node { x; y; l; r; h; cardinal }
 
-let node x y l r =
+let rec node x y l r =
   let hl = height l and hr = height r in
   let open Pervasives in
   if hl > hr + 2 then begin
@@ -89,21 +109,21 @@ let node x y l r =
     | Empty -> assert false
     | Node { x = lx; y = ly; l = ll; r = lr; _ } ->
       if height ll >= (height lr)
-      then create lx ly ll (create x y lr r)
+      then node lx ly ll (node x y lr r)
       else match lr with
         | Empty -> assert false
         | Node { x = lrx; y = lry; l = lrl; r = lrr; _ } ->
-          create lrx lry (create lx ly ll lrl) (create x y lrr r)
+          node lrx lry (node lx ly ll lrl) (node x y lrr r)
   end else if hr > hl + 2 then begin
     match r with
     | Empty -> assert false
     | Node { x = rx; y = ry; l = rl; r = rr; _ } ->
       if height rr >= height rl
-      then create rx ry (create x y l rl) rr
+      then node rx ry (node x y l rl) rr
       else match rl with
         | Empty -> assert false
         | Node { x = rlx; y = rly; l = rll; r = rlr; _ } ->
-          create rlx rly (create x y l rll) (create rx ry rlr rr)
+          node rlx rly (node x y l rll) (node rx ry rlr rr)
   end else create x y l r
 
   let depth tree =
@@ -142,6 +162,27 @@ let node x y l r =
         no_overlap l;
         no_overlap r
 
+    let rec no_adjacent t =
+      let biggest = function
+        | Empty -> None
+        | Node { y; _ } -> Some y in
+      let smallest = function
+        | Empty -> None
+        | Node { x; _ } -> Some x in
+     match t with
+      | Empty -> ()
+      | Node { x; y; l; r; _ } ->
+        begin match biggest l with
+        | Some ly when Elt.succ ly >= x -> raise (Intervals_should_not_be_adjacent (to_string_internal t))
+        | _ -> ()
+        end;
+        begin match smallest r with
+        | Some rx when Elt.pred rx <= y -> raise (Intervals_should_not_be_adjacent (to_string_internal t))
+        | _ -> ()
+        end;
+        no_adjacent l;
+        no_adjacent r
+
     (* The height is being stored correctly *)
     let rec height_equals_depth t =
       if height t <> (depth t) then raise (Height_not_equals_depth (to_string_internal t));
@@ -164,11 +205,22 @@ let node x y l r =
         balanced l;
         balanced r
 
+    let rec check_cardinal = function
+      | Empty -> ()
+      | Node { x; y; l; r; cardinal = c; _ } as t ->
+        check_cardinal l;
+        check_cardinal r;
+        if Elt.(c - (cardinal l) - (cardinal r) - y + x) <> Elt.(succ zero) then begin
+          raise (Cardinal (to_string_internal t));
+        end
+
     let check t =
       ordered t;
       no_overlap t;
       height_equals_depth t;
-      balanced t
+      balanced t;
+      check_cardinal t;
+      no_adjacent t
   end
 
   let empty = Empty
@@ -263,11 +315,11 @@ let node x y l r =
     match t with
     | Empty -> node x y Empty Empty
     (* completely to the left *)
-    | Node n when y < n.x ->
+    | Node n when y < (Elt.pred n.x) ->
       let l = add (x, y) n.l in
       node n.x n.y l n.r
     (* completely to the right *)
-    | Node n when n.y < x ->
+    | Node n when (Elt.succ n.y) < x ->
       let r = add (x, y) n.r in
       node n.x n.y n.l r
     (* overlap on the left only *)
@@ -324,8 +376,10 @@ let node x y l r =
       let r = remove (n.y, y) n.r in
       merge l r
     (* completely within *)
-    | Node n when eq y n.y -> Node { n with y = pred x }
-    | Node n when eq x n.x -> Node { n with x = succ y }
+    | Node n when eq y n.y ->
+      node n.x (pred x) n.l n.r
+    | Node n when eq x n.x ->
+      node (succ y) n.y n.l n.r
     | Node n ->
       assert (n.x <= pred x);
       assert (succ y <= n.y);
@@ -336,13 +390,38 @@ let node x y l r =
 
   let inter a b = diff a (diff a b)
 
+  let take t n =
+    let rec loop acc free n =
+      if n = Elt.zero
+      then Some (acc, free)
+      else begin
+        match (
+          try
+            let i = choose free in
+            let x, y = Interval.(x i, y i) in
+            let len = Elt.(succ @@ y - x) in
+            let will_use = if Pervasives.(Elt.compare n len < 0) then n else len in
+            let i' = Interval.make x Elt.(pred @@ x + will_use) in
+            Some ((add i' acc), (remove i' free), Elt.(n - will_use))
+          with
+          | Not_found -> None
+        ) with
+        | Some (acc', free', n') -> loop acc' free' n'
+        | None -> None
+      end in
+    loop empty t n
+
 end
+
 
 module Int = struct
   type t = int [@@deriving sexp]
   let compare (x: t) (y: t) = Pervasives.compare x y
+  let zero = 0
   let succ x = x + 1
   let pred x = x - 1
+  let add x y = x + y
+  let sub x y = x - y
 end
 module IntDiet = Make(Int)
 module IntSet = Set.Make(Int)
@@ -369,11 +448,12 @@ module Test = struct
       | 0 -> set, diet
       | m ->
         let r = Random.int n in
+        let r' = Random.int (n - r) + r in
         let add = Random.bool () in
-        let set, diet' =
-          if add
-          then IntSet.add r set, IntDiet.add (IntDiet.Interval.make r r) diet
-          else IntSet.remove r set, IntDiet.remove (IntDiet.Interval.make r r) diet in
+        let rec range from upto =
+          if from > upto then [] else from :: (range (from + 1) upto) in
+        let set = List.fold_left (fun set elt -> (if add then IntSet.add else IntSet.remove) elt set) set (range r r') in
+        let diet' = (if add then IntDiet.add else IntDiet.remove) (IntDiet.Interval.make r r') diet in
         begin
           try
             IntDiet.Invariant.check diet';
@@ -403,7 +483,7 @@ module Test = struct
     end
 
   let test_adds () =
-    for _ = 1 to 1000 do
+    for _ = 1 to 100 do
       let set, diet = make_random 1000 1000 in
       begin
         try
@@ -418,7 +498,7 @@ module Test = struct
     done
 
   let test_operator set_op diet_op () =
-    for _ = 1 to 1000 do
+    for _ = 1 to 100 do
       let set1, diet1 = make_random 1000 1000 in
       let set2, diet2 = make_random 1000 1000 in
       check_equals set1 diet1;
@@ -445,17 +525,22 @@ module Test = struct
     let open IntDiet in
     assert (elements @@ diff (add (9, 9) @@ add (5, 7) empty) (add (7, 9) empty) = [5; 6])
 
+  let test_adjacent_1 () =
+    let open IntDiet in
+    let set = add (9, 9) @@ add (8, 8) empty in
+    IntDiet.Invariant.check set
+
   let test_depth () = check_depth 1048576
 
   let all = [
     "adding an element to the right", test_add_1;
     "removing an element on the left", test_remove_1;
     "removing an elements from two intervals", test_remove_2;
+    "test adjacent intervals are coalesced", test_adjacent_1;
     "logarithmic depth", test_depth;
     "adding and removing elements acts like a Set", test_adds;
     "union", test_operator IntSet.union IntDiet.union;
     "diff", test_operator IntSet.diff IntDiet.diff;
     "intersection", test_operator IntSet.inter IntDiet.inter;
   ]
-
 end

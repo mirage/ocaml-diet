@@ -274,6 +274,32 @@ let mapped_cmd =
   Term.(ret(pure Impl.mapped $ filename $ output_format $ ignore_zeroes)),
   Term.info "mapped" ~sdocs:_common_options ~doc ~man
 
+let pattern_number =
+  let doc = Printf.sprintf "Pattern number to write" in
+  Arg.(value & opt int 1 & info [ "pattern" ] ~doc)
+
+let pattern_cmd =
+  let doc = "Generate a .qcow2 with a test pattern" in
+  let man = [
+    `S "DESCRIPTION";
+    `P "Create a qcow2 file with a test pattern.";
+    `P "Pattern 1: write to every other cluster to stress the metadata datastructure.";
+    `P "Pattern 2: write to the whole disk and then discard every other cluster \
+        to produce the worst case for compaction.";
+  ] @ help in
+  Term.(ret(pure Impl.pattern $ common_options_t $ trace $ output $ size $ pattern_number)),
+  Term.info "pattern" ~sdocs:_common_options ~doc ~man
+
+let sha_cmd =
+  let doc = "Compute a SHA1 from the contents of a qcow2" in
+  let man = [
+    `S "DESCRIPTION";
+    `P "This is equivalent to decoding the qcow2 to a raw file and \
+        running sha1sum.";
+  ] @ help in
+  Term.(ret(pure Impl.sha $ common_options_t $ filename)),
+  Term.info "sha" ~sdocs:_common_options ~doc ~man
+
 let default_cmd =
   let doc = "manipulate virtual disks stored in qcow2 files" in
   let man = help in
@@ -281,7 +307,8 @@ let default_cmd =
   Term.info "qcow-tool" ~version:"1.0.0" ~sdocs:_common_options ~doc ~man
 
 let cmds = [info_cmd; create_cmd; check_cmd; repair_cmd; encode_cmd; decode_cmd;
-  write_cmd; read_cmd; mapped_cmd; resize_cmd; discard_cmd; compact_cmd]
+  write_cmd; read_cmd; mapped_cmd; resize_cmd; discard_cmd; compact_cmd;
+  pattern_cmd; sha_cmd ]
 
 let _ =
   Logs.set_reporter (Logs_fmt.reporter ());

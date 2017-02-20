@@ -15,9 +15,7 @@
  *
  *)
 
-(* TODO:
-   - represent 0L as a None
-   	*)
+open Qcow_types
 
 type t [@@deriving sexp]
 (** A physical address within the backing disk *)
@@ -29,22 +27,39 @@ val is_mutable: t -> bool
 (** True if the offset is safe to mutate directly (i.e. is not referenced
     by a snapshot *)
 
-val shift: t -> int64 -> t
+val unmapped: t
+(** An unmapped physical address *)
+
+val shift: t -> int -> t
 (** [shift t bytes] adds [bytes] to t, maintaining other properties *)
 
-val make: ?is_mutable:bool -> ?is_compressed:bool -> int64 -> t
+val make: ?is_mutable:bool -> ?is_compressed:bool -> int -> t
 (** Create an address at the given byte offset. This defaults to [is_mutable = true]
     which meand there are no snapshots implying that directly writing to this
     		offset is ok; and [is_compressed = false]. *)
 
+val add: t -> int -> t
+(** Add a byte offset to a physical address *)
+
 val to_sector: sector_size:int -> t -> int64 * int
 (** Return the sector on disk, plus a remainder within the sector *)
 
-val to_bytes: t -> int64
+val sector: sector_size:int -> t -> int64
+(** Return the sector on disk containing the address *)
+
+val to_bytes: t -> int
 (** Return the byte offset on disk *)
 
-val to_cluster: cluster_bits:int -> t -> int64 * int
-(** Return the cluster offset on disk, plus a remainder within the cluster *)
+val cluster: cluster_bits:int -> t -> Cluster.t
+(** Return the cluster containing the address *)
+
+val within_cluster: cluster_bits:int -> t -> int
+(** Return the index within the cluster of the address *)
+
+val read: Cstruct.t -> t
+(** Read a [t] from the given buffer *)
+
+val write: t -> Cstruct.t -> unit
+(** Write [t] to the buffer *)
 
 include Qcow_s.PRINTABLE with type t := t
-include Qcow_s.SERIALISABLE with type t := t

@@ -87,8 +87,8 @@ type t = {
   size: int64;                    (** virtual size of the image *)
   crypt_method: CryptMethod.t;
   l1_size: int32;                 (** number of 8-byte entries in the L1 table *)
-  l1_table_offset: offset;        (** offset of the L1 table *)
-  refcount_table_offset: offset;  (** offset of the refcount table *)
+  l1_table_offset: Qcow_physical.t;        (** offset of the L1 table *)
+  refcount_table_offset: Qcow_physical.t;  (** offset of the refcount table *)
   refcount_table_clusters: int32; (** size of the refcount table in clusters *)
   nb_snapshots: int32;            (** the number of internal snapshots *)
   snapshots_offset: offset;       (** offset of the snapshot header *)

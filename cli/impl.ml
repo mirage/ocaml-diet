@@ -93,22 +93,29 @@ let handle_common common_options_t =
 let spinner = [| '-'; '\\'; '|'; '/' |]
 let spinner_idx = ref 0
 let progress_bar_width = 70
+let last_percent = ref (-1)
+let last_spinner_time = ref (Unix.gettimeofday ())
 let progress_cb ~percent =
-  let line = Bytes.make (progress_bar_width + 8) '\000' in
+  let now = Unix.gettimeofday () in
+  if now -. (!last_spinner_time) > 0.5 || !last_percent <> percent then begin
+    last_percent := percent;
+    last_spinner_time := now;
+    let line = Bytes.make (progress_bar_width + 8) '\000' in
 
-  let len = (progress_bar_width * percent) / 100 in
-  for i = 0 to len - 1 do
-    Bytes.set line (4 + i) (if i = len - 1 then '>' else '#')
-  done;
-  Bytes.set line 0 '[';
-  Bytes.set line 1 spinner.(!spinner_idx);
-  Bytes.set line 2 ']';
-  Bytes.set line 3 ' ';
-  spinner_idx := (!spinner_idx + 1) mod (Array.length spinner);
-  let percent' = Printf.sprintf "%3d%%" percent in
-  String.blit percent' 0 line (progress_bar_width + 4) 4;
-  Printf.printf "\r%s%!" (Bytes.to_string line);
-  if percent = 100 then Printf.printf "\n"
+    let len = (progress_bar_width * percent) / 100 in
+    for i = 0 to len - 1 do
+      Bytes.set line (4 + i) (if i = len - 1 then '>' else '#')
+    done;
+    Bytes.set line 0 '[';
+    Bytes.set line 1 spinner.(!spinner_idx);
+    Bytes.set line 2 ']';
+    Bytes.set line 3 ' ';
+    spinner_idx := (!spinner_idx + 1) mod (Array.length spinner);
+    let percent' = Printf.sprintf "%3d%%" percent in
+    String.blit percent' 0 line (progress_bar_width + 4) 4;
+    Printf.printf "\r%s%!" (Bytes.to_string line);
+    if percent = 100 then Printf.printf "\n"
+  end
 
 let mib = Int64.mul 1024L 1024L
 
@@ -311,6 +318,7 @@ let compact common_options_t unsafe_buffering filename =
     end;
     B.Debug.check_no_overlaps x
     >>= function
+    | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
     | Ok () -> Lwt.return (Ok ()) in
@@ -338,6 +346,7 @@ let repair unsafe_buffering filename =
     >>*= fun () ->
     B.Debug.check_no_overlaps x
     >>= function
+    | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
     | Ok () -> Lwt.return (Ok ()) in
@@ -347,6 +356,48 @@ let repair unsafe_buffering filename =
     | Error `Is_read_only -> Lwt.return (`Error(false, "Is_read_only"))
     | Ok x -> Lwt.return (`Ok x)
   )
+
+let sha _common_options_t filename =
+  let module B = Qcow.Make(Block)(Time) in
+  let open Lwt in
+  let t =
+    Block.connect filename
+    >>= fun x ->
+    B.connect x
+    >>= fun x ->
+    B.get_info x
+    >>= fun info ->
+    let ctx = Sha1.init () in
+    let update_cstruct c =
+      let b' : (int, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t = Obj.magic c.Cstruct.buffer in
+      if c.Cstruct.off = 0 && c.Cstruct.len = (Bigarray.Array1.dim b')
+      then Sha1.update_buffer ctx b'
+      else begin
+        let c' = Cstruct.create (Cstruct.len c) in
+        Cstruct.blit c 0 c' 0 (Cstruct.len c);
+        let b' : (int, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t = Obj.magic c'.Cstruct.buffer in
+        Sha1.update_buffer ctx b'
+      end in
+    let buf = Io_page.(to_cstruct @@ get 1024) in
+    let buf_sectors = Int64.of_int (Cstruct.len buf / info.Mirage_block.sector_size) in
+    let rec loop sector =
+      let remaining = Int64.sub info.Mirage_block.size_sectors sector in
+      if remaining = 0L then Lwt.return_unit else begin
+        let n = min buf_sectors remaining in
+        let buf = Cstruct.sub buf 0 (Int64.to_int n * info.Mirage_block.sector_size) in
+        B.read x sector [ buf ]
+        >>= function
+        | Error _ -> Lwt.fail_with (Printf.sprintf "Failed to read sector %Ld" sector)
+        | Ok () ->
+          update_cstruct buf;
+          loop (Int64.add sector n)
+      end in
+    loop 0L
+    >>= fun () ->
+    let digest = Sha1.finalize ctx in
+    Printf.printf "%s\n" (Sha1.to_hex digest);
+    return (`Ok ()) in
+  Lwt_main.run t
 
 let decode filename output =
   let module B = Qcow.Make(Block)(Time) in
@@ -419,6 +470,107 @@ let create size strict_refcounts trace filename =
     >>= function
     | Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" filename)
     | Ok _ -> return (`Ok ()) in
+  Lwt_main.run t
+
+let pattern common_options_t trace filename size number =
+  let block =
+     if trace
+     then (module TracedBlock: BLOCK)
+     else (module Block: BLOCK) in
+  let module Uncached = (val block: BLOCK) in
+  let module BLOCK = Qcow_block_cache.Make(Uncached) in
+  let module B = Qcow.Make(BLOCK)(Time) in
+  let open Lwt in
+  let progress_cb = if common_options_t.Common.progress then Some progress_cb else None in
+  let t =
+    Lwt_unix.openfile filename [ Lwt_unix.O_CREAT ] 0o0644
+    >>= fun fd ->
+    Lwt_unix.close fd
+    >>= fun () ->
+    Uncached.connect filename
+    >>= fun uncached ->
+    BLOCK.connect uncached
+    >>= fun x ->
+    let config = B.Config.create ~discard:true () in
+    B.create x ~size ~lazy_refcounts:true ~config ()
+    >>= function
+    | Error _ -> failwith (Printf.sprintf "Failed to create qcow formatted data on %s" filename)
+    | Ok qcow ->
+      let h = B.header qcow in
+      B.get_info qcow
+      >>= fun info ->
+      let sector_size = info.Mirage_block.sector_size in
+      let cluster_bits = Int32.to_int h.Qcow.Header.cluster_bits in
+      let cluster_size = 1 lsl cluster_bits in
+      let cluster_size_sectors = cluster_size / sector_size in
+      begin match number with
+      | 1 ->
+        (* write to every other cluster: this should be worst case for the
+           interval tree structure. *)
+        let page = Io_page.(to_cstruct @@ get 1) in
+        let buf = Cstruct.sub page 0 sector_size in
+        let rec loop sector =
+          if sector >= info.Mirage_block.size_sectors then Lwt.return_unit else begin
+            let percent = Int64.(to_int (div (mul 100L sector) info.Mirage_block.size_sectors)) in
+            (match progress_cb with Some f -> f ~percent | None -> ());
+            (* Mark each sector with the sector number *)
+            Cstruct.BE.set_uint64 buf 0 sector;
+            B.write qcow sector [ buf ]
+            >>= function
+            | Error _ -> Lwt.fail_with "qcow write error"
+            | Ok () ->
+              (* every other cluster *)
+              loop Int64.(add sector (mul 2L (of_int cluster_size_sectors)))
+          end in
+        loop 0L
+        >>= fun () ->
+        BLOCK.disconnect x
+        >>= fun () ->
+        Lwt.return (`Ok ())
+      | 2 ->
+        (* write to every cluster, and then discard every other cluster: this
+           should be worst case for the compactor *)
+        let pages = Io_page.(to_cstruct @@ get 1024) in (* 4 MiB *)
+        Cstruct.memset pages 0;
+        let sectors = Cstruct.len pages / sector_size in
+        let rec loop sector =
+          if sector >= info.Mirage_block.size_sectors then Lwt.return_unit else begin
+            let percent = Int64.(to_int (div (mul 50L sector) info.Mirage_block.size_sectors)) in
+            (match progress_cb with Some f -> f ~percent | None -> ());
+            let to_write = min sectors Int64.(to_int (sub info.Mirage_block.size_sectors sector)) in
+            let buf = Cstruct.sub pages 0 (to_write * sector_size) in
+            let rec watermark n =
+              if n >= to_write then () else begin
+                Cstruct.BE.set_uint64 buf (n * sector_size) Int64.(add sector (of_int n));
+                watermark (n + 1)
+              end in
+            watermark to_write;
+            B.write qcow sector [ buf ]
+            >>= function
+            | Error _ -> Lwt.fail_with "qcow write error"
+            | Ok () ->
+              loop Int64.(add sector (of_int to_write))
+          end in
+        loop 0L
+        >>= fun () ->
+        let rec loop sector =
+          if sector >= info.Mirage_block.size_sectors then Lwt.return_unit else begin
+            let percent = 50 + Int64.(to_int (div (mul 50L sector) info.Mirage_block.size_sectors)) in
+            (match progress_cb with Some f -> f ~percent | None -> ());
+            B.discard qcow ~sector ~n:(Int64.of_int cluster_size_sectors) ()
+            >>= function
+            | Error _ -> Lwt.fail_with "qcow discard error"
+            | Ok () ->
+              (* every other cluster *)
+              loop Int64.(add sector (mul 2L (of_int cluster_size_sectors)))
+          end in
+        loop 0L
+        >>= fun () ->
+        BLOCK.disconnect x
+        >>= fun () ->
+        Lwt.return (`Ok ())
+      | _ -> failwith (Printf.sprintf "Unknown pattern %d" number)
+      end in
   Lwt_main.run t
 
 let resize trace filename new_size ignore_data_loss =

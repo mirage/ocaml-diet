@@ -7,7 +7,7 @@ sudo: required
 dist: trusty
 env:
   global:
-    - EXTRA_REMOTES="https://github.com/mirage/mirage-dev.git"
+    - EXTRA_REMOTES="https://github.com/mirage/mirageos-3-beta.git"
     - PACKAGE="qcow-format" OCAML_VERSION=4.03
     - COV_CONF="export TESTS=--enable-tests"
     - PRE_INSTALL_HOOK="sudo apt-get install qemu-utils -y"

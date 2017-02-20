@@ -11,3 +11,4 @@ _build
 *.native
 .coverage/
 *.install
+lib/qcow_word_size.ml

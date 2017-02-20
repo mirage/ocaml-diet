@@ -1,5 +1,5 @@
 (*
- * Copyright (C) 2016 David Scott <dave@recoil.org>
+ * Copyright (C) 2017 Docker Inc
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -15,30 +15,11 @@
  *
  *)
 
-module type ELT = sig
-  type t [@@deriving sexp]
-  (** The type of the set elements. *)
+module Make(B: Qcow_s.RESIZABLE_BLOCK): sig
+  include Qcow_s.RESIZABLE_BLOCK
 
-  include Set.OrderedType with type t := t
-
-  val zero: t
-  (** The zeroth element *)
-
-  val pred: t -> t
-  (** Predecessor of an element *)
-
-  val succ: t -> t
-  (** Successor of an element *)
-
-  val sub: t -> t -> t
-  (** [sub a b] returns [a] - [b] *)
-
-  val add: t -> t -> t
-  (** [add a b] returns [a] + [b] *)
-end
-
-module Make(Elt: ELT): Qcow_s.INTERVAL_SET with type elt = Elt.t
-
-module Test: sig
-  val all: (string * (unit -> unit)) list
+  val connect: ?max_size_bytes:int64 -> B.t -> t Lwt.t
+  (** [connect ?max_size_bytes b] constructs a cache over [b] with a maximum
+      memory footprint of [max_size_bytes]. Writes are heavily cached and only
+      written to disk on a flush, disconnect or when out of space. *)
 end

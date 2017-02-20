@@ -20,6 +20,7 @@ open Result
 open Qcow_error
 module OldInt64 = Int64
 open Qcow_types
+module Physical = Qcow_physical
 
 let ( <| ) = OldInt64.shift_left
 let ( |> ) = OldInt64.shift_right_logical
@@ -178,8 +179,8 @@ type t = {
   size: int64;
   crypt_method: CryptMethod.t;
   l1_size: int32;
-  l1_table_offset: offset;
-  refcount_table_offset: offset;
+  l1_table_offset: Physical.t;
+  refcount_table_offset: Physical.t;
   refcount_table_clusters: int32;
   nb_snapshots: int32;
   snapshots_offset: offset;
@@ -229,9 +230,9 @@ let write t rest =
   >>= fun rest ->
   Int32.write t.l1_size rest
   >>= fun rest ->
-  Int64.write t.l1_table_offset rest
+  Int64.write (Int64.of_int @@ Physical.to_bytes t.l1_table_offset) rest
   >>= fun rest ->
-  Int64.write t.refcount_table_offset rest
+  Int64.write (Int64.of_int @@ Physical.to_bytes t.refcount_table_offset) rest
   >>= fun rest ->
   Int32.write t.refcount_table_clusters rest
   >>= fun rest ->
@@ -336,10 +337,10 @@ let read rest =
   >>= fun (crypt_method, rest) ->
   Int32.read rest
   >>= fun (l1_size, rest) ->
-  Int64.read rest
-  >>= fun (l1_table_offset, rest) ->
-  Int64.read rest
-  >>= fun (refcount_table_offset, rest) ->
+  let l1_table_offset = Physical.read rest in
+  let rest = Cstruct.shift rest 8 in
+  let refcount_table_offset = Physical.read rest in
+  let rest = Cstruct.shift rest 8 in
   Int32.read rest
   >>= fun (refcount_table_clusters, rest) ->
   Int32.read rest

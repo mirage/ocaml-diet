@@ -1,5 +1,5 @@
 (*
- * Copyright (C) 2016 David Scott <dave@recoil.org>
+ * Copyright (C) 2017 Docker Inc
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -15,30 +15,29 @@
  *
  *)
 
-module type ELT = sig
-  type t [@@deriving sexp]
-  (** The type of the set elements. *)
+(** A subset of the Cstruct signature with type t = Cstruct.t list
 
-  include Set.OrderedType with type t := t
+    This should be replaced with another parser, perhaps angstrom? *)
 
-  val zero: t
-  (** The zeroth element *)
+type t = Cstruct.t list
+(** Data stored as a list of fragments *)
 
-  val pred: t -> t
-  (** Predecessor of an element *)
+val to_string: t -> string
 
-  val succ: t -> t
-  (** Successor of an element *)
+val shift: t -> int -> t
 
-  val sub: t -> t -> t
-  (** [sub a b] returns [a] - [b] *)
+val len: t -> int
 
-  val add: t -> t -> t
-  (** [add a b] returns [a] + [b] *)
-end
+val sub: t -> int -> int -> t
 
-module Make(Elt: ELT): Qcow_s.INTERVAL_SET with type elt = Elt.t
+val get_uint8: t -> int -> int
 
-module Test: sig
-  val all: (string * (unit -> unit)) list
+val to_cstruct: t -> Cstruct.t
+(** Returns a contiguous Cstruct.t, which may or may not involve a copy. *)
+
+val memset: t -> int -> unit
+
+module BE: sig
+  val get_uint16: t -> int -> int
+  val get_uint32: t -> int -> int32
 end

@@ -1,5 +1,5 @@
 (*
- * Copyright (C) 2016 David Scott <dave@recoil.org>
+ * Copyright (C) 2015 David Scott <dave@recoil.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -14,31 +14,17 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
+(** Parsers and printers for types used in qcow2 fields *)
 
-module type ELT = sig
-  type t [@@deriving sexp]
-  (** The type of the set elements. *)
+type t = int [@@deriving sexp]
 
-  include Set.OrderedType with type t := t
+include Qcow_s.NUM with type t := t
 
-  val zero: t
-  (** The zeroth element *)
+val of_int64: int64 -> t
+val to_int64: t -> int64
 
-  val pred: t -> t
-  (** Predecessor of an element *)
+val round_up: t -> t -> t
+(** [round_up value to] rounds [value] to the next multiple of [to] *)
 
-  val succ: t -> t
-  (** Successor of an element *)
-
-  val sub: t -> t -> t
-  (** [sub a b] returns [a] - [b] *)
-
-  val add: t -> t -> t
-  (** [add a b] returns [a] + [b] *)
-end
-
-module Make(Elt: ELT): Qcow_s.INTERVAL_SET with type elt = Elt.t
-
-module Test: sig
-  val all: (string * (unit -> unit)) list
-end
+module IntervalSet: Qcow_s.INTERVAL_SET with type elt = t
+module Map: Map.S with type key = t
