@@ -1343,19 +1343,14 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   let check base =
     let open Lwt.Infix in
-    connect base
-    >>= fun t ->
+
     let open Qcow_cluster_map in
     Lwt.catch
       (fun () ->
-        make_cluster_map t
-        >>= function
-        | Error `Disconnected -> Lwt.return (Error `Disconnected)
-        | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-        | Error (`Msg m) -> Lwt.return (Error (`Msg m))
-        | Ok block_map ->
-        let free = total_free block_map in
-        let used = total_used block_map in
+        connect base
+        >>= fun t ->
+        let free = total_free t.cluster_map in
+        let used = total_used t.cluster_map in
         Lwt.return (Ok { free; used })
       ) (function
         | Reference_outside_file(src, dst) -> Lwt.return (Error (`Reference_outside_file(src, dst)))
