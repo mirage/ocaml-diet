@@ -110,7 +110,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
     used: int64; (** used sectors *)
   }
 
-  val check: t -> (check_result, [
+  val check: B.t -> (check_result, [
     Mirage_block.error
     | `Reference_outside_file of int64 * int64
     | `Msg of string

@@ -190,8 +190,6 @@ let check filename =
   let t =
     Block.connect filename
     >>= fun x ->
-    B.connect x
-    >>= fun x ->
     B.check x
     >>= function
     | Error _ -> failwith (Printf.sprintf "Qcow consistency check failed on %s" filename)
