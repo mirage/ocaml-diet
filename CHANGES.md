@@ -1,3 +1,8 @@
+0.9.0 (2017-02-21)
+- Add online coalescing mode and background cluster recycling thread
+- Rename internal modules and types
+- Ensure the interval tree remains balanced to improve performance
+
 0.8.1 (2017-02-13)
 - fix error in META file
 
