@@ -12,7 +12,6 @@ open Qcow_types
 let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right
 
-module Error = Qcow_error
 module Cache = Qcow_cache
 module Locks = Qcow_locks
 module Metadata = Qcow_metadata
@@ -129,39 +128,33 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let intervals = Cluster.IntervalSet.fold (fun i acc -> i :: acc) remaining [] in
     let buffer_size_clusters = Int64.of_int (Cstruct.len t.zero_buffer) |> t.cluster_bits in
 
-    Lwt_list.map_p
-      (fun i ->
-        let x, y = Cluster.IntervalSet.Interval.(x i, y i) in
-        let x = Cluster.to_int64 x and y = Cluster.to_int64 y in
-        let n = Int64.(succ @@ sub y x) in
-        Log.debug (fun f -> f "erasing %Ld clusters (%Ld -> %Ld)" n x y);
-        let erase cluster n =
-          (* Erase [n] clusters starting from [cluster] *)
-          assert (n <= buffer_size_clusters);
-          let buf = Cstruct.sub t.zero_buffer 0 (Int64.to_int (n <| t.cluster_bits)) in
-          let sector = Int64.(div (cluster <| t.cluster_bits) (of_int t.sector_size)) in
-          (* No-one else is writing to this cluster so no locking is needed *)
-          B.write t.base sector [ buf ] in
-        let rec chop_into from n m =
-          if n = 0L then []
-          else if n > m then (from, m) :: (chop_into (Int64.add from m) (Int64.sub n m) m)
-          else [ from, n ] in
-        Lwt_list.map_p (fun (cluster, n) -> erase cluster n) (chop_into x n buffer_size_clusters)
-        >>= fun results ->
-        Lwt.return (Error.any results)
-      ) intervals
-    >>= fun results ->
-    Lwt.return (Error.any results)
-
-  (* Run all threads in parallel, wait for all to complete, then iterate through
-     the results and return the first failure we discover. *)
-  let iter_p f xs =
-    let threads = List.map f xs in
-    Lwt_list.fold_left_s (fun acc t ->
-        match acc with
-        | Error x -> Lwt.return (Error x) (* first error wins *)
-        | Ok () -> t
-      ) (Ok ()) threads
+    Lwt_list.fold_left_s
+      (fun acc i -> match acc with
+        | Error e -> Lwt.return (Error e)
+        | Ok () ->
+          let x, y = Cluster.IntervalSet.Interval.(x i, y i) in
+          let x = Cluster.to_int64 x and y = Cluster.to_int64 y in
+          let n = Int64.(succ @@ sub y x) in
+          Log.debug (fun f -> f "erasing %Ld clusters (%Ld -> %Ld)" n x y);
+          let erase cluster n =
+            (* Erase [n] clusters starting from [cluster] *)
+            assert (n <= buffer_size_clusters);
+            let buf = Cstruct.sub t.zero_buffer 0 (Int64.to_int (n <| t.cluster_bits)) in
+            let sector = Int64.(div (cluster <| t.cluster_bits) (of_int t.sector_size)) in
+            (* No-one else is writing to this cluster so no locking is needed *)
+            B.write t.base sector [ buf ] in
+          let rec loop from n m =
+            if n = 0L then Lwt.return (Ok ())
+            else if n > m then begin
+              erase from m
+              >>= function
+              | Error e -> Lwt.return (Error e)
+              | Ok () -> loop (Int64.add from m) (Int64.sub n m) m
+            end else begin
+              erase from n
+            end in
+          loop x n buffer_size_clusters
+      ) (Ok ()) intervals
 
   let update_references t =
     let cluster_map = match t.cluster_map with
@@ -182,9 +175,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Some x -> x in
     let nr_updated = ref 0L in
     let open Lwt.Infix in
-    iter_p
-      (fun ({ move = { Move.src; dst }; _ } as move) ->
-        match Qcow_cluster_map.find cluster_map src with
+    Lwt_list.fold_left_s
+      (fun acc ({ move = { Move.src; dst }; _ } as move) -> match acc with
+        | Error e -> Lwt.return (Error e)
+        | Ok () ->
+          begin match Qcow_cluster_map.find cluster_map src with
           | exception Not_found ->
             (* Block was probably discarded after we started running. *)
             Log.warn (fun f -> f "Not copying cluster %s to %s: %s has been discarded"
@@ -231,7 +226,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                   Lwt.return (Ok ())
                 | Error e -> Lwt.return (Error e)
             end
-      ) flushed
+        end
+      ) (Ok ()) flushed
     >>= function
     | Ok () ->
       t.need_to_flush <- true;
@@ -374,18 +370,20 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           loop ()
         end
       | `Move nr_junk ->
-        Log.debug (fun f -> f "block recycler: should compact up to %Ld clusters" nr_junk);
         let moves = Qcow_cluster_map.get_moves cluster_map in
-        Lwt_list.map_p (move t) moves
-        >>= fun results ->
-        begin match Error.any results with
-        | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
-        | Error `Disconnected -> Lwt.fail_with "Disconnected"
-        | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
-        | Ok () -> loop ()
-        end
+        Log.info (fun f -> f "block recycler: %Ld clusters are junk, %d moves are possible" nr_junk (List.length moves));
+        let rec move_all = function
+          | [] -> loop ()
+          | m :: ms ->
+            move t m
+            >>= function
+            | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
+            | Error `Disconnected -> Lwt.fail_with "Disconnected"
+            | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
+            | Ok () -> move_all ms in
+        move_all moves
       | `Update_references ->
-        Log.debug (fun f -> f "block recycler: need to update references to blocks");
+        Log.info (fun f -> f "block recycler: need to update references to blocks");
         begin update_references t
           >>= function
           | Error (`Msg x) -> Lwt.fail_with x
