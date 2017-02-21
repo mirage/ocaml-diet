@@ -334,17 +334,33 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             | _ -> acc
           ) (Qcow_cluster_map.moves cluster_map) false in
         if flushed then Some `Update_references else None in
-      let work = match highest_priority, middle_priority, compact_after_unmaps with
-        | Some x, _, _ -> Some x
-        | _, Some x, _ -> Some x
-        | None, _, Some x when x < nr_junk -> Some (`Move nr_junk)
+      begin match highest_priority, middle_priority, compact_after_unmaps with
+        | Some x, _, _ -> Lwt.return (Some x)
+        | _, Some x, _ -> Lwt.return (Some x)
+        | None, _, Some x when x < nr_junk ->
+          (* Wait for the junk data to stabilise before starting to copy *)
+          Log.info (fun f -> f "Discards (%Ld) over threshold (%Ld): waiting for discards to finish before beginning compaction" nr_junk x);
+          let rec wait nr_junk n =
+            Time.sleep_ns 5_000_000_000L
+            >>= fun () ->
+            let nr_junk' = Cluster.to_int64 @@ Cluster.IntervalSet.cardinal @@ Qcow_cluster_map.Junk.get cluster_map in
+            if nr_junk = nr_junk' then begin
+              Log.info (fun f -> f "Discards have finished, %Ld clusters have been discarded" nr_junk);
+              Lwt.return nr_junk
+            end else begin
+              if (n mod 60 = 0) then Log.info (fun f -> f "Total discards %Ld, still waiting" nr_junk');
+              wait nr_junk' (n + 1)
+            end in
+          wait nr_junk 0
+          >>= fun nr_junk ->
+          Lwt.return (Some (`Move nr_junk))
         | _ ->
           let last_block' = Qcow_cluster_map.get_last_block cluster_map in
           let result =
             if last_block' < !last_block then Some `Resize else None in
           last_block := last_block';
-          result in
-      match work with
+          Lwt.return result
+      end >>= function
       | None ->
         Qcow_cluster_map.wait cluster_map
         >>= fun () ->
