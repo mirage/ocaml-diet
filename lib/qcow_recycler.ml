@@ -254,17 +254,19 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       (* Walk over the snapshot of moves before the flush and update. This
          ensures we don't accidentally advance the state of moves which appeared
          after the flush. *)
-      let junk = Cluster.Map.fold (fun src (move: move) junk ->
+      let nr_flushed, nr_completed, junk = Cluster.Map.fold (fun src (move: move) (nr_flushed, nr_completed, junk) ->
         match move.state with
-        | Copying ->
-          junk
-        | Copied | Flushed ->
+        | Copying | Flushed -> (* no change *)
+          nr_flushed, nr_completed, junk
+        | Copied ->
           Qcow_cluster_map.(set_move_state cluster_map move.move Flushed);
-          junk
+          nr_flushed + 1, nr_completed, junk
         | Referenced ->
           Qcow_cluster_map.complete_move cluster_map move.move;
-          Cluster.IntervalSet.(add (Interval.make src src) junk)
-        ) moves Cluster.IntervalSet.empty in
+          nr_flushed, nr_completed + 1, Cluster.IntervalSet.(add (Interval.make src src) junk)
+        ) moves (0, 0, Cluster.IntervalSet.empty) in
+      if nr_flushed <> 0 || nr_completed <> 0
+      then Log.info (fun f -> f "block recycler: %d cluster copies flushed; %d cluster copies complete" nr_flushed nr_completed);
       Qcow_cluster_map.Junk.add cluster_map junk;
       Qcow_cluster_map.Available.add cluster_map erased;
       Qcow_cluster_map.Erased.remove cluster_map erased;
