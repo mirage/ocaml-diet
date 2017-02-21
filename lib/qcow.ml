@@ -1294,6 +1294,20 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     } in
     Lwt_error.or_fail_with @@ make_cluster_map t'
     >>= fun cluster_map ->
+    (* An opened file may have junk at the end, which means that we would simultaneously
+       allocate from it (get_last_block + n) as well as erase and recycle it.
+       We should trim the file now so that it is safe to allocate from it as normal.
+       Normally when the file is expanded the blocks at the end are not considered to be
+       junk. *)
+    let last_block = Qcow_cluster_map.get_last_block cluster_map in
+    let size_clusters = Cluster.succ last_block in
+    let p = Physical.make ((Cluster.to_int size_clusters) lsl cluster_bits) in
+    let size_sectors = Physical.sector ~sector_size p in
+    Lwt_write_error.or_fail_with @@ resize_base base sector_size None p
+    >>= fun () ->
+    Log.info (fun f -> f "Resized file to %s clusters (%Ld sectors)" (Cluster.to_string size_clusters) size_sectors);
+    Qcow_cluster_map.resize cluster_map size_clusters;
+
     t'.cluster_map <- cluster_map;
     Metadata.set_cluster_map t'.metadata cluster_map;
     Recycler.set_cluster_map t'.recycler cluster_map;
