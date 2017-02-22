@@ -35,12 +35,25 @@ type move_state =
 
 module Move = struct
   type t = { src: Cluster.t; dst: Cluster.t }
+
+  let to_string t =
+    Printf.sprintf "%s -> %s" (Cluster.to_string t.src) (Cluster.to_string t.dst)
 end
 
 type move = {
   move: Move.t;
   state: move_state;
 }
+
+let string_of_move m =
+  let state = match m.state with
+    | Copying    -> "Copying"
+    | Copied     -> "Copied"
+    | Flushed    -> "Flushed"
+    | Referenced -> "Referenced" in
+  Printf.sprintf "%s %s"
+    (Move.to_string m.move)
+    state
 
 type t = {
   mutable junk: Cluster.IntervalSet.t;
