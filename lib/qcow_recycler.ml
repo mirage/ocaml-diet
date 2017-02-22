@@ -247,6 +247,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     (* Anything erased right now will become available *)
     let erased = Qcow_cluster_map.Erased.get cluster_map in
     let moves = Qcow_cluster_map.moves cluster_map in
+    Log.info (fun f -> f "block recycler: flush: %s" (Qcow_cluster_map.to_summary_string cluster_map));
     B.flush t.base
     >>= function
     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
@@ -267,8 +268,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           Qcow_cluster_map.complete_move cluster_map move.move;
           nr_flushed, nr_completed + 1, Cluster.IntervalSet.(add (Interval.make src src) junk)
         ) moves (0, 0, Cluster.IntervalSet.empty) in
+      let nr_erased = Cluster.IntervalSet.cardinal erased in
+      let nr_junk = Cluster.IntervalSet.cardinal junk in
       if nr_flushed <> 0 || nr_completed <> 0
-      then Log.info (fun f -> f "block recycler: %d cluster copies flushed; %d cluster copies complete" nr_flushed nr_completed);
+      then Log.info (fun f -> f "block recycler: %d cluster copies flushed; %d cluster copies complete; %s clusters erased; %s junk clusters created"
+        nr_flushed nr_completed (Cluster.to_string nr_erased) (Cluster.to_string nr_junk));
       Qcow_cluster_map.Junk.add cluster_map junk;
       Qcow_cluster_map.Available.add cluster_map erased;
       Qcow_cluster_map.Erased.remove cluster_map erased;

@@ -1328,7 +1328,13 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       end else Lwt.return_unit )
     >>= fun () ->
     t := Some t';
-    Lwt.return t'
+    Recycler.flush t'.recycler
+    >>= function
+    | Error _ ->
+      Log.err (fun f -> f "initial flush failed");
+      Lwt.fail (Failure "initial flush failed")
+    | Ok () ->
+      Lwt.return t'
 
   let connect ?(config=Config.default) base =
     let open Lwt.Infix in
@@ -1680,6 +1686,15 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Lwt.return (Ok ())
     )
 
+  let flush t =
+    let open Lwt.Infix in
+    Recycler.flush t.recycler
+    >>= function
+    | Error `Disconnected -> Lwt.return (Error `Disconnected)
+    | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+    | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+    | Ok () -> Lwt.return (Ok ())
+
   let header t = t.h
 
   type t' = t
@@ -1695,17 +1710,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let assert_no_leaked_blocks t =
       Qcow_cluster_map.Debug.assert_no_leaked_blocks t.cluster_map
-
-    let flush t =
-      let open Lwt.Infix in
-      Recycler.flush t.recycler
-      >>= function
-      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-      | Error `Disconnected -> Lwt.return (Error `Disconnected)
-      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-      | Ok () ->
-      Log.debug (fun f -> f "Written header");
-      Lwt.return (Ok ())
 
   end
 end
