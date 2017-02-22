@@ -882,16 +882,18 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let free = Qcow_bitmap.make_full
       ~initial_size:(Cluster.to_int max_cluster)
       ~maximum_size:(Cluster.to_int max_possible_cluster * 10) in
-    (* Subtract the fixed structures at the beginning of the file *)
-    Qcow_bitmap.(remove (Interval.make l1_table_start_cluster (Int64.(pred @@ add l1_table_start_cluster l1_table_clusters))) free);
-    Qcow_bitmap.(remove (Interval.make refcount_start_cluster (Int64.(pred @@ add refcount_start_cluster (Int64.of_int32 t.h.Header.refcount_table_clusters)))) free);
+    (* The header structures are untracked by the qcow_cluster_map and we assume
+       they don't move and we don't try to move them. We assume the structures
+       have no holes in them, otherwise we would miscompute the `first_movable_cluster`
+       and accidentally truncate the file. *)
+    Qcow_bitmap.(remove (Interval.make 0L (Int64.(pred @@ add l1_table_start_cluster l1_table_clusters))) free);
+    Qcow_bitmap.(remove (Interval.make 0L (Int64.(pred @@ add refcount_start_cluster (Int64.of_int32 t.h.Header.refcount_table_clusters)))) free);
     Qcow_bitmap.(remove (Interval.make 0L 0L) free);
     let first_movable_cluster =
       try
         Cluster.of_int64 @@ Qcow_bitmap.min_elt free
       with
-      | Not_found -> next_cluster in
-
+      | Not_found -> max_cluster (* header takes up the whole file *) in
     let parse x =
       if x = Physical.unmapped
       then Cluster.zero

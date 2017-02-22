@@ -242,7 +242,7 @@ let get_last_block t =
       Cluster.IntervalSet.Interval.y @@ Cluster.IntervalSet.max_elt t.roots
     with Not_found ->
       max_ref in
-  max max_ref max_root
+  max (Cluster.pred t.first_movable_cluster) @@ max max_ref max_root
 
 let to_summary_string t =
   let copying, copied, flushed, referenced = total_moves t in
