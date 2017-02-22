@@ -862,8 +862,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     B.get_info t.base
     >>= fun base_info ->
     let max_cluster = Cluster.of_int64 @@ Int64.div base_info.Mirage_block.size_sectors sectors_per_cluster in
-    let next_cluster = Cluster.succ max_cluster in
-
     (* Iterate over the all clusters referenced from all the tables in the file
        and (a) construct a set of free clusters; and (b) construct a map of
        physical cluster back to virtual. The free set will show us the holes,
