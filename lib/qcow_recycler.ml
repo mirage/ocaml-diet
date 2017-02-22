@@ -218,11 +218,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                     let new_reference = Qcow_physical.make ~is_mutable:(Qcow_physical.is_mutable old_reference) ~is_compressed:(Qcow_physical.is_compressed old_reference) dst in
                     Metadata.Physical.set addresses ref_cluster_within new_reference;
                     nr_updated := Int64.succ !nr_updated;
+                    set_move_state cluster_map move.move Referenced;
+                    (* The move cannot be cancelled now that the metadata has
+                       been updated. *)
                     Lwt.return (Ok ())
                   end
                 ) >>= function
                 | Ok () ->
-                  set_move_state cluster_map move.move Referenced;
                   Lwt.return (Ok ())
                 | Error e -> Lwt.return (Error e)
             end
