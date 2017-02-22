@@ -189,9 +189,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   module ClusterIO = struct
 
     (** Allocate [n] clusters, registers them as new roots in the cluster map,
-        call [f (set, already_zero)] where [set] is a a set of possibly
-        non-contiguous physical clusters and [already_zero] indicates whether
-        the contents are guaranteed to contain zeroes.
+        call [f set] where [set] is a a set of possibly
+        non-contiguous physical clusters which are guaranteed to contain zeroes.
 
         [f] must cause the clusters to be registered in the cluster map from
         file metadata, otherwise the clusters could be immediately collected.
@@ -229,7 +228,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       match Recycler.allocate t.recycler (Cluster.of_int n) with
       | Some set ->
         Log.debug (fun f -> f "Allocated %d clusters from free list" n);
-        f (set, true)
+        f set
       | None ->
         let cluster = Cluster.succ @@ Qcow_cluster_map.get_last_block t.cluster_map in
         let free = Cluster.IntervalSet.(Interval.make cluster Cluster.(add cluster (pred (of_int n)))) in
@@ -237,7 +236,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Qcow_cluster_map.with_roots t.cluster_map set
           (fun () ->
             Log.debug (fun f -> f "Soft allocated span of clusters from %s (length %d)" (Cluster.to_string cluster) n);
-            f (set, true)
+            f set
           )
 
     module Refcount = struct
@@ -371,7 +370,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 then Int64.mul 2L current_size_clusters
                 else needed in
               allocate_clusters t (Int64.to_int needed)
-                (fun (free, _already_zero) ->
+                (fun free ->
                   (* Erasing new blocks is handled after the copy *)
                   (* Copy any existing refcounts into new table *)
                   let buf = malloc t.h in
@@ -449,7 +448,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         >>= fun addr ->
         ( if Physical.to_bytes addr = 0 then begin
               allocate_clusters t 1
-                (fun (free, _already_zero) ->
+                (fun free ->
                   let cluster = Cluster.IntervalSet.(Interval.x (min_elt free)) in
                   (* NB: the pointers in the refcount table are different from the pointers
                      in the cluster table: the high order bits are not used to encode extra
@@ -652,16 +651,9 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               at the same time to minimise I/O *)
            ( if Physical.to_bytes l2_offset = 0 then begin
                allocate_clusters t 2
-                 (fun (free, already_zero) ->
+                 (fun free ->
                    (* FIXME: it's unnecessary to write to the data cluster if we're
                       about to overwrite it with real data straight away *)
-                   let open Lwt.Infix in
-                   ( if not already_zero then Recycler.erase t.recycler free else Lwt.return (Ok ()) )
-                   >>= function
-                   | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-                   | Error `Disconnected -> Lwt.return (Error `Disconnected)
-                   | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-                   | Ok () ->
                    let open Lwt_write_error.Infix in
                    let l2_cluster = Cluster.IntervalSet.(Interval.x (min_elt free)) in
                    let free = Cluster.IntervalSet.(remove (Interval.make l2_cluster l2_cluster) free) in
@@ -683,14 +675,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                >>= fun data_offset ->
                if Physical.to_bytes data_offset = 0 then begin
                  allocate_clusters t 1
-                   (fun (free, already_zero) ->
-                     let open Lwt.Infix in
-                     ( if not already_zero then Recycler.erase t.recycler free else Lwt.return (Ok ()) )
-                     >>= function
-                     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-                     | Error `Disconnected -> Lwt.return (Error `Disconnected)
-                     | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-                     | Ok () ->
+                   (fun free ->
                      let open Lwt_write_error.Infix in
                      let data_cluster = Cluster.IntervalSet.(Interval.x (min_elt free)) in
                      Refcount.incr t data_cluster
