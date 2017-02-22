@@ -129,11 +129,6 @@ val with_roots: t -> Cluster.IntervalSet.t -> (unit -> 'a Lwt.t) -> 'a Lwt.t
 val get_moves: t -> Move.t list
 (** [get_moves t] calculates the block moves required to compact [t] *)
 
-val compact_s: (Move.t -> 'a -> ((bool * 'a), 'b) result Lwt.t ) -> t -> 'a
-  -> ('a, 'b) result Lwt.t
-(** [compact_s f t acc] accumulates the result of [f move] where [move] is
-    the next cluster move needed to perform a compaction of [t].. *)
-
 val get_last_block: t -> Cluster.t
 (** [get_last_block t] is the last allocated block in [t]. Note if there are no
     data blocks this will point to the last header block even though it is

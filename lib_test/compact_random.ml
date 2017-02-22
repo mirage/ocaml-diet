@@ -20,6 +20,7 @@ module FromResult = Error.FromResult
 open Utils
 
 module Block = UnsafeBlock
+module B = Qcow.Make(Block)(Time)
 
 let debug = ref false
 
@@ -30,7 +31,6 @@ let debug = ref false
 let random_write_discard_compact nr_clusters stop_after =
   (* create a large disk *)
   let open Lwt.Infix in
-  let module B = Qcow.Make(Block)(Time) in
   let cluster_bits = 16 in (* FIXME: avoid hardcoding this *)
   let cluster_size = 1 lsl cluster_bits in
   let size = Int64.(mul nr_clusters (of_int cluster_size)) in
@@ -40,7 +40,11 @@ let random_write_discard_compact nr_clusters stop_after =
     >>= fun () ->
     Block.connect path
     >>= fun block ->
-    let config = B.Config.create ~keep_erased:2048L ~discard:true () in
+    let keep_erased =
+      if !B.Debug.Setting.compact_mid_write
+      then None (* running compact mid write races with the eraser thread *)
+      else Some 2048L in
+    let config = B.Config.create ?keep_erased ~discard:true () in
     B.create block ~size ~lazy_refcounts:false ~config ()
     >>= function
     | Error _ -> failwith "B.create failed"
@@ -228,7 +232,8 @@ let _ =
   Arg.parse [
     "-clusters", Arg.Set_int clusters, Printf.sprintf "Total number of clusters (default %d)" !clusters;
     "-stop-after", Arg.Set_int stop_after, Printf.sprintf "Number of iterations to stop after (default: 1024, 0 means never)";
-    "-debug", Arg.Set debug, "enable debug"
+    "-debug", Arg.Set debug, "enable debug";
+    "-compact-mid-write", Arg.Set B.Debug.Setting.compact_mid_write, "Enable the compact-mid-write debug option";
   ] (fun x ->
       Printf.fprintf stderr "Unexpected argument: %s\n" x;
       exit 1

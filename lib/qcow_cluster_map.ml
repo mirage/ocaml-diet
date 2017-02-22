@@ -78,6 +78,106 @@ type t = {
       to be rewritten to kick the background recycling thread. *)
 }
 
+let get_last_block t =
+  let max_ref =
+    try
+      fst @@ Cluster.Map.max_binding t.refs
+    with Not_found ->
+      Cluster.pred t.first_movable_cluster in
+  let max_root =
+    try
+      Cluster.IntervalSet.Interval.y @@ Cluster.IntervalSet.max_elt t.roots
+    with Not_found ->
+      max_ref in
+  max (Cluster.pred t.first_movable_cluster) @@ max max_ref max_root
+
+let total_used t =
+  Int64.of_int @@ Cluster.Map.cardinal t.refs
+
+let total_free t =
+  Cluster.to_int64 @@ Cluster.IntervalSet.cardinal t.junk
+
+let total_erased t =
+  Cluster.to_int64 @@ Cluster.IntervalSet.cardinal t.erased
+
+let total_available t =
+  Cluster.to_int64 @@ Cluster.IntervalSet.cardinal t.available
+
+let total_moves t =
+  Cluster.Map.fold (fun _ m (copying, copied, flushed, referenced) -> match m.state with
+    | Copying -> (copying + 1), copied, flushed, referenced
+    | Copied -> copying, copied + 1, flushed, referenced
+    | Flushed -> copying, copied, flushed + 1, referenced
+    | Referenced -> copying, copied, flushed, referenced + 1
+  ) t.moves (0, 0, 0, 0)
+
+let total_roots t =
+  Cluster.to_int64 @@ Cluster.IntervalSet.cardinal t.roots
+
+let to_summary_string t =
+  let copying, copied, flushed, referenced = total_moves t in
+  Printf.sprintf "%Ld used; %Ld junk; %Ld erased; %Ld available; %Ld roots; %d Copying; %d Copied; %d Flushed; %d Referenced; max_cluster = %s"
+    (total_used t) (total_free t) (total_erased t) (total_available t) (total_roots t)
+    copying copied flushed referenced (Cluster.to_string @@ get_last_block t)
+
+module Debug = struct
+  let check ?(leaks=true) ?(sharing=true) t =
+    let open Cluster.IntervalSet in
+    let last = get_last_block t in
+    if last >= t.first_movable_cluster then begin
+      let whole_file = add (Interval.make t.first_movable_cluster last) empty in
+      let refs = Cluster.Map.fold (fun cluster _ set ->
+        add (Interval.make cluster cluster) set
+      ) t.refs empty in
+      let moves = Cluster.Map.fold (fun _ m set ->
+        let dst = m.move.Move.dst in
+        add (Interval.make dst dst) set
+      ) t.moves empty in
+      let junk = "junk", t.junk in
+      let erased = "erased", t.erased in
+      let available = "available", t.available in
+      let refs = "refs", refs in
+      let moves = "moves", moves in
+      let roots = "roots", t.roots in
+      let cached = "cached", Cache.Debug.all_cached_clusters t.cache in
+      let all = [ junk; erased; available; refs; moves; roots ] in
+      let leaked = List.fold_left diff whole_file (List.map snd all) in
+      if leaks && (cardinal leaked <> Cluster.zero) then begin
+        Printf.fprintf stderr "%s\n" (to_summary_string t);
+        Printf.fprintf stderr "%s clusters leaked: %s" (Cluster.to_string @@ cardinal leaked)
+          (Sexplib.Sexp.to_string_hum (sexp_of_t leaked));
+        assert false
+      end;
+      let rec cross xs = function
+        | [] -> []
+        | y :: ys -> List.map (fun x -> x, y) xs @ cross xs ys in
+      let check zs =
+        List.iter (fun ((x_name, x), (y_name, y)) ->
+          if x_name <> y_name then begin
+            let i = inter x y in
+            if cardinal i <> Cluster.zero then begin
+              Printf.fprintf stderr "%s\n" (to_summary_string t);
+              Printf.fprintf stderr "%s and %s are not disjoint\n" x_name y_name;
+              Printf.fprintf stderr "%s = %s\n" x_name (Sexplib.Sexp.to_string_hum (sexp_of_t x));
+              Printf.fprintf stderr "%s = %s\n" y_name (Sexplib.Sexp.to_string_hum (sexp_of_t y));
+              Printf.fprintf stderr "intersection = %s\n" (Sexplib.Sexp.to_string_hum (sexp_of_t i));
+              assert false
+            end
+          end
+        ) zs in
+      (* These must be disjoint *)
+      if sharing then begin
+        check @@ cross
+          [ junk; erased; available; refs; moves ]
+          [ junk; erased; available; refs; moves ];
+        check @@ cross
+          [ cached ]
+          [ junk; erased; available ]
+      end
+    end
+    let assert_no_leaked_blocks t = check t
+end
+
 module type MutableSet = sig
   val get: t -> Cluster.IntervalSet.t
   val add: t -> Cluster.IntervalSet.t -> unit
@@ -116,7 +216,7 @@ let resize t new_size_clusters =
 module Junk = struct
   let get t = t.junk
   let add t more =
-    (* assert (Cluster.IntervalSet.inter t.junk more = Cluster.IntervalSet.empty); *)
+    Log.debug (fun f -> f "Junk.add %s" (Sexplib.Sexp.to_string (Cluster.IntervalSet.sexp_of_t more)));
     t.junk <- Cluster.IntervalSet.union t.junk more;
     (* Ensure all cached copies of junk blocks are dropped *)
     Cluster.IntervalSet.(fold (fun i () ->
@@ -128,6 +228,7 @@ module Junk = struct
         end in
       loop x
     ) more ());
+    Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
     t.junk <- Cluster.IntervalSet.diff t.junk less;
@@ -137,7 +238,9 @@ end
 module Available = struct
   let get t = t.available
   let add t more =
+    Log.debug (fun f -> f "Available.add %s" (Sexplib.Sexp.to_string (Cluster.IntervalSet.sexp_of_t more)));
     t.available <- Cluster.IntervalSet.union t.available more;
+    Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
     t.available <- Cluster.IntervalSet.diff t.available less;
@@ -147,7 +250,9 @@ end
 module Erased = struct
   let get t = t.erased
   let add t more =
+    Log.debug (fun f -> f "Erased.add %s" (Sexplib.Sexp.to_string (Cluster.IntervalSet.sexp_of_t more)));
     t.erased <- Cluster.IntervalSet.union t.erased more;
+    Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
     t.erased <- Cluster.IntervalSet.diff t.erased less;
@@ -157,29 +262,6 @@ end
 let wait t = Lwt_condition.wait t.c
 
 let find t cluster = Cluster.Map.find cluster t.refs
-
-let total_used t =
-  Int64.of_int @@ Cluster.Map.cardinal t.refs
-
-let total_free t =
-  Cluster.to_int64 @@ Cluster.IntervalSet.cardinal t.junk
-
-let total_erased t =
-  Cluster.to_int64 @@ Cluster.IntervalSet.cardinal t.erased
-
-let total_available t =
-  Cluster.to_int64 @@ Cluster.IntervalSet.cardinal t.available
-
-let total_moves t =
-  Cluster.Map.fold (fun _ m (copying, copied, flushed, referenced) -> match m.state with
-    | Copying -> (copying + 1), copied, flushed, referenced
-    | Copied -> copying, copied + 1, flushed, referenced
-    | Flushed -> copying, copied, flushed + 1, referenced
-    | Referenced -> copying, copied, flushed, referenced + 1
-  ) t.moves (0, 0, 0, 0)
-
-let total_roots t =
-  Cluster.to_int64 @@ Cluster.IntervalSet.cardinal t.roots
 
 let moves t = t.moves
 
@@ -216,9 +298,9 @@ let cancel_move t cluster =
            as if the write wasn't committed which is valid
          The only reason we still track this move is because when the next flush
          happens it is safe to add the src cluster to the set of junk blocks. *)
-      Log.debug (fun f -> f "Not cancelling in-progress move of cluter %s: already Referenced" (Cluster.to_string cluster))
+      Log.info (fun f -> f "Not cancelling in-progress move of cluter %s: already Referenced" (Cluster.to_string cluster))
     | { move = { Move.dst; _ }; _ } ->
-      Log.warn (fun f -> f "Cancelling in-progress move of cluster %s to %s" (Cluster.to_string cluster) (Cluster.to_string dst));
+      Log.debug (fun f -> f "Cancelling in-progress move of cluster %s to %s" (Cluster.to_string cluster) (Cluster.to_string dst));
       t.moves <- Cluster.Map.remove cluster t.moves;
       let dst' = Cluster.IntervalSet.(add (Interval.make dst dst) empty) in
       (* The destination block can now be recycled *)
@@ -230,25 +312,6 @@ let complete_move t move =
   if not(Cluster.Map.mem move.Move.src t.moves)
   then Log.warn (fun f -> f "Not completing move state of cluster %s: operation cancelled" (Cluster.to_string move.Move.src))
   else t.moves <- Cluster.Map.remove move.Move.src t.moves
-
-let get_last_block t =
-  let max_ref =
-    try
-      fst @@ Cluster.Map.max_binding t.refs
-    with Not_found ->
-      Cluster.pred t.first_movable_cluster in
-  let max_root =
-    try
-      Cluster.IntervalSet.Interval.y @@ Cluster.IntervalSet.max_elt t.roots
-    with Not_found ->
-      max_ref in
-  max (Cluster.pred t.first_movable_cluster) @@ max max_ref max_root
-
-let to_summary_string t =
-  let copying, copied, flushed, referenced = total_moves t in
-  Printf.sprintf "%Ld used; %Ld junk; %Ld erased; %Ld available; %Ld roots; %d Copying; %d Copied; %d Flushed; %d Referenced; max_cluster = %s"
-    (total_used t) (total_free t) (total_erased t) (total_available t) (total_roots t)
-    copying copied flushed referenced (Cluster.to_string @@ get_last_block t)
 
 let add t rf cluster =
   let c, w = rf in
@@ -268,22 +331,6 @@ let remove t cluster =
   t.refs <- Cluster.Map.remove cluster t.refs;
   Lwt_condition.signal t.c ()
 
-(* Fold over all free blocks *)
-let fold_over_free_s f t acc =
-  let range i acc =
-    let from = Cluster.IntervalSet.Interval.x i in
-    let upto = Cluster.IntervalSet.Interval.y i in
-    let rec loop acc x =
-      let open Lwt.Infix in
-      if x = (Cluster.succ upto) then Lwt.return acc else begin
-        f x acc >>= fun (continue, acc) ->
-        if continue
-        then loop acc (Cluster.succ x)
-        else Lwt.return acc
-      end in
-    loop acc from in
-  Cluster.IntervalSet.fold_s range t.junk acc
-
 let with_roots t clusters f =
   t.roots <- Cluster.IntervalSet.union clusters t.roots;
   Lwt.finalize f (fun () ->
@@ -291,8 +338,6 @@ let with_roots t clusters f =
     Lwt_condition.signal t.c ();
     Lwt.return_unit
   )
-
-open Result
 
 let get_moves t =
   (* The last allocated block. Note if there are no data blocks this will
@@ -321,90 +366,3 @@ let get_moves t =
         end
       end
     ) t.junk ([], max_cluster)
-
-let compact_s f t acc =
-  (* The last allocated block. Note if there are no data blocks this will
-     point to the last header block even though it is immovable. *)
-  let max_cluster = get_last_block t in
-  let open Lwt.Infix in
-  let refs = ref t.refs in
-  fold_over_free_s
-    (fun cluster acc -> match acc with
-      | Error e -> Lwt.return (false, Error e)
-      | Ok (acc, max_cluster) ->
-      (* A free block after the last allocated block will not be filled.
-         It will be erased from existence when the file is truncated at the
-         end. *)
-      if cluster >= max_cluster then Lwt.return (false, Ok (acc, max_cluster)) else begin
-        (* find the last physical block *)
-        let last_block, rf = Cluster.Map.max_binding (!refs) in
-
-        if cluster >= last_block then Lwt.return (false, Ok (acc, last_block)) else begin
-          (* copy last_block into cluster and update rf *)
-          let move = { Move.src = last_block; dst = cluster } in
-          refs := Cluster.Map.remove last_block @@ Cluster.Map.add cluster rf (!refs);
-          f move acc
-          >>= function
-          | Ok (continue, acc) -> Lwt.return (continue, Ok (acc, last_block))
-          | Error e -> Lwt.return (false, Error e)
-        end
-      end
-    ) t (Ok (acc, max_cluster))
-  >>= function
-  | Ok (result, _) -> Lwt.return (Ok result)
-  | Error e -> Lwt.return (Error e)
-
-module Debug = struct
-  let assert_no_leaked_blocks t =
-    let open Cluster.IntervalSet in
-    let last = get_last_block t in
-    if last >= t.first_movable_cluster then begin
-      let whole_file = add (Interval.make t.first_movable_cluster last) empty in
-      let refs = Cluster.Map.fold (fun cluster _ set ->
-        add (Interval.make cluster cluster) set
-      ) t.refs empty in
-      let moves = Cluster.Map.fold (fun _ m set ->
-        let dst = m.move.Move.dst in
-        add (Interval.make dst dst) set
-      ) t.moves empty in
-      let junk = "junk", t.junk in
-      let erased = "erased", t.erased in
-      let available = "available", t.available in
-      let refs = "refs", refs in
-      let moves = "moves", moves in
-      let roots = "roots", t.roots in
-      let cached = "cached", Cache.Debug.all_cached_clusters t.cache in
-      let all = [ junk; erased; available; refs; moves; roots ] in
-      let leaked = List.fold_left diff whole_file (List.map snd all) in
-      if cardinal leaked <> Cluster.zero then begin
-        Printf.fprintf stderr "%s\n" (to_summary_string t);
-        Printf.fprintf stderr "%s clusters leaked: %s" (Cluster.to_string @@ cardinal leaked)
-          (Sexplib.Sexp.to_string_hum (sexp_of_t leaked));
-        assert false
-      end;
-      let rec cross xs = function
-        | [] -> []
-        | y :: ys -> List.map (fun x -> x, y) xs @ cross xs ys in
-      let check zs =
-        List.iter (fun ((x_name, x), (y_name, y)) ->
-          if x_name <> y_name then begin
-            let i = inter x y in
-            if cardinal i <> Cluster.zero then begin
-              Printf.fprintf stderr "%s\n" (to_summary_string t);
-              Printf.fprintf stderr "%s and %s are not disjoint\n" x_name y_name;
-              Printf.fprintf stderr "%s = %s\n" x_name (Sexplib.Sexp.to_string_hum (sexp_of_t x));
-              Printf.fprintf stderr "%s = %s\n" y_name (Sexplib.Sexp.to_string_hum (sexp_of_t y));
-              Printf.fprintf stderr "intersection = %s\n" (Sexplib.Sexp.to_string_hum (sexp_of_t i));
-              assert false
-            end
-          end
-        ) zs in
-      (* These must be disjoint *)
-      check @@ cross
-        [ junk; erased; available; refs; moves ]
-        [ junk; erased; available; refs; moves ];
-      check @@ cross
-        [ cached ]
-        [ junk; erased; available ];
-    end
-end

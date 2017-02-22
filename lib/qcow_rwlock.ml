@@ -14,6 +14,8 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
+open Sexplib.Std
+
 let src =
   let src = Logs.Src.create "qcow" ~doc:"qcow2-formatted BLOCK device" in
   Logs.Src.set_level src (Some Logs.Info);
@@ -21,59 +23,178 @@ let src =
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
+(* A resource that can be locked *)
 type t = {
-  mutable nr_readers: int;
-  mutable writer: bool;
+  t_description_fn: unit -> string;
   m: Lwt_mutex.t;
   c: unit Lwt_condition.t;
+  mutable all_locks: lock list;
 }
-let make () =
-  let nr_readers = 0 in
-  let writer = false in
+(* A lock held on a resource *)
+and lock = {
+  t: t;
+  client: client;
+  mutable reader: bool; (* or writer *)
+  mutable released: bool;
+}
+(* A client owning the lock *)
+and client = {
+  client_description_fn: unit -> string;
+  mutable my_locks: lock list;
+}
+
+let make t_description_fn =
   let m = Lwt_mutex.create () in
   let c = Lwt_condition.create () in
-  { nr_readers; writer; m; c }
-let with_read_lock t f =
-  let open Lwt.Infix in
-  Lwt_mutex.with_lock t.m
-    (fun () ->
-      let rec wait () =
-        if t.writer then begin
-          Lwt_condition.wait t.c ~mutex:t.m
-          >>= fun () ->
-          wait ()
-        end else begin
-          t.nr_readers <- t.nr_readers + 1;
-          Lwt.return_unit
-        end in
-      wait ()
-    )
-  >>= fun () ->
-  Lwt.finalize f
-    (fun () ->
-      t.nr_readers <- t.nr_readers - 1;
-      Lwt_condition.signal t.c ();
-      Lwt.return_unit
-    )
-let with_write_lock t f =
-  let open Lwt.Infix in
-  Lwt_mutex.with_lock t.m
-    (fun () ->
-      let rec wait () =
-        if t.nr_readers > 0 || t.writer then begin
-          Lwt_condition.wait t.c ~mutex:t.m
-          >>= fun () ->
-          wait ()
-        end else begin
-          t.writer <- true;
-          Lwt.return_unit
-        end in
-      wait ()
-    )
-  >>= fun () ->
-  Lwt.finalize f
-    (fun () ->
-      t.writer <- false;
-      Lwt_condition.broadcast t.c ();
-      Lwt.return_unit
-    )
+  let all_locks = [] in
+  { t_description_fn; m; c; all_locks }
+
+module To_sexp = struct
+  (* Project instances of type t into a simpler set of records, organised for
+     printing. *)
+  module Lock = struct
+    type t = {
+      description: string;
+      mode: [ `Read | `Write ];
+      released: bool;
+    } [@@deriving sexp_of]
+  end
+  module Client = struct
+    type t = {
+      description: string;
+      locks: Lock.t list;
+    } [@@deriving sexp_of]
+  end
+  type t = {
+    description: string;
+    clients: Client.t list;
+  } [@@deriving sexp_of]
+  let lock l =
+    let description = l.t.t_description_fn () in
+    let mode = if l.reader then `Read else `Write in
+    let released = l.released in
+    { Lock.description; mode; released }
+  let client c =
+    let description = c.client_description_fn () in
+    let locks = List.map lock c.my_locks in
+    { Client.description; locks }
+  let t t =
+    let description = t.t_description_fn () in
+    let rec setify = function
+      | [] -> []
+      | x :: xs -> if List.filter (fun y -> x == y) xs <> [] then setify xs else x :: (setify xs) in
+    let clients = List.map client @@ setify @@ List.map (fun l -> l.client) t.all_locks in
+    { description; clients }
+end
+let sexp_of_t x = To_sexp.(sexp_of_t @@ t x)
+let sexp_of_client x = To_sexp.(Client.sexp_of_t @@ client x)
+
+let anon_client =
+  let next_idx = ref 0 in
+  fun () ->
+    let idx = !next_idx in
+    incr next_idx;
+    let client_description_fn () = Printf.sprintf "Anonymous client %d" idx in
+    let my_locks = [] in
+    { client_description_fn; my_locks }
+
+let unlock lock =
+  assert(not lock.released);
+  lock.released <- true;
+  lock.client.my_locks <- List.filter (fun l -> l != lock) lock.client.my_locks;
+  lock.t.all_locks <- List.filter (fun l -> l != lock) lock.t.all_locks;
+  Lwt_condition.broadcast lock.t.c ()
+
+let any f xs = List.fold_left (fun acc x -> acc || (f x)) false xs
+
+module Read = struct
+  let lock ?(client = anon_client ()) t =
+    let open Lwt.Infix in
+    Lwt_mutex.with_lock t.m
+      (fun () ->
+        let rec wait () =
+          (* If any other client has a write lock then wait *)
+          let any_other_writer = any (fun l -> l.client != client && (not l.reader)) t.all_locks in
+          if any_other_writer then begin
+            Lwt_condition.wait t.c ~mutex:t.m
+            >>= fun () ->
+            wait ()
+          end else begin
+            let reader = true and released = false in
+            let lock = { t; client; reader; released } in
+            t.all_locks <- lock :: t.all_locks;
+            client.my_locks <- lock :: client.my_locks;
+            Lwt.return lock
+          end in
+        wait ()
+      )
+
+  let with_lock ?(client = anon_client ()) t f =
+    let open Lwt.Infix in
+    lock ~client t
+    >>= fun lock ->
+    Lwt.finalize f
+      (fun () ->
+        unlock lock;
+        Lwt.return_unit
+      )
+end
+
+module Write = struct
+
+  let any_other_client t client =
+    any (fun l -> l.client != client) t.all_locks
+
+  let with_lock ?(client = anon_client ()) t f =
+    let open Lwt.Infix in
+    Lwt_mutex.with_lock t.m
+      (fun () ->
+        let rec wait () =
+          (* If any other client has a lock then wait *)
+          if any_other_client t client then begin
+            Lwt_condition.wait t.c ~mutex:t.m
+            >>= fun () ->
+            wait ()
+          end else begin
+            let reader = false and released = false in
+            let lock = { t; client; reader; released } in
+            t.all_locks <- lock :: t.all_locks;
+            client.my_locks <- lock :: client.my_locks;
+            Lwt.return lock
+          end in
+        wait ()
+      )
+    >>= fun lock ->
+    Lwt.finalize f
+      (fun () ->
+        unlock lock;
+        Lwt.return_unit
+      )
+
+  let try_lock ?(client = anon_client ()) t =
+    if any_other_client t client
+    then None
+    else begin
+      let reader = false and released = false in
+      let lock = { t; client; reader; released } in
+      t.all_locks <- lock :: t.all_locks;
+      client.my_locks <- lock :: client.my_locks;
+      Some lock
+    end
+end
+
+module Client = struct
+  type t = client
+
+  let make client_description_fn =
+    let my_locks = [] in
+    { client_description_fn; my_locks }
+end
+
+module Debug = struct
+  let assert_no_locks_held client =
+    if client.my_locks <> [] then begin
+      Printf.fprintf stderr "Client still holds locks:\n%s\n%!" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_client client);
+      assert false
+    end
+end
