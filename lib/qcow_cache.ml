@@ -48,6 +48,10 @@ let read t cluster =
   end
 
 let write t cluster data =
+  if not (Cluster.Map.mem cluster t.clusters) then begin
+    Log.err (fun f -> f "Cache.write %s: cluster is nolonger in cache, so update will be dropped" (Cluster.to_string cluster));
+    assert false
+  end;
   t.clusters <- Cluster.Map.add cluster data t.clusters;
   t.write_cluster cluster data
 

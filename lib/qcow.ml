@@ -189,9 +189,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   module ClusterIO = struct
 
     (** Allocate [n] clusters, registers them as new roots in the cluster map,
-        call [f (set, already_zero)] where [set] is a a set of possibly
-        non-contiguous physical clusters and [already_zero] indicates whether
-        the contents are guaranteed to contain zeroes.
+        call [f set] where [set] is a a set of possibly
+        non-contiguous physical clusters which are guaranteed to contain zeroes.
 
         [f] must cause the clusters to be registered in the cluster map from
         file metadata, otherwise the clusters could be immediately collected.
@@ -229,7 +228,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       match Recycler.allocate t.recycler (Cluster.of_int n) with
       | Some set ->
         Log.debug (fun f -> f "Allocated %d clusters from free list" n);
-        f (set, true)
+        f set
       | None ->
         let cluster = Cluster.succ @@ Qcow_cluster_map.get_last_block t.cluster_map in
         let free = Cluster.IntervalSet.(Interval.make cluster Cluster.(add cluster (pred (of_int n)))) in
@@ -237,7 +236,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Qcow_cluster_map.with_roots t.cluster_map set
           (fun () ->
             Log.debug (fun f -> f "Soft allocated span of clusters from %s (length %d)" (Cluster.to_string cluster) n);
-            f (set, true)
+            f set
           )
 
     module Refcount = struct
@@ -371,7 +370,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 then Int64.mul 2L current_size_clusters
                 else needed in
               allocate_clusters t (Int64.to_int needed)
-                (fun (free, _already_zero) ->
+                (fun free ->
                   (* Erasing new blocks is handled after the copy *)
                   (* Copy any existing refcounts into new table *)
                   let buf = malloc t.h in
@@ -449,7 +448,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         >>= fun addr ->
         ( if Physical.to_bytes addr = 0 then begin
               allocate_clusters t 1
-                (fun (free, _already_zero) ->
+                (fun free ->
                   let cluster = Cluster.IntervalSet.(Interval.x (min_elt free)) in
                   (* NB: the pointers in the refcount table are different from the pointers
                      in the cluster table: the high order bits are not used to encode extra
@@ -652,16 +651,9 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               at the same time to minimise I/O *)
            ( if Physical.to_bytes l2_offset = 0 then begin
                allocate_clusters t 2
-                 (fun (free, already_zero) ->
+                 (fun free ->
                    (* FIXME: it's unnecessary to write to the data cluster if we're
                       about to overwrite it with real data straight away *)
-                   let open Lwt.Infix in
-                   ( if not already_zero then Recycler.erase t.recycler free else Lwt.return (Ok ()) )
-                   >>= function
-                   | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-                   | Error `Disconnected -> Lwt.return (Error `Disconnected)
-                   | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-                   | Ok () ->
                    let open Lwt_write_error.Infix in
                    let l2_cluster = Cluster.IntervalSet.(Interval.x (min_elt free)) in
                    let free = Cluster.IntervalSet.(remove (Interval.make l2_cluster l2_cluster) free) in
@@ -683,14 +675,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                >>= fun data_offset ->
                if Physical.to_bytes data_offset = 0 then begin
                  allocate_clusters t 1
-                   (fun (free, already_zero) ->
-                     let open Lwt.Infix in
-                     ( if not already_zero then Recycler.erase t.recycler free else Lwt.return (Ok ()) )
-                     >>= function
-                     | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-                     | Error `Disconnected -> Lwt.return (Error `Disconnected)
-                     | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-                     | Ok () ->
+                   (fun free ->
                      let open Lwt_write_error.Infix in
                      let data_cluster = Cluster.IntervalSet.(Interval.x (min_elt free)) in
                      Refcount.incr t data_cluster
@@ -877,8 +862,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     B.get_info t.base
     >>= fun base_info ->
     let max_cluster = Cluster.of_int64 @@ Int64.div base_info.Mirage_block.size_sectors sectors_per_cluster in
-    let next_cluster = Cluster.succ max_cluster in
-
     (* Iterate over the all clusters referenced from all the tables in the file
        and (a) construct a set of free clusters; and (b) construct a map of
        physical cluster back to virtual. The free set will show us the holes,
@@ -897,16 +880,18 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let free = Qcow_bitmap.make_full
       ~initial_size:(Cluster.to_int max_cluster)
       ~maximum_size:(Cluster.to_int max_possible_cluster * 10) in
-    (* Subtract the fixed structures at the beginning of the file *)
-    Qcow_bitmap.(remove (Interval.make l1_table_start_cluster (Int64.(pred @@ add l1_table_start_cluster l1_table_clusters))) free);
-    Qcow_bitmap.(remove (Interval.make refcount_start_cluster (Int64.(pred @@ add refcount_start_cluster (Int64.of_int32 t.h.Header.refcount_table_clusters)))) free);
+    (* The header structures are untracked by the qcow_cluster_map and we assume
+       they don't move and we don't try to move them. We assume the structures
+       have no holes in them, otherwise we would miscompute the `first_movable_cluster`
+       and accidentally truncate the file. *)
+    Qcow_bitmap.(remove (Interval.make 0L (Int64.(pred @@ add l1_table_start_cluster l1_table_clusters))) free);
+    Qcow_bitmap.(remove (Interval.make 0L (Int64.(pred @@ add refcount_start_cluster (Int64.of_int32 t.h.Header.refcount_table_clusters)))) free);
     Qcow_bitmap.(remove (Interval.make 0L 0L) free);
     let first_movable_cluster =
       try
         Cluster.of_int64 @@ Qcow_bitmap.min_elt free
       with
-      | Not_found -> next_cluster in
-
+      | Not_found -> max_cluster (* header takes up the whole file *) in
     let parse x =
       if x = Physical.unmapped
       then Cluster.zero
@@ -1294,6 +1279,20 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     } in
     Lwt_error.or_fail_with @@ make_cluster_map t'
     >>= fun cluster_map ->
+    (* An opened file may have junk at the end, which means that we would simultaneously
+       allocate from it (get_last_block + n) as well as erase and recycle it.
+       We should trim the file now so that it is safe to allocate from it as normal.
+       Normally when the file is expanded the blocks at the end are not considered to be
+       junk. *)
+    let last_block = Qcow_cluster_map.get_last_block cluster_map in
+    let size_clusters = Cluster.succ last_block in
+    let p = Physical.make ((Cluster.to_int size_clusters) lsl cluster_bits) in
+    let size_sectors = Physical.sector ~sector_size p in
+    Lwt_write_error.or_fail_with @@ resize_base base sector_size None p
+    >>= fun () ->
+    Log.info (fun f -> f "Resized file to %s clusters (%Ld sectors)" (Cluster.to_string size_clusters) size_sectors);
+    Qcow_cluster_map.resize cluster_map size_clusters;
+
     t'.cluster_map <- cluster_map;
     Metadata.set_cluster_map t'.metadata cluster_map;
     Recycler.set_cluster_map t'.recycler cluster_map;
@@ -1329,7 +1328,13 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       end else Lwt.return_unit )
     >>= fun () ->
     t := Some t';
-    Lwt.return t'
+    Recycler.flush t'.recycler
+    >>= function
+    | Error _ ->
+      Log.err (fun f -> f "initial flush failed");
+      Lwt.fail (Failure "initial flush failed")
+    | Ok () ->
+      Lwt.return t'
 
   let connect ?(config=Config.default) base =
     let open Lwt.Infix in
@@ -1681,6 +1686,15 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Lwt.return (Ok ())
     )
 
+  let flush t =
+    let open Lwt.Infix in
+    Recycler.flush t.recycler
+    >>= function
+    | Error `Disconnected -> Lwt.return (Error `Disconnected)
+    | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+    | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+    | Ok () -> Lwt.return (Ok ())
+
   let header t = t.h
 
   type t' = t
@@ -1696,17 +1710,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let assert_no_leaked_blocks t =
       Qcow_cluster_map.Debug.assert_no_leaked_blocks t.cluster_map
-
-    let flush t =
-      let open Lwt.Infix in
-      Recycler.flush t.recycler
-      >>= function
-      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-      | Error `Disconnected -> Lwt.return (Error `Disconnected)
-      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-      | Ok () ->
-      Log.debug (fun f -> f "Written header");
-      Lwt.return (Ok ())
 
   end
 end

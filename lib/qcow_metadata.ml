@@ -78,8 +78,6 @@ module Physical = struct
                       (if cluster <> Cluster.zero then ", unmapping " ^ (Cluster.to_string cluster) else "")
                   );
         if cluster <> Cluster.zero then begin
-          let i = Cluster.IntervalSet.(add (Interval.make cluster cluster) empty) in
-          Qcow_cluster_map.Junk.add m i;
           Qcow_cluster_map.remove m cluster;
         end;
         Qcow_cluster_map.add m (t.cluster, n) v'

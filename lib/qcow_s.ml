@@ -74,8 +74,6 @@ module type DEBUG = sig
   val check_no_overlaps: t -> (unit, error) result Lwt.t
 
   val assert_no_leaked_blocks: t -> unit
-
-  val flush: t -> (unit, error) result Lwt.t
 end
 
 module type INTERVAL_SET = sig

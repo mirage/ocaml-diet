@@ -35,12 +35,25 @@ type move_state =
 
 module Move = struct
   type t = { src: Cluster.t; dst: Cluster.t }
+
+  let to_string t =
+    Printf.sprintf "%s -> %s" (Cluster.to_string t.src) (Cluster.to_string t.dst)
 end
 
 type move = {
   move: Move.t;
   state: move_state;
 }
+
+let string_of_move m =
+  let state = match m.state with
+    | Copying    -> "Copying"
+    | Copied     -> "Copied"
+    | Flushed    -> "Flushed"
+    | Referenced -> "Referenced" in
+  Printf.sprintf "%s %s"
+    (Move.to_string m.move)
+    state
 
 type t = {
   mutable junk: Cluster.IntervalSet.t;
@@ -229,7 +242,7 @@ let get_last_block t =
       Cluster.IntervalSet.Interval.y @@ Cluster.IntervalSet.max_elt t.roots
     with Not_found ->
       max_ref in
-  max max_ref max_root
+  max (Cluster.pred t.first_movable_cluster) @@ max max_ref max_root
 
 let to_summary_string t =
   let copying, copied, flushed, referenced = total_moves t in
@@ -296,10 +309,15 @@ let get_moves t =
         let last_block, rf = Cluster.Map.max_binding (!refs) in
 
         if cluster >= last_block then moves, last_block else begin
-          (* copy last_block into cluster and update rf *)
-          let move = { Move.src = last_block; dst = cluster } in
-          refs := Cluster.Map.remove last_block @@ Cluster.Map.add cluster rf (!refs);
-          move :: moves, last_block
+          let src = last_block and dst = cluster in
+          if Cluster.Map.mem src t.moves
+          then moves, last_block (* move already in progress, don't move it again *)
+          else begin
+            (* copy last_block into cluster and update rf *)
+            let move = { Move.src; dst } in
+            refs := Cluster.Map.remove last_block @@ Cluster.Map.add cluster rf (!refs);
+            move :: moves, last_block
+          end
         end
       end
     ) t.junk ([], max_cluster)

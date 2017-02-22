@@ -122,6 +122,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
       The error [`Duplicate_reference (ref1, ref2, target) means that references
       at both [ref1] and [ref2] both point to the same [target] offset. *)
 
+  val flush : t -> (unit, write_error) result io
+  (** [flush t] flushes any outstanding buffered writes *)
+
   val header: t -> Header.t
   (** Return a snapshot of the current header *)
 

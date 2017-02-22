@@ -43,6 +43,8 @@ type reference = Cluster.t * int (* cluster * index within cluster *)
 module Move: sig
   type t = { src: Cluster.t; dst: Cluster.t }
   (** An instruction to move the contents from cluster [src] to cluster [dst] *)
+
+  val to_string: t -> string
 end
 
 type move = {
@@ -50,6 +52,8 @@ type move = {
   state: move_state;
 }
 (** describes the state of an in-progress block move *)
+
+val string_of_move: move -> string
 
 module type MutableSet = sig
   val get: t -> Cluster.IntervalSet.t
