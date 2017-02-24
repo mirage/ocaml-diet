@@ -185,7 +185,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () ->
-      Log.info (fun f -> f "Resized device to %d bytes" (Qcow_physical.to_bytes new_size));
+      Log.debug (fun f -> f "Resized device to %d bytes" (Qcow_physical.to_bytes new_size));
       Lwt.return (Ok ())
     end
 
@@ -247,7 +247,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           let size_sectors = Physical.sector ~sector_size:t.sector_size p in
           resize_base t.base t.sector_size (Some(t.cluster_map, t.cluster_bits)) p
           >>= fun () ->
-          Log.info (fun f -> f "Resized file to %d clusters (%Ld sectors)" max_cluster_should_be size_sectors);
+          Log.debug (fun f -> f "Resized file to %d clusters (%Ld sectors)" max_cluster_should_be size_sectors);
           Lwt.return (Ok ())
         end else Lwt.return (Ok ()) ) >>= fun () ->
       (* Take them from the free list if they are available *)
@@ -1036,12 +1036,14 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                   | Ok () -> Lwt.return (Ok refs_updated) in
                 one_pass ()
                 >>= fun refs_updated ->
-                Log.info (fun f -> f "Pass 1: %Ld references updated" refs_updated);
+                if refs_updated <> 0L
+                then Log.info (fun f -> f "Pass 1: %Ld references updated" refs_updated);
                 (* modifying a L2 metadata block will have cancelled the move, so
                    perform an additional pass. *)
                 one_pass ()
                 >>= fun refs_updated' ->
-                Log.info (fun f -> f "Pass 2: %Ld references updated" refs_updated');
+                if refs_updated' <> 0L
+                then Log.info (fun f -> f "Pass 2: %Ld references updated" refs_updated');
                 one_pass ()
                 >>= fun refs_updated'' ->
                 if refs_updated'' <> 0L
@@ -1049,15 +1051,18 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                   refs_updated refs_updated' refs_updated'');
 
                 let last_block = get_last_block map in
-                Log.info (fun f -> f "Shrink file so that last cluster was %s, now %s" (Cluster.to_string start_last_block) (Cluster.to_string last_block));
-
                 let open Lwt_write_error.Infix in
-                let p = Physical.make ((Cluster.to_int last_block + 1) lsl t.cluster_bits) in
-                let size_sectors = Physical.sector ~sector_size:t.sector_size p in
-                resize_base t.base t.sector_size (Some(t.cluster_map, t.cluster_bits)) p
-                >>= fun () ->
-                Log.info (fun f -> f "Resized file to %s clusters (%Ld sectors)" (Cluster.to_string last_block) size_sectors);
+                ( if last_block <> start_last_block then begin
+                    Log.info (fun f -> f "Shrink file so that last cluster was %s, now %s" (Cluster.to_string start_last_block) (Cluster.to_string last_block));
 
+                    let p = Physical.make ((Cluster.to_int last_block + 1) lsl t.cluster_bits) in
+                    let size_sectors = Physical.sector ~sector_size:t.sector_size p in
+                    resize_base t.base t.sector_size (Some(t.cluster_map, t.cluster_bits)) p
+                    >>= fun () ->
+                    Log.debug (fun f -> f "Resized file to %s clusters (%Ld sectors)" (Cluster.to_string last_block) size_sectors);
+                    Lwt.return (Ok ())
+                  end else Lwt.return (Ok ()) )
+                >>= fun () ->
                 progress_cb ~percent:100;
 
                 let total_refs_updated = Int64.(add (add refs_updated refs_updated') refs_updated'') in
@@ -1065,7 +1070,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 let old_size = Int64.mul (Cluster.to_int64 start_last_block) sectors_per_cluster in
                 let new_size = Int64.mul (Cluster.to_int64 last_block) sectors_per_cluster in
                 let report = { refs_updated; copied; old_size; new_size } in
-                Log.info (fun f -> f "%Ld sectors copied, %Ld references updated, file shrunk by %Ld sectors"
+                if copied <> 0L || total_refs_updated <> 0L
+                then Log.info (fun f -> f "%Ld sectors copied, %Ld references updated, file shrunk by %Ld sectors"
                   copied total_refs_updated (Int64.sub old_size new_size)
                 );
                 Lwt.return (Ok report)
@@ -1153,11 +1159,9 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         begin
           let open Lwt.Infix in
           if !DebugSetting.compact_mid_write then begin
-            Log.info (fun f -> f "DebugSetting.compact_mid_write");
+            Log.debug (fun f -> f "DebugSetting.compact_mid_write");
             compact t ()
             >>= fun _ ->
-            Log.info (fun f -> f "Done");
-
             Lwt.return (Ok ())
           end else Lwt.return (Ok ())
         end >>= fun () ->
