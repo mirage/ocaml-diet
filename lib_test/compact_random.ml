@@ -159,12 +159,12 @@ let random_write_discard_compact nr_clusters stop_after =
           Lwt.return_unit in
       Lwt.pick [
         check (fun _ -> 0L) !empty;
-        Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "check empty")
+        Lwt_unix.sleep 30. >>= fun () -> Lwt.fail (Failure "check empty")
       ]
       >>= fun () ->
       Lwt.pick [
         check (fun x -> x) !written;
-        Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "check written")
+        Lwt_unix.sleep 30. >>= fun () -> Lwt.fail (Failure "check written")
       ] in
     Random.init 0;
     let rec loop () =
@@ -185,7 +185,7 @@ let random_write_discard_compact nr_clusters stop_after =
             Printf.printf ".%!";
             Lwt.pick [
               write sector n;
-              Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "write timeout")
+              Lwt_unix.sleep 30. >>= fun () -> Lwt.fail (Failure "write timeout")
             ]
           end else begin
             let sector = Random.int64 nr_sectors in
@@ -194,7 +194,7 @@ let random_write_discard_compact nr_clusters stop_after =
             Printf.printf "-%!";
             Lwt.pick [
               discard sector n;
-              Lwt_unix.sleep 5. >>= fun () -> Lwt.fail (Failure "discard timeout")
+              Lwt_unix.sleep 30. >>= fun () -> Lwt.fail (Failure "discard timeout")
             ]
           end )
         >>= fun () ->
