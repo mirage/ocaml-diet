@@ -1,3 +1,21 @@
+## 0.9.1 (2017-02-25)
+- Add configuration `runtime_assert` to check GC invariants at runtime
+- Use tail-recursive calls in the block recycler (which deals with large
+  block lists)
+- Wait for the compaction work list to stabilise before processing it
+  (otherwise we move blocks which are then immediately discarded)
+- Track the difference between blocks on the end of the file being full
+  of zeroes due to ftruncate versus being full of junk due to discard
+- On open, truncate the file to erase trailing junk
+- Don't try to use free space between header structures for user data
+  since we assume all blocks after the start of free space are movable
+  and header blocks aren't (in this implementation)
+- Make cluster locks recursive, hold relevant metadata read locks while
+  reading or writing data clusters to ensure they aren't moved while
+  we're using them.
+- Add a debug testing mode and use it in a test case to verify that
+  compact mid-write works as expected.
+
 ## 0.9.0 (2017-02-21)
 - Add online coalescing mode and background cluster recycling thread
 - Rename internal modules and types
