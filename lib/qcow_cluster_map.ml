@@ -145,9 +145,9 @@ module Debug = struct
       let all = [ junk; erased; available; refs; moves; roots ] in
       let leaked = List.fold_left diff whole_file (List.map snd all) in
       if leaks && (cardinal leaked <> Cluster.zero) then begin
-        Printf.fprintf stderr "%s\n" (to_summary_string t);
-        Printf.fprintf stderr "%s clusters leaked: %s" (Cluster.to_string @@ cardinal leaked)
-          (Sexplib.Sexp.to_string_hum (sexp_of_t leaked));
+        Log.err (fun f -> f "%s" (to_summary_string t));
+        Log.err (fun f -> f "%s clusters leaked: %s" (Cluster.to_string @@ cardinal leaked)
+          (Sexplib.Sexp.to_string_hum (sexp_of_t leaked)));
         assert false
       end;
       let rec cross xs = function
@@ -158,11 +158,11 @@ module Debug = struct
           if x_name <> y_name then begin
             let i = inter x y in
             if cardinal i <> Cluster.zero then begin
-              Printf.fprintf stderr "%s\n" (to_summary_string t);
-              Printf.fprintf stderr "%s and %s are not disjoint\n" x_name y_name;
-              Printf.fprintf stderr "%s = %s\n" x_name (Sexplib.Sexp.to_string_hum (sexp_of_t x));
-              Printf.fprintf stderr "%s = %s\n" y_name (Sexplib.Sexp.to_string_hum (sexp_of_t y));
-              Printf.fprintf stderr "intersection = %s\n" (Sexplib.Sexp.to_string_hum (sexp_of_t i));
+              Log.err (fun f -> f "%s" (to_summary_string t));
+              Log.err (fun f -> f "%s and %s are not disjoint" x_name y_name);
+              Log.err (fun f -> f "%s = %s" x_name (Sexplib.Sexp.to_string_hum (sexp_of_t x)));
+              Log.err (fun f -> f "%s = %s" y_name (Sexplib.Sexp.to_string_hum (sexp_of_t y)));
+              Log.err (fun f -> f "intersection = %s" (Sexplib.Sexp.to_string_hum (sexp_of_t i)));
               assert false
             end
           end
