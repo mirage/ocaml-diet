@@ -70,7 +70,7 @@ val zero: t
 (** A cluster map for a zero-length disk *)
 
 val make: free:Qcow_bitmap.t -> refs:reference Cluster.Map.t -> cache:Qcow_cache.t
-  -> first_movable_cluster:Cluster.t -> t
+  -> first_movable_cluster:Cluster.t -> runtime_asserts:bool -> t
 (** Given a set of free clusters, and the first cluster which can be moved
     (i.e. that isn't fixed header), construct an empty cluster map. *)
 
@@ -128,11 +128,6 @@ val with_roots: t -> Cluster.IntervalSet.t -> (unit -> 'a Lwt.t) -> 'a Lwt.t
 
 val get_moves: t -> Move.t list
 (** [get_moves t] calculates the block moves required to compact [t] *)
-
-val compact_s: (Move.t -> 'a -> ((bool * 'a), 'b) result Lwt.t ) -> t -> 'a
-  -> ('a, 'b) result Lwt.t
-(** [compact_s f t acc] accumulates the result of [f move] where [move] is
-    the next cluster move needed to perform a compaction of [t].. *)
 
 val get_last_block: t -> Cluster.t
 (** [get_last_block t] is the last allocated block in [t]. Note if there are no

@@ -97,11 +97,20 @@ let make ~cache ~cluster_bits ~locks () =
 
 let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
 
+let read_and_lock ?client t cluster =
+  let open Lwt.Infix in
+  Locks.Read.lock ?client t.locks cluster
+  >>= fun lock ->
+  let open Lwt_error.Infix in
+  Cache.read t.cache cluster
+  >>= fun data ->
+  Lwt.return (Ok ({ t; data; cluster }, lock))
+
 (** Read the contents of [cluster] and apply the function [f] with the
     lock held. *)
-let read t cluster f =
+let read ?client t cluster f =
   let open Lwt_error.Infix in
-  Locks.with_read_lock t.locks cluster
+  Locks.Read.with_lock ?client t.locks cluster
     (fun () ->
        Cache.read t.cache cluster
        >>= fun data ->
@@ -110,9 +119,9 @@ let read t cluster f =
 
 (** Read the contents of [cluster], transform it via function [f] and write
     back the results, all with the lock held. *)
-let update t cluster f =
+let update ?client t cluster f =
   let open Lwt_write_error.Infix in
-  Locks.with_write_lock t.locks cluster
+  Locks.Write.with_lock ?client t.locks cluster
     (fun () ->
        (* Cancel any in-progress move since the data will be stale *)
        begin match t.cluster_map with

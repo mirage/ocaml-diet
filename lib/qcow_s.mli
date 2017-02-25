@@ -74,6 +74,12 @@ module type DEBUG = sig
   val check_no_overlaps: t -> (unit, error) result Lwt.t
 
   val assert_no_leaked_blocks: t -> unit
+
+  module Setting: sig
+    val compact_mid_write: bool ref
+    (** true means to trigger a compact part-way through a write to check that
+        the write completes properly after the compact *)
+  end
 end
 
 module type INTERVAL_SET = sig
