@@ -31,10 +31,14 @@ type t = {
 
   check_on_connect: bool;
   (** perform an integrity check on connect *)
+
+  runtime_asserts: bool;
+  (** constantly verify GC invariants are held *)
 }
 
 val create: ?discard:bool -> ?keep_erased:int64 ->
   ?compact_after_unmaps:int64 -> ?compact_ms:int -> ?check_on_connect:bool ->
+  ?runtime_asserts:bool ->
   unit -> t
 
 val default: t

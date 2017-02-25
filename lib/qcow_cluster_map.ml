@@ -76,6 +76,8 @@ type t = {
   c: unit Lwt_condition.t;
   (** Signalled when any of the junk/erased sets change or when references need
       to be rewritten to kick the background recycling thread. *)
+  runtime_asserts: bool;
+  (** Check leak and sharing invariants on every update *)
 }
 
 let get_last_block t =
@@ -184,7 +186,7 @@ module type MutableSet = sig
   val remove: t -> Cluster.IntervalSet.t -> unit
 end
 
-let make ~free ~refs ~cache ~first_movable_cluster =
+let make ~free ~refs ~cache ~first_movable_cluster ~runtime_asserts =
   let junk = Qcow_bitmap.fold
     (fun i acc ->
       let x, y = Qcow_bitmap.Interval.(x i, y i) in
@@ -196,7 +198,7 @@ let make ~free ~refs ~cache ~first_movable_cluster =
   let erased = Cluster.IntervalSet.empty in
   let moves = Cluster.Map.empty in
   let c = Lwt_condition.create () in
-  { junk; available; erased; roots; moves; refs; first_movable_cluster; cache; c }
+  { junk; available; erased; roots; moves; refs; first_movable_cluster; cache; c; runtime_asserts }
 
 let zero =
   let free = Qcow_bitmap.make_empty ~initial_size:0 ~maximum_size:0 in
@@ -205,7 +207,7 @@ let zero =
     ~read_cluster:(fun _ -> Lwt.return (Error `Unimplemented))
     ~write_cluster:(fun _ _ -> Lwt.return (Error `Unimplemented))
     () in
-  make ~free ~refs ~first_movable_cluster:Cluster.zero ~cache
+  make ~free ~refs ~first_movable_cluster:Cluster.zero ~cache ~runtime_asserts:false
 
 let resize t new_size_clusters =
   let file = Cluster.IntervalSet.(add (Interval.make Cluster.zero (Cluster.pred new_size_clusters)) empty) in
@@ -228,7 +230,7 @@ module Junk = struct
         end in
       loop x
     ) more ());
-    Debug.check ~leaks:false t;
+    if t.runtime_asserts then Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
     t.junk <- Cluster.IntervalSet.diff t.junk less;
@@ -240,7 +242,7 @@ module Available = struct
   let add t more =
     Log.debug (fun f -> f "Available.add %s" (Sexplib.Sexp.to_string (Cluster.IntervalSet.sexp_of_t more)));
     t.available <- Cluster.IntervalSet.union t.available more;
-    Debug.check ~leaks:false t;
+    if t.runtime_asserts then Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
     t.available <- Cluster.IntervalSet.diff t.available less;
@@ -252,7 +254,7 @@ module Erased = struct
   let add t more =
     Log.debug (fun f -> f "Erased.add %s" (Sexplib.Sexp.to_string (Cluster.IntervalSet.sexp_of_t more)));
     t.erased <- Cluster.IntervalSet.union t.erased more;
-    Debug.check ~leaks:false t;
+    if t.runtime_asserts then Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
     t.erased <- Cluster.IntervalSet.diff t.erased less;

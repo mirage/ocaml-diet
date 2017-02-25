@@ -28,14 +28,17 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
       compact_after_unmaps: int64 option; (** automatically compact after n sectors are unmapped *)
       compact_ms: int; (** if automatically compacting, wait for this many milliseconds *)
       check_on_connect: bool; (** perform an integrity check on connect *)
+      runtime_asserts: bool; (** check cluster invariants at runtime *)
     }
     (** Runtime configuration of a device *)
 
     val create: ?discard:bool ->
       ?keep_erased:int64 ->
       ?compact_after_unmaps:int64 ->
-      ?compact_ms:int -> ?check_on_connect:bool -> unit -> t
-    (** [create ?discard ?keep_erased ?compact_after_unmaps ?compact_ms ()] constructs a runtime configuration *)
+      ?compact_ms:int ->
+      ?check_on_connect:bool ->
+      ?runtime_asserts:bool -> unit -> t
+    (** Customise the runtime behaviour, see [connect] or [create] *)
 
     val to_string: t -> string
     (** Marshal a config into a string suitable for a command-line argument *)

@@ -44,7 +44,7 @@ let random_write_discard_compact nr_clusters stop_after =
       if !B.Debug.Setting.compact_mid_write
       then None (* running compact mid write races with the eraser thread *)
       else Some 2048L in
-    let config = B.Config.create ?keep_erased ~discard:true () in
+    let config = B.Config.create ?keep_erased ~discard:true ~runtime_asserts:true () in
     B.create block ~size ~lazy_refcounts:false ~config ()
     >>= function
     | Error _ -> failwith "B.create failed"
