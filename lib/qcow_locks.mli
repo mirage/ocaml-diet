@@ -77,4 +77,7 @@ module Debug: sig
 
   val assert_no_locks_held: Client.t -> unit
   (** Check that all locks have been explicitly released. *)
+
+  val dump_state: t -> unit
+  (** Write the cluster lock state to the logs for analysis *)
 end

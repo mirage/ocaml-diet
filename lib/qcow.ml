@@ -1089,7 +1089,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
      decide that the storage layer has failed. This could happen if a thread
      was starved or if there's deadlock, so try to detect it and log something
      useful. *)
-  let with_deadline describe_fn nsec f =
+  let with_deadline t describe_fn nsec f =
     let open Lwt.Infix in
     let timeout = Time.sleep_ns nsec >>= fun () -> Lwt.return (Error `Timeout) in
     let work = f () in
@@ -1097,6 +1097,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     >>= function
     | Error `Timeout ->
       Log.err (fun f -> f "%s: I/O deadline exceeded" (describe_fn ()));
+      Locks.Debug.dump_state t.locks;
       work (* return the answer anyway *)
     | Ok x ->
       Lwt.cancel timeout;
@@ -1106,7 +1107,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   let read t sector bufs =
     let describe_fn () = Printf.sprintf "read sector = %Ld length = %d" sector (Cstructs.len bufs) in
-    with_deadline describe_fn time_30s
+    with_deadline t describe_fn time_30s
       (fun () ->
         let open Lwt_error.Infix in
         let sectors_per_cluster = (1 lsl t.cluster_bits) / t.sector_size in
@@ -1157,7 +1158,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   let write t sector bufs =
     let describe_fn () = Printf.sprintf "write sector = %Ld length = %d" sector (Cstructs.len bufs) in
-    with_deadline describe_fn time_30s
+    with_deadline t describe_fn time_30s
       (fun () ->
         let open Lwt_write_error.Infix in
         let cluster_size = 1L <| t.cluster_bits in
@@ -1522,7 +1523,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   let discard t ~sector ~n () =
     let describe_fn () = Printf.sprintf "discard sector %Ld n %Ld" sector n in
-    with_deadline describe_fn time_30s
+    with_deadline t describe_fn time_30s
       (fun () ->
         let open Lwt_write_error.Infix in
         ( if not(t.config.Config.discard) then begin
