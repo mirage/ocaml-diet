@@ -25,10 +25,6 @@ type t = {
   compact_after_unmaps: int64 option;
   (** once more than this many sectors are free, perform a compact *)
 
-  compact_ms: int;
-  (** if compact_after_unmaps is set, wait for this many ms before starting
-      the compact *)
-
   check_on_connect: bool;
   (** perform an integrity check on connect *)
 
@@ -37,7 +33,7 @@ type t = {
 }
 
 val create: ?discard:bool -> ?keep_erased:int64 ->
-  ?compact_after_unmaps:int64 -> ?compact_ms:int -> ?check_on_connect:bool ->
+  ?compact_after_unmaps:int64 -> ?check_on_connect:bool ->
   ?runtime_asserts:bool ->
   unit -> t
 

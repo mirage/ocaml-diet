@@ -26,7 +26,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
       discard: bool; (** true if `discard` will be enabled at runtime *)
       keep_erased: int64 option; (** size of erased free pool in sectors *)
       compact_after_unmaps: int64 option; (** automatically compact after n sectors are unmapped *)
-      compact_ms: int; (** if automatically compacting, wait for this many milliseconds *)
       check_on_connect: bool; (** perform an integrity check on connect *)
       runtime_asserts: bool; (** check cluster invariants at runtime *)
     }
@@ -35,7 +34,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
     val create: ?discard:bool ->
       ?keep_erased:int64 ->
       ?compact_after_unmaps:int64 ->
-      ?compact_ms:int ->
       ?check_on_connect:bool ->
       ?runtime_asserts:bool -> unit -> t
     (** Customise the runtime behaviour, see [connect] or [create] *)
