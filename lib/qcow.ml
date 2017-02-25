@@ -1085,11 +1085,33 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       );
     th
 
+  (* If a request from the client takes more than ~30s then the client may
+     decide that the storage layer has failed. This could happen if a thread
+     was starved or if there's deadlock, so try to detect it and log something
+     useful. *)
+  let with_deadline t describe_fn nsec f =
+    let open Lwt.Infix in
+    let timeout = Time.sleep_ns nsec >>= fun () -> Lwt.return (Error `Timeout) in
+    let work = f () in
+    Lwt.choose [ timeout; work >>= fun x -> Lwt.return (Ok x) ]
+    >>= function
+    | Error `Timeout ->
+      Log.err (fun f -> f "%s: I/O deadline exceeded" (describe_fn ()));
+      Locks.Debug.dump_state t.locks;
+      work (* return the answer anyway *)
+    | Ok x ->
+      Lwt.cancel timeout;
+      Lwt.return x
+
+  let time_30s = 30_000_000_000L
+
   let read t sector bufs =
-    let open Lwt_error.Infix in
-    let sectors_per_cluster = (1 lsl t.cluster_bits) / t.sector_size in
-    let client = Locks.Client.make
-      (fun () -> Printf.sprintf "read sector = %Ld length = %d" sector (Cstructs.len bufs)) in
+    let describe_fn () = Printf.sprintf "read sector = %Ld length = %d" sector (Cstructs.len bufs) in
+    with_deadline t describe_fn time_30s
+      (fun () ->
+        let open Lwt_error.Infix in
+        let sectors_per_cluster = (1 lsl t.cluster_bits) / t.sector_size in
+        let client = Locks.Client.make describe_fn in
         let cluster_size = 1L <| t.cluster_bits in
         let byte = Int64.(mul sector (of_int t.info.Mirage_block.sector_size)) in
         Error.Lwt_error.List.map_p
@@ -1132,13 +1154,16 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         >>= fun result ->
         Locks.Debug.assert_no_locks_held client;
         Lwt.return result
+    )
 
   let write t sector bufs =
-    let open Lwt_write_error.Infix in
-    let cluster_size = 1L <| t.cluster_bits in
-    let client = Locks.Client.make
-      (fun () -> Printf.sprintf "write sector = %Ld length = %d" sector (Cstructs.len bufs)) in
-    let sectors_per_cluster = (1 lsl t.cluster_bits) / t.sector_size in
+    let describe_fn () = Printf.sprintf "write sector = %Ld length = %d" sector (Cstructs.len bufs) in
+    with_deadline t describe_fn time_30s
+      (fun () ->
+        let open Lwt_write_error.Infix in
+        let cluster_size = 1L <| t.cluster_bits in
+        let client = Locks.Client.make describe_fn in
+        let sectors_per_cluster = (1 lsl t.cluster_bits) / t.sector_size in
         let byte = Int64.(mul sector (of_int t.info.Mirage_block.sector_size)) in
         Error.Lwt_error.List.map_p
           (fun (byte, buf) ->
@@ -1200,6 +1225,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         >>= fun result ->
         Locks.Debug.assert_no_locks_held client;
         Lwt.return result
+    )
 
   let seek_mapped t from =
     let open Lwt_error.Infix in
@@ -1496,14 +1522,16 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     end
 
   let discard t ~sector ~n () =
-    let open Lwt_write_error.Infix in
-    ( if not(t.config.Config.discard) then begin
-        Log.err (fun f -> f "discard called but feature not implemented in configuration");
-        Lwt.return (Error `Unimplemented)
-      end else Lwt.return (Ok ()) )
-    >>= fun () ->
-    let client = Locks.Client.make
-      (fun () -> Printf.sprintf "discard sector %Ld n %Ld" sector n) in
+    let describe_fn () = Printf.sprintf "discard sector %Ld n %Ld" sector n in
+    with_deadline t describe_fn time_30s
+      (fun () ->
+        let open Lwt_write_error.Infix in
+        ( if not(t.config.Config.discard) then begin
+            Log.err (fun f -> f "discard called but feature not implemented in configuration");
+            Lwt.return (Error `Unimplemented)
+          end else Lwt.return (Ok ()) )
+        >>= fun () ->
+        let client = Locks.Client.make describe_fn in
         (* we can only discard whole clusters. We will explicitly zero non-cluster
            aligned discards in order to satisfy RZAT *)
 
@@ -1530,6 +1558,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             loop (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
           end in
         loop sector' n'
+    )
 
   let create base ~size ?(lazy_refcounts=true) ?(config = Config.default) () =
     let version = `Three in

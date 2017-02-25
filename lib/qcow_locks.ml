@@ -16,6 +16,13 @@
  *)
 open Qcow_types
 
+let src =
+  let src = Logs.Src.create "qcow" ~doc:"qcow2-formatted BLOCK device" in
+  Logs.Src.set_level src (Some Logs.Info);
+  src
+
+module Log = (val Logs.src_log src : Logs.LOG)
+
 type t = {
   mutable locks: (Qcow_rwlock.t * int) Cluster.Map.t;
   metadata_m: Lwt_mutex.t;
@@ -121,4 +128,15 @@ module Write = struct
       Some lock
 end
 
-module Debug = Qcow_rwlock.Debug
+module Debug = struct
+  include Qcow_rwlock.Debug
+
+  let dump_state t =
+    Cluster.Map.iter
+      (fun cluster (lock, rf) ->
+        Log.info (fun f -> f "Cluster %s refcount %d locks = %s"
+          (Cluster.to_string cluster) rf
+          (Sexplib.Sexp.to_string @@ Qcow_rwlock.sexp_of_t lock)
+        )
+      ) t.locks
+end
