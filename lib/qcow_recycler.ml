@@ -433,7 +433,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         begin match Cluster.IntervalSet.take junk n with
         | None -> loop ()
         | Some (to_erase, _) ->
-          Log.info (fun f -> f "block recycler: should erase %s clusters" (Cluster.to_string @@ Cluster.IntervalSet.cardinal to_erase));
+          Log.debug (fun f -> f "block recycler: should erase %s clusters" (Cluster.to_string @@ Cluster.IntervalSet.cardinal to_erase));
           Qcow_cluster_map.with_roots cluster_map to_erase
             (fun () ->
               erase t to_erase
@@ -442,7 +442,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               | Error `Disconnected -> Lwt.fail_with "Disconnected"
               | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
               | Ok () ->
-                Log.info (fun f -> f "block recycler: finished erasing");
                 Qcow_cluster_map.Junk.remove cluster_map to_erase;
                 Qcow_cluster_map.Erased.add cluster_map to_erase;
                 Lwt.return_unit

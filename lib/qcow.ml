@@ -1568,7 +1568,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         (* we can only discard whole clusters. We will explicitly zero non-cluster
            aligned discards in order to satisfy RZAT *)
         let to_erase = min n (Int64.sub sector' sector) in
-        Log.info (fun f -> f "erase %Ld %Ld" sector to_erase);
         erase t ~sector ~n:to_erase ()
         >>= fun () ->
 
