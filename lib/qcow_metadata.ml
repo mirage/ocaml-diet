@@ -131,12 +131,12 @@ let update ?client t cluster f =
        Cache.read t.cache cluster
        >>= fun data ->
        f { t; data; cluster }
-       >>= fun () ->
+       >>= fun result ->
        let open Lwt.Infix in
        Cache.write t.cache cluster data
        >>= function
        | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
        | Error `Disconnected -> Lwt.return (Error `Disconnected)
        | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-       | Ok () -> Lwt.return (Ok ())
+       | Ok () -> Lwt.return (Ok result)
     )

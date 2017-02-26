@@ -763,38 +763,27 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 end else begin
                   let l2_index_offset = Physical.shift l2_offset (8 * (Int64.to_int a.Virtual.l2_index)) in
                   let cluster = Physical.cluster ~cluster_bits:t.cluster_bits l2_index_offset in
-                  Metadata.read_and_lock ?client t.metadata cluster
-                  >>= fun (c, l2_lock) ->
-                  let addresses = Metadata.Physical.of_contents c in
-                  let within = Physical.within_cluster ~cluster_bits:t.cluster_bits l2_index_offset in
-                  let data_offset = Metadata.Physical.get addresses within in
-                  if Physical.to_bytes data_offset = 0 then begin
-                    Locks.unlock l2_lock;
-                    loop (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
-                  end else begin
-                    Lwt.finalize
-                      (fun () ->
+                  Metadata.update ?client t.metadata cluster
+                    (fun c ->
+                      let addresses = Metadata.Physical.of_contents c in
+                      let within = Physical.within_cluster ~cluster_bits:t.cluster_bits l2_index_offset in
+                      let data_offset = Metadata.Physical.get addresses within in
+                      if Physical.to_bytes data_offset = 0
+                      then Lwt.return (Ok sectors_per_cluster)
+                      else begin
                         (* The data at [data_offset] is about to become an unreferenced
-                           hole in the file *)
-                        let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
+                        hole in the file *)
                         t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
                         let data_cluster = Physical.cluster ~cluster_bits:t.cluster_bits data_offset in
-                        Metadata.update ?client t.metadata cluster
-                          (fun c ->
-                            let addresses = Metadata.Physical.of_contents c in
-                            let within = Physical.within_cluster ~cluster_bits:t.cluster_bits l2_index_offset in
-                            Metadata.Physical.set addresses within Physical.unmapped;
-                            Lwt.return (Ok ())
-                        )
-                        >>= fun () ->
+                        let within = Physical.within_cluster ~cluster_bits:t.cluster_bits l2_index_offset in
+                        Metadata.Physical.set addresses within Physical.unmapped;
                         Refcount.decr t data_cluster
-                      ) (fun () ->
-                        Locks.unlock l2_lock;
-                        Lwt.return_unit
-                      )
-                    >>= fun () ->
-                    loop (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
-                  end
+                        >>= fun () ->
+                        Lwt.return (Ok sectors_per_cluster)
+                      end
+                    )
+                  >>= fun to_advance ->
+                  loop (Int64.add sector to_advance) (Int64.sub n to_advance)
                 end
             end in
           loop sector n

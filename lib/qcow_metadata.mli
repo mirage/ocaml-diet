@@ -76,6 +76,6 @@ val read_and_lock: ?client:Qcow_locks.Client.t -> t -> Cluster.t -> (contents * 
 val read: ?client:Qcow_locks.Client.t -> t -> Cluster.t -> (contents -> ('a, error) result Lwt.t) -> ('a, error) result Lwt.t
 (** Read the contents of the given cluster and provide them to the given function *)
 
-val update: ?client:Qcow_locks.Client.t -> t -> Cluster.t -> (contents -> (unit, write_error) result Lwt.t) -> (unit, write_error) result Lwt.t
+val update: ?client:Qcow_locks.Client.t -> t -> Cluster.t -> (contents -> ('a, write_error) result Lwt.t) -> ('a, write_error) result Lwt.t
 (** Read the contents of the given cluster, transform them through the given
     function and write the results back to disk *)
