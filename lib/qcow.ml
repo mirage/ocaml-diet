@@ -746,10 +746,12 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
            Lwt.return (Ok (p, lock))
         )
 
-      let walk_and_deallocate ?client t a =
+      let walk_and_deallocate ?client t sector =
         let open Lwt_write_error.Infix in
         Locks.with_metadata_lock t.locks
           (fun () ->
+            let byte = Int64.(mul sector (of_int t.info.Mirage_block.sector_size)) in
+            let a = Virtual.make ~cluster_bits:t.cluster_bits byte in
             read_l1_table ?client t a.Virtual.l1_index
             >>= fun l2_offset ->
             if Physical.to_bytes l2_offset = 0 then begin
@@ -1559,9 +1561,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           if n < sectors_per_cluster
           then erase t ~sector ~n ()
           else begin
-            let byte = Int64.(mul sector (of_int t.info.Mirage_block.sector_size)) in
-            let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
-            ClusterIO.walk_and_deallocate ~client t vaddr
+            Log.info (fun f -> f "walk_and_deallocate sector %Ld" sector);
+            ClusterIO.walk_and_deallocate ~client t sector
             >>= fun () ->
             loop (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
           end in
