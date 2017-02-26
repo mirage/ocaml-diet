@@ -101,6 +101,9 @@ module Erased: MutableSet
 module Available: MutableSet
 (** Clusters which are available for reallocation *)
 
+module Copies: MutableSet
+(** Clusters which contain copies, as part of a compact *)
+
 val wait: t -> unit Lwt.t
 (** [wait t] wait for some amount of recycling work to become available, e.g.
     - junk could be created
