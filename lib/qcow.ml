@@ -1347,7 +1347,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Ok () -> Lwt.return (Ok ()) in
     let cache = Cache.create ~read_cluster ~write_cluster () in
     let metadata = Metadata.make ~cache ~cluster_bits ~locks () in
-    let recycler = Recycler.create ~base ~sector_size ~cluster_bits ~cache ~locks ~metadata in
+    let recycler = Recycler.create ~base ~sector_size ~cluster_bits ~cache ~locks ~metadata ~runtime_asserts:config.Config.runtime_asserts in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true; _ } -> true | _ -> false in
     let stats = Stats.zero in
     let t = ref None in

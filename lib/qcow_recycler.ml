@@ -32,9 +32,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     mutable need_to_flush: bool;
     need_to_flush_c: unit Lwt_condition.t;
     m: Lwt_mutex.t;
+    runtime_asserts: bool;
   }
 
-  let create ~base ~sector_size ~cluster_bits ~cache ~locks ~metadata =
+  let create ~base ~sector_size ~cluster_bits ~cache ~locks ~metadata ~runtime_asserts =
     let zero_buffer = Io_page.(to_cstruct @@ get 256) in (* 1 MiB *)
     Cstruct.memset zero_buffer 0;
     let background_thread = Lwt.return_unit in
@@ -44,7 +45,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let need_to_flush_c = Lwt_condition.create () in
     { base; sector_size; cluster_bits; cluster_map; cache; locks; metadata;
       zero_buffer; background_thread; need_to_flush; need_to_flush_c;
-      m }
+      m; runtime_asserts; }
 
   let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
 
@@ -442,7 +443,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           loop ()
         end
       | `Junk nr_junk ->
-        Qcow_cluster_map.Debug.assert_no_leaked_blocks cluster_map;
+        if t.runtime_asserts then Qcow_cluster_map.Debug.assert_no_leaked_blocks cluster_map;
         let moves = Qcow_cluster_map.get_moves cluster_map in
         Log.info (fun f -> f "block recycler: %Ld clusters are junk, %d moves are possible" nr_junk (List.length moves));
         Qcow_error.Lwt_write_error.or_fail_with @@ move_all t moves
