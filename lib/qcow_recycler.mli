@@ -22,7 +22,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S): sig
 
   val create: base:B.t -> sector_size:int -> cluster_bits:int
     -> cache:Qcow_cache.t -> locks:Qcow_locks.t
-    -> metadata:Qcow_metadata.t -> t
+    -> metadata:Qcow_metadata.t -> runtime_asserts:bool -> t
   (** Initialise a cluster recycler over the given block device *)
 
   val set_cluster_map: t -> Qcow_cluster_map.t -> unit

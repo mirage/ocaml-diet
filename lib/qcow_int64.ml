@@ -39,6 +39,8 @@ include M
 
 let round_up x size = mul (div (add x (pred size)) size) size
 
+let round_down x size = mul (div x size) size
+
 let sizeof _ = 8
 
 let read buf =

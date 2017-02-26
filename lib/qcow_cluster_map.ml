@@ -68,6 +68,8 @@ type t = {
   mutable roots: Cluster.IntervalSet.t;
   (* map from physical cluster to the physical cluster + offset of the reference.
      When a block is moved, this reference must be updated. *)
+  mutable copies: Cluster.IntervalSet.t;
+  (** Clusters which contain clusters as part of a move *)
   mutable moves: move Cluster.Map.t;
   (** The state of in-progress block moves, indexed by the source cluster *)
   mutable refs: reference Cluster.Map.t;
@@ -91,7 +93,12 @@ let get_last_block t =
       Cluster.IntervalSet.Interval.y @@ Cluster.IntervalSet.max_elt t.roots
     with Not_found ->
       max_ref in
-  max (Cluster.pred t.first_movable_cluster) @@ max max_ref max_root
+  let max_copies =
+    try
+      Cluster.IntervalSet.Interval.y @@ Cluster.IntervalSet.max_elt t.copies
+    with Not_found ->
+      max_root in
+  max (Cluster.pred t.first_movable_cluster) @@ max max_ref @@ max max_root max_copies
 
 let total_used t =
   Int64.of_int @@ Cluster.Map.cardinal t.refs
@@ -113,13 +120,16 @@ let total_moves t =
     | Referenced -> copying, copied, flushed, referenced + 1
   ) t.moves (0, 0, 0, 0)
 
+let total_copies t =
+  Cluster.to_int64 @@ Cluster.IntervalSet.cardinal t.copies
+
 let total_roots t =
   Cluster.to_int64 @@ Cluster.IntervalSet.cardinal t.roots
 
 let to_summary_string t =
   let copying, copied, flushed, referenced = total_moves t in
-  Printf.sprintf "%Ld used; %Ld junk; %Ld erased; %Ld available; %Ld roots; %d Copying; %d Copied; %d Flushed; %d Referenced; max_cluster = %s"
-    (total_used t) (total_free t) (total_erased t) (total_available t) (total_roots t)
+  Printf.sprintf "%Ld used; %Ld junk; %Ld erased; %Ld available; %Ld copies; %Ld roots; %d Copying; %d Copied; %d Flushed; %d Referenced; max_cluster = %s"
+    (total_used t) (total_free t) (total_erased t) (total_available t) (total_copies t) (total_roots t)
     copying copied flushed referenced (Cluster.to_string @@ get_last_block t)
 
 module Debug = struct
@@ -140,9 +150,10 @@ module Debug = struct
       let available = "available", t.available in
       let refs = "refs", refs in
       let moves = "moves", moves in
+      let copies = "copies", t.copies in
       let roots = "roots", t.roots in
       let cached = "cached", Cache.Debug.all_cached_clusters t.cache in
-      let all = [ junk; erased; available; refs; moves; roots ] in
+      let all = [ junk; erased; available; refs; moves; copies; roots ] in
       let leaked = List.fold_left diff whole_file (List.map snd all) in
       if leaks && (cardinal leaked <> Cluster.zero) then begin
         Log.err (fun f -> f "%s" (to_summary_string t));
@@ -170,8 +181,8 @@ module Debug = struct
       (* These must be disjoint *)
       if sharing then begin
         check @@ cross
-          [ junk; erased; available; refs; moves ]
-          [ junk; erased; available; refs; moves ];
+          [ junk; copies; erased; available; refs ]
+          [ junk; copies; erased; available; refs ];
         check @@ cross
           [ cached ]
           [ junk; erased; available ]
@@ -193,12 +204,13 @@ let make ~free ~refs ~cache ~first_movable_cluster ~runtime_asserts =
       let x = Cluster.of_int64 x and y = Cluster.of_int64 y in
       Cluster.IntervalSet.(add (Interval.make x y) acc)
     ) free Cluster.IntervalSet.empty in
+  let copies = Cluster.IntervalSet.empty in
   let roots = Cluster.IntervalSet.empty in
   let available = Cluster.IntervalSet.empty in
   let erased = Cluster.IntervalSet.empty in
   let moves = Cluster.Map.empty in
   let c = Lwt_condition.create () in
-  { junk; available; erased; roots; moves; refs; first_movable_cluster; cache; c; runtime_asserts }
+  { junk; available; erased; copies; roots; moves; refs; first_movable_cluster; cache; c; runtime_asserts }
 
 let zero =
   let free = Qcow_bitmap.make_empty ~initial_size:0 ~maximum_size:0 in
@@ -261,6 +273,19 @@ module Erased = struct
     Lwt_condition.signal t.c ()
 end
 
+module Copies = struct
+  let get t = t.erased
+  let add t more =
+    Log.debug (fun f -> f "Copies.add %s" (Sexplib.Sexp.to_string (Cluster.IntervalSet.sexp_of_t more)));
+    t.copies <- Cluster.IntervalSet.union t.copies more;
+    if t.runtime_asserts then Debug.check ~leaks:false t;
+    Lwt_condition.signal t.c ()
+  let remove t less =
+    t.copies <- Cluster.IntervalSet.diff t.copies less;
+    Lwt_condition.signal t.c ()
+end
+
+
 let wait t = Lwt_condition.wait t.c
 
 let find t cluster = Cluster.Map.find cluster t.refs
@@ -279,7 +304,8 @@ let set_move_state t move state =
     let dst' = Cluster.IntervalSet.(add (Interval.make dst dst) empty) in
     (* We always move into junk blocks *)
     Junk.remove t dst';
-    t.moves <- Cluster.Map.add move.Move.src m t.moves
+    t.moves <- Cluster.Map.add move.Move.src m t.moves;
+    Copies.add t dst'
   | Some Copied, Flushed ->
     t.moves <- Cluster.Map.add move.Move.src m t.moves;
     (* References now need to be rewritten *)
@@ -306,6 +332,7 @@ let cancel_move t cluster =
       t.moves <- Cluster.Map.remove cluster t.moves;
       let dst' = Cluster.IntervalSet.(add (Interval.make dst dst) empty) in
       (* The destination block can now be recycled *)
+      Copies.remove t dst';
       Junk.add t dst'
     | exception Not_found ->
       ()
@@ -313,7 +340,13 @@ let cancel_move t cluster =
 let complete_move t move =
   if not(Cluster.Map.mem move.Move.src t.moves)
   then Log.warn (fun f -> f "Not completing move state of cluster %s: operation cancelled" (Cluster.to_string move.Move.src))
-  else t.moves <- Cluster.Map.remove move.Move.src t.moves
+  else begin
+    t.moves <- Cluster.Map.remove move.Move.src t.moves;
+    let dst = Cluster.IntervalSet.(add (Interval.make move.Move.dst move.Move.dst) empty) in
+    Copies.remove t dst;
+    let src = Cluster.IntervalSet.(add (Interval.make move.Move.src move.Move.src) empty) in
+    Junk.add t src;
+  end
 
 let add t rf cluster =
   let c, w = rf in
@@ -325,6 +358,7 @@ let add t rf cluster =
     end;
     t.junk <- Cluster.IntervalSet.(remove (Interval.make cluster cluster) t.junk);
     t.refs <- Cluster.Map.add cluster rf t.refs;
+    t.copies <- Cluster.IntervalSet.(remove (Interval.make cluster cluster) t.copies);
     ()
   end
 

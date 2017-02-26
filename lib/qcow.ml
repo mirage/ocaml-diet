@@ -746,36 +746,62 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
            Lwt.return (Ok (p, lock))
         )
 
-      let walk_and_deallocate ?client t a =
+      let walk_and_deallocate ?client t sector n =
         let open Lwt_write_error.Infix in
+        let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
         Locks.with_metadata_lock t.locks
           (fun () ->
-            read_l1_table ?client t a.Virtual.l1_index
-            >>= fun l2_offset ->
-            if Physical.to_bytes l2_offset = 0 then begin
-              Lwt.return (Ok ())
-            end else begin
-              read_l2_table ?client t l2_offset a.Virtual.l2_index
-              >>= fun (data_offset, l2_lock) ->
-              Lwt.finalize
-                (fun () ->
-                  if Physical.to_bytes data_offset = 0 then begin
-                    Lwt.return (Ok ())
-                  end else begin
-                    (* The data at [data_offset] is about to become an unreferenced
-                       hole in the file *)
-                    let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
-                    t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
-                    let data_cluster = Physical.cluster ~cluster_bits:t.cluster_bits data_offset in
-                    write_l2_table ?client t l2_offset a.Virtual.l2_index Physical.unmapped
-                    >>= fun () ->
-                    Refcount.decr t data_cluster
-                  end
-                ) (fun () ->
-                  Locks.unlock l2_lock;
-                  Lwt.return_unit
-                )
-            end
+            let get_l2 sector =
+              let byte = Int64.(mul sector (of_int t.info.Mirage_block.sector_size)) in
+              let a = Virtual.make ~cluster_bits:t.cluster_bits byte in
+              read_l1_table ?client t a.Virtual.l1_index
+              >>= fun l2_offset ->
+              if Physical.to_bytes l2_offset = 0 then Lwt.return (Ok None) else begin
+                let l2_index_offset = Physical.shift l2_offset (8 * (Int64.to_int a.Virtual.l2_index)) in
+                let cluster = Physical.cluster ~cluster_bits:t.cluster_bits l2_index_offset in
+                let within = Physical.within_cluster ~cluster_bits:t.cluster_bits l2_index_offset in
+                Lwt.return (Ok (Some (cluster, within)))
+              end in
+            let rec loop sector n =
+              if n = 0L then Lwt.return (Ok ()) else begin
+                ( get_l2 sector
+                  >>= function
+                  | None ->
+                    (* FIXME: we can almost certainly jump more than this *)
+                    Lwt.return (Ok sectors_per_cluster)
+                  | Some (cluster, _) ->
+                    Metadata.update ?client t.metadata cluster
+                      (fun c ->
+                        let addresses = Metadata.Physical.of_contents c in
+                        (* With the cluster write lock held, complete as many
+                           writes to it as we need, unlocking and writing it out
+                           once at the end. *)
+                        let rec inner acc sector n =
+                          if n = 0L then Lwt.return (Ok acc) else begin
+                            get_l2 sector
+                            >>= function
+                            | None -> Lwt.return (Ok acc)
+                            | Some (cluster', _) when cluster <> cluster' -> Lwt.return (Ok acc)
+                            | Some (_, within) ->
+                              let data_offset = Metadata.Physical.get addresses within in
+                              if Physical.to_bytes data_offset = 0
+                              then inner (Int64.add acc sectors_per_cluster) (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
+                              else begin
+                                (* The data at [data_offset] is about to become an unreferenced
+                                hole in the file *)
+                                Metadata.Physical.set addresses within Physical.unmapped;
+                                t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
+                                Refcount.decr t (Physical.cluster ~cluster_bits:t.cluster_bits data_offset)
+                                >>= fun () ->
+                                inner (Int64.add acc sectors_per_cluster) (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
+                              end
+                          end in
+                        inner 0L sector n
+                      )
+                ) >>= fun to_advance ->
+                loop (Int64.add sector to_advance) (Int64.sub n to_advance)
+            end in
+          loop sector n
         )
   end
 
@@ -1347,7 +1373,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Ok () -> Lwt.return (Ok ()) in
     let cache = Cache.create ~read_cluster ~write_cluster () in
     let metadata = Metadata.make ~cache ~cluster_bits ~locks () in
-    let recycler = Recycler.create ~base ~sector_size ~cluster_bits ~cache ~locks ~metadata in
+    let recycler = Recycler.create ~base ~sector_size ~cluster_bits ~cache ~locks ~metadata ~runtime_asserts:config.Config.runtime_asserts in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true; _ } -> true | _ -> false in
     let stats = Stats.zero in
     let t = ref None in
@@ -1547,17 +1573,10 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
         let n' = Int64.sub n to_erase in
 
-        let rec loop sector n =
-          if n < sectors_per_cluster
-          then erase t ~sector ~n ()
-          else begin
-            let byte = Int64.(mul sector (of_int t.info.Mirage_block.sector_size)) in
-            let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
-            ClusterIO.walk_and_deallocate ~client t vaddr
-            >>= fun () ->
-            loop (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
-          end in
-        loop sector' n'
+        let to_discard = Int64.round_down n' sectors_per_cluster in
+        ClusterIO.walk_and_deallocate ~client t sector' to_discard
+        >>= fun () ->
+        erase t ~sector:(Int64.add sector' to_discard) ~n:(Int64.sub n' to_discard) ()
     )
 
   let create base ~size ?(lazy_refcounts=true) ?(config = Config.default) () =
