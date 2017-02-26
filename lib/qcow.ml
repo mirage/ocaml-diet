@@ -768,8 +768,15 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                     t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
                     let data_cluster = Physical.cluster ~cluster_bits:t.cluster_bits data_offset in
                     let l2_index_offset = Physical.shift l2_offset (8 * (Int64.to_int a.Virtual.l2_index)) in
-                    marshal_physical_address ?client t l2_index_offset Physical.unmapped
-                    >>= fun _ ->
+                    let cluster = Physical.cluster ~cluster_bits:t.cluster_bits l2_index_offset in
+                    Metadata.update ?client t.metadata cluster
+                      (fun c ->
+                        let addresses = Metadata.Physical.of_contents c in
+                        let within = Physical.within_cluster ~cluster_bits:t.cluster_bits l2_index_offset in
+                        Metadata.Physical.set addresses within Physical.unmapped;
+                        Lwt.return (Ok ())
+                    )
+                    >>= fun () ->
                     Refcount.decr t data_cluster
                   end
                 ) (fun () ->
