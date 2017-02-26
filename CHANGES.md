@@ -1,3 +1,12 @@
+## 0.9.2 (2017-02-26)
+- Don't hold the global lock while updating references
+- Log an error if a client I/O takes more than 30s
+- Improve the performance of discard by writing each L2 cluster to disk
+  only once
+- Track clusters which are being erased and copied into, to prevent the
+  file being shrunk, orphaning them (which typically manifests as a later
+  double-allocation)
+
 ## 0.9.1 (2017-02-25)
 - Add configuration `runtime_assert` to check GC invariants at runtime
 - Use tail-recursive calls in the block recycler (which deals with large
