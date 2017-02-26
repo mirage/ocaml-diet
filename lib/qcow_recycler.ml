@@ -361,10 +361,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let highest_priority =
         if total_erased < keep_erased && nr_junk > 0L then begin
           (* Take some of the junk and erase it *)
-          let n = min nr_junk (Int64.sub keep_erased total_erased) in
-          match Cluster.IntervalSet.take junk (Cluster.of_int64 n) with
-          | None -> None
-          | Some (to_erase, _) -> Some (`Erase to_erase)
+          let n = Cluster.of_int64 @@ min nr_junk (Int64.sub keep_erased total_erased) in
+          if Cluster.IntervalSet.cardinal junk < n
+          then None
+          else Some (`Erase n)
         end else None in
       (* If we need to update references, do that next *)
       let middle_priority =
@@ -430,16 +430,26 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       Lwt_condition.signal t.need_to_flush_c (); (* trigger a flush later *)
       wait_for_work ()
       >>= function
-      | `Erase to_erase ->
-        Log.debug (fun f -> f "block recycler: should erase %s clusters" (Cluster.to_string @@ Cluster.IntervalSet.cardinal to_erase));
-        begin erase t to_erase
-        >>= function
-        | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
-        | Error `Disconnected -> Lwt.fail_with "Disconnected"
-        | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
-        | Ok () ->
-          Qcow_cluster_map.Junk.remove cluster_map to_erase;
-          Qcow_cluster_map.Erased.add cluster_map to_erase;
+      | `Erase n ->
+        let junk = Qcow_cluster_map.Junk.get cluster_map in
+        begin match Cluster.IntervalSet.take junk n with
+        | None -> loop ()
+        | Some (to_erase, _) ->
+          Log.info (fun f -> f "block recycler: should erase %s clusters" (Cluster.to_string @@ Cluster.IntervalSet.cardinal to_erase));
+          Qcow_cluster_map.with_roots cluster_map to_erase
+            (fun () ->
+              erase t to_erase
+              >>= function
+              | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
+              | Error `Disconnected -> Lwt.fail_with "Disconnected"
+              | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
+              | Ok () ->
+                Log.info (fun f -> f "block recycler: finished erasing");
+                Qcow_cluster_map.Junk.remove cluster_map to_erase;
+                Qcow_cluster_map.Erased.add cluster_map to_erase;
+                Lwt.return_unit
+            )
+          >>= fun () ->
           loop ()
         end
       | `Junk nr_junk ->
