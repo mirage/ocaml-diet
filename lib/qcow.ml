@@ -769,23 +769,34 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                   | None ->
                     (* FIXME: we can almost certainly jump more than this *)
                     Lwt.return (Ok sectors_per_cluster)
-                  | Some (cluster, within) ->
+                  | Some (cluster, _) ->
                     Metadata.update ?client t.metadata cluster
                       (fun c ->
                         let addresses = Metadata.Physical.of_contents c in
-                        let data_offset = Metadata.Physical.get addresses within in
-                        if Physical.to_bytes data_offset = 0
-                        then Lwt.return (Ok sectors_per_cluster)
-                        else begin
-                          (* The data at [data_offset] is about to become an unreferenced
-                          hole in the file *)
-                          t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
-                          let data_cluster = Physical.cluster ~cluster_bits:t.cluster_bits data_offset in
-                          Metadata.Physical.set addresses within Physical.unmapped;
-                          Refcount.decr t data_cluster
-                          >>= fun () ->
-                          Lwt.return (Ok sectors_per_cluster)
-                        end
+                        (* With the cluster write lock held, complete as many
+                           writes to it as we need, unlocking and writing it out
+                           once at the end. *)
+                        let rec inner acc sector n =
+                          if n = 0L then Lwt.return (Ok acc) else begin
+                            get_l2 sector
+                            >>= function
+                            | None -> Lwt.return (Ok acc)
+                            | Some (cluster', _) when cluster <> cluster' -> Lwt.return (Ok acc)
+                            | Some (_, within) ->
+                              let data_offset = Metadata.Physical.get addresses within in
+                              if Physical.to_bytes data_offset = 0
+                              then inner (Int64.add acc sectors_per_cluster) (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
+                              else begin
+                                (* The data at [data_offset] is about to become an unreferenced
+                                hole in the file *)
+                                Metadata.Physical.set addresses within Physical.unmapped;
+                                t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
+                                Refcount.decr t (Physical.cluster ~cluster_bits:t.cluster_bits data_offset)
+                                >>= fun () ->
+                                inner (Int64.add acc sectors_per_cluster) (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
+                              end
+                          end in
+                        inner 0L sector n
                       )
                 ) >>= fun to_advance ->
                 loop (Int64.add sector to_advance) (Int64.sub n to_advance)
