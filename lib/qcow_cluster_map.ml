@@ -181,8 +181,8 @@ module Debug = struct
       (* These must be disjoint *)
       if sharing then begin
         check @@ cross
-          [ junk; copies; erased; available; refs; moves ]
-          [ junk; copies; erased; available; refs; moves ];
+          [ junk; copies; erased; available; refs ]
+          [ junk; copies; erased; available; refs ];
         check @@ cross
           [ cached ]
           [ junk; erased; available ]
@@ -304,8 +304,8 @@ let set_move_state t move state =
     let dst' = Cluster.IntervalSet.(add (Interval.make dst dst) empty) in
     (* We always move into junk blocks *)
     Junk.remove t dst';
-    Copies.add t dst';
-    t.moves <- Cluster.Map.add move.Move.src m t.moves
+    t.moves <- Cluster.Map.add move.Move.src m t.moves;
+    Copies.add t dst'
   | Some Copied, Flushed ->
     t.moves <- Cluster.Map.add move.Move.src m t.moves;
     (* References now need to be rewritten *)
@@ -341,11 +341,11 @@ let complete_move t move =
   if not(Cluster.Map.mem move.Move.src t.moves)
   then Log.warn (fun f -> f "Not completing move state of cluster %s: operation cancelled" (Cluster.to_string move.Move.src))
   else begin
+    t.moves <- Cluster.Map.remove move.Move.src t.moves;
     let dst = Cluster.IntervalSet.(add (Interval.make move.Move.dst move.Move.dst) empty) in
     Copies.remove t dst;
     let src = Cluster.IntervalSet.(add (Interval.make move.Move.src move.Move.src) empty) in
     Junk.add t src;
-    t.moves <- Cluster.Map.remove move.Move.src t.moves
   end
 
 let add t rf cluster =
@@ -358,6 +358,7 @@ let add t rf cluster =
     end;
     t.junk <- Cluster.IntervalSet.(remove (Interval.make cluster cluster) t.junk);
     t.refs <- Cluster.Map.add cluster rf t.refs;
+    t.copies <- Cluster.IntervalSet.(remove (Interval.make cluster cluster) t.copies);
     ()
   end
 
