@@ -751,40 +751,44 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
         Locks.with_metadata_lock t.locks
           (fun () ->
+            let get_l2 sector =
+              let byte = Int64.(mul sector (of_int t.info.Mirage_block.sector_size)) in
+              let a = Virtual.make ~cluster_bits:t.cluster_bits byte in
+              read_l1_table ?client t a.Virtual.l1_index
+              >>= fun l2_offset ->
+              if Physical.to_bytes l2_offset = 0 then Lwt.return (Ok None) else begin
+                let l2_index_offset = Physical.shift l2_offset (8 * (Int64.to_int a.Virtual.l2_index)) in
+                let cluster = Physical.cluster ~cluster_bits:t.cluster_bits l2_index_offset in
+                let within = Physical.within_cluster ~cluster_bits:t.cluster_bits l2_index_offset in
+                Lwt.return (Ok (Some (cluster, within)))
+              end in
             let rec loop sector n =
               if n = 0L then Lwt.return (Ok ()) else begin
-                let byte = Int64.(mul sector (of_int t.info.Mirage_block.sector_size)) in
-                let a = Virtual.make ~cluster_bits:t.cluster_bits byte in
-                read_l1_table ?client t a.Virtual.l1_index
-                >>= fun l2_offset ->
-                if Physical.to_bytes l2_offset = 0 then begin
-                  (* FIXME: we can almost certainly jump more than this *)
-                  loop (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
-                end else begin
-                  let l2_index_offset = Physical.shift l2_offset (8 * (Int64.to_int a.Virtual.l2_index)) in
-                  let cluster = Physical.cluster ~cluster_bits:t.cluster_bits l2_index_offset in
-                  Metadata.update ?client t.metadata cluster
-                    (fun c ->
-                      let addresses = Metadata.Physical.of_contents c in
-                      let within = Physical.within_cluster ~cluster_bits:t.cluster_bits l2_index_offset in
-                      let data_offset = Metadata.Physical.get addresses within in
-                      if Physical.to_bytes data_offset = 0
-                      then Lwt.return (Ok sectors_per_cluster)
-                      else begin
-                        (* The data at [data_offset] is about to become an unreferenced
-                        hole in the file *)
-                        t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
-                        let data_cluster = Physical.cluster ~cluster_bits:t.cluster_bits data_offset in
-                        let within = Physical.within_cluster ~cluster_bits:t.cluster_bits l2_index_offset in
-                        Metadata.Physical.set addresses within Physical.unmapped;
-                        Refcount.decr t data_cluster
-                        >>= fun () ->
-                        Lwt.return (Ok sectors_per_cluster)
-                      end
-                    )
-                  >>= fun to_advance ->
-                  loop (Int64.add sector to_advance) (Int64.sub n to_advance)
-                end
+                ( get_l2 sector
+                  >>= function
+                  | None ->
+                    (* FIXME: we can almost certainly jump more than this *)
+                    Lwt.return (Ok sectors_per_cluster)
+                  | Some (cluster, within) ->
+                    Metadata.update ?client t.metadata cluster
+                      (fun c ->
+                        let addresses = Metadata.Physical.of_contents c in
+                        let data_offset = Metadata.Physical.get addresses within in
+                        if Physical.to_bytes data_offset = 0
+                        then Lwt.return (Ok sectors_per_cluster)
+                        else begin
+                          (* The data at [data_offset] is about to become an unreferenced
+                          hole in the file *)
+                          t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
+                          let data_cluster = Physical.cluster ~cluster_bits:t.cluster_bits data_offset in
+                          Metadata.Physical.set addresses within Physical.unmapped;
+                          Refcount.decr t data_cluster
+                          >>= fun () ->
+                          Lwt.return (Ok sectors_per_cluster)
+                        end
+                      )
+                ) >>= fun to_advance ->
+                loop (Int64.add sector to_advance) (Int64.sub n to_advance)
             end in
           loop sector n
         )
