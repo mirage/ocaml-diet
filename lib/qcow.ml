@@ -761,8 +761,13 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                   (* FIXME: we can almost certainly jump more than this *)
                   loop (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
                 end else begin
-                  read_l2_table ?client t l2_offset a.Virtual.l2_index
-                  >>= fun (data_offset, l2_lock) ->
+                  let l2_index_offset = Physical.shift l2_offset (8 * (Int64.to_int a.Virtual.l2_index)) in
+                  let cluster = Physical.cluster ~cluster_bits:t.cluster_bits l2_index_offset in
+                  Metadata.read_and_lock ?client t.metadata cluster
+                  >>= fun (c, l2_lock) ->
+                  let addresses = Metadata.Physical.of_contents c in
+                  let within = Physical.within_cluster ~cluster_bits:t.cluster_bits l2_index_offset in
+                  let data_offset = Metadata.Physical.get addresses within in
                   if Physical.to_bytes data_offset = 0 then begin
                     Locks.unlock l2_lock;
                     loop (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
@@ -774,8 +779,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                         let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
                         t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
                         let data_cluster = Physical.cluster ~cluster_bits:t.cluster_bits data_offset in
-                        let l2_index_offset = Physical.shift l2_offset (8 * (Int64.to_int a.Virtual.l2_index)) in
-                        let cluster = Physical.cluster ~cluster_bits:t.cluster_bits l2_index_offset in
                         Metadata.update ?client t.metadata cluster
                           (fun c ->
                             let addresses = Metadata.Physical.of_contents c in
