@@ -33,6 +33,12 @@ type move_state =
   | Flushed
   | Referenced
 
+let string_of_move_state = function
+  | Copying    -> "Copying"
+  | Copied     -> "Copied"
+  | Flushed    -> "Flushed"
+  | Referenced -> "Referenced"
+
 module Move = struct
   type t = { src: Cluster.t; dst: Cluster.t }
 
@@ -46,11 +52,7 @@ type move = {
 }
 
 let string_of_move m =
-  let state = match m.state with
-    | Copying    -> "Copying"
-    | Copied     -> "Copied"
-    | Flushed    -> "Flushed"
-    | Referenced -> "Referenced" in
+  let state = string_of_move_state m.state in
   Printf.sprintf "%s %s"
     (Move.to_string m.move)
     state
@@ -304,13 +306,17 @@ let set_move_state t move state =
     let dst' = Cluster.IntervalSet.(add (Interval.make dst dst) empty) in
     (* We always move into junk blocks *)
     Junk.remove t dst';
+    Log.debug (fun f -> f "Cluster %s None -> Copying" (Cluster.to_string move.Move.src));
     t.moves <- Cluster.Map.add move.Move.src m t.moves;
     Copies.add t dst'
   | Some Copied, Flushed ->
+    Log.debug (fun f -> f "Cluster %s Copied -> Flushed" (Cluster.to_string move.Move.src));
     t.moves <- Cluster.Map.add move.Move.src m t.moves;
     (* References now need to be rewritten *)
     Lwt_condition.signal t.c ();
-  | Some _, _ ->
+  | Some old, _ ->
+    Log.debug (fun f -> f "Cluster %s %s -> %s" (Cluster.to_string move.Move.src)
+      (string_of_move_state old) (string_of_move_state state));
     t.moves <- Cluster.Map.add move.Move.src m t.moves
   | None, _ ->
     Log.warn (fun f -> f "Not updating move state of cluster %s: operation cancelled" (Cluster.to_string move.Move.src))
@@ -326,7 +332,7 @@ let cancel_move t cluster =
            as if the write wasn't committed which is valid
          The only reason we still track this move is because when the next flush
          happens it is safe to add the src cluster to the set of junk blocks. *)
-      Log.info (fun f -> f "Not cancelling in-progress move of cluter %s: already Referenced" (Cluster.to_string cluster))
+      Log.info (fun f -> f "Not cancelling in-progress move of cluster %s: already Referenced" (Cluster.to_string cluster))
     | { move = { Move.dst; _ }; _ } ->
       Log.debug (fun f -> f "Cancelling in-progress move of cluster %s to %s" (Cluster.to_string cluster) (Cluster.to_string dst));
       t.moves <- Cluster.Map.remove cluster t.moves;
