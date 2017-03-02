@@ -1387,6 +1387,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     } in
     Lwt_error.or_fail_with @@ make_cluster_map t'
     >>= fun cluster_map ->
+    if config.Config.runtime_asserts
+    then Qcow_cluster_map.Debug.assert_equal cluster_map cluster_map;
     (* An opened file may have junk at the end, which means that we would simultaneously
        allocate from it (get_last_block + n) as well as erase and recycle it.
        We should trim the file now so that it is safe to allocate from it as normal.
