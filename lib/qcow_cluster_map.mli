@@ -142,9 +142,9 @@ val is_immovable: t -> Cluster.t -> bool
     i.e. it is before the first_movable_cluster i.e. it is part of the fixed
     (L1) header structure. *)
 
-val apply_moves: t -> Move.t list -> unit
-(** [apply_moves t moves] updates the reference table following the given set
-    of completed moves. Any reference to a source block must be updated to the
+val update_references: t -> Cluster.t Cluster.Map.t -> unit
+(** [update_references t subst] updates the reference table following the given set
+    of substitutions. Any reference to a source block must be updated to the
     destination block otherwise it will be left pointing to junk. Normally this
     is guaranteed by the Metadata.Physical.set function, but when compacting we
     split the operation into phases and copy the block first at the byte level,

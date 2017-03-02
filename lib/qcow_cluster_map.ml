@@ -411,10 +411,7 @@ let get_moves t =
 
 let is_immovable t cluster = cluster < t.first_movable_cluster
 
-let apply_moves t moves =
-  let substitutions = List.fold_left (fun acc { Move.src; dst } ->
-    Cluster.Map.add src dst acc
-  ) Cluster.Map.empty moves in
+let update_references t substitutions =
   let refs = Cluster.Map.fold (fun to_c (from_c, from_w) acc ->
     (* Has the cluster [from_c] been moved? *)
     let from_c' = try Cluster.Map.find from_c substitutions with Not_found -> from_c in

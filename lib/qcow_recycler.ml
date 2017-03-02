@@ -201,9 +201,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let client = Locks.Client.make
       (fun () -> "Rewriting references after a block copy") in
     Lwt_list.fold_left_s
-      (fun acc (ref_cluster, moves) -> match acc with
+      (fun acc (ref_cluster', moves) -> match acc with
         | Error e -> Lwt.return (Error e)
-        | Ok () ->
+        | Ok subst ->
+          let ref_cluster = try Cluster.Map.find ref_cluster' subst with Not_found -> ref_cluster' in
           begin match Locks.Write.try_lock ~client t.locks ref_cluster with
           | None ->
             List.iter (fun ({ move = { Move.src; dst }; _ }) ->
@@ -213,31 +214,32 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               );
               cancel_move cluster_map src
             ) moves;
-            Lwt.return (Ok ())
+            Lwt.return (Ok subst)
           | Some lock ->
             Lwt.finalize
               (fun () ->
                 Metadata.update ~client t.metadata ref_cluster
                   (fun c ->
+                    Log.debug (fun f -> f "Updating references in cluster %s" (Cluster.to_string ref_cluster));
                     let addresses = Metadata.Physical.of_contents c in
                     let result = List.fold_left
                       (fun acc ({ move = { Move.src; dst }; _ } as move) -> match acc with
                         | Error e -> Error e
-                        | Ok () ->
+                        | Ok subst ->
                           begin match Qcow_cluster_map.find cluster_map src with
                           | exception Not_found ->
                             (* Block was probably discarded after we started running. *)
                             Log.warn (fun f -> f "Not copying cluster %s to %s: %s has been discarded"
                               (Cluster.to_string src) (Cluster.to_string dst) (Cluster.to_string src)
                             );
-                            Ok ()
+                            Ok subst
                           | ref_cluster, ref_cluster_within ->
                             if not(Cluster.Map.mem src (Qcow_cluster_map.moves cluster_map)) then begin
                               Log.debug (fun f -> f "Not rewriting reference in %s :%d from %s to %s: move as been cancelled"
                                 (Cluster.to_string ref_cluster) ref_cluster_within
                                 (Cluster.to_string src) (Cluster.to_string dst)
                               );
-                              Ok ()
+                              Ok subst
                             end else begin
                               (* Read the current value in the referencing cluster as a sanity check *)
                               let old_reference = Metadata.Physical.get addresses ref_cluster_within in
@@ -255,20 +257,20 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                                 (Cluster.to_string src) (Cluster.to_string dst)
                               );
                               (* Preserve any flags but update the pointer *)
-                              let dst = Cluster.to_int dst lsl t.cluster_bits in
-                              let new_reference = Qcow_physical.make ~is_mutable:(Qcow_physical.is_mutable old_reference) ~is_compressed:(Qcow_physical.is_compressed old_reference) dst in
+                              let dst' = Cluster.to_int dst lsl t.cluster_bits in
+                              let new_reference = Qcow_physical.make ~is_mutable:(Qcow_physical.is_mutable old_reference) ~is_compressed:(Qcow_physical.is_compressed old_reference) dst' in
                               Metadata.Physical.set addresses ref_cluster_within new_reference;
                               nr_updated := Int64.succ !nr_updated;
                               set_move_state cluster_map move.move Referenced;
                               (* The move cannot be cancelled now that the metadata has
                                  been updated. *)
-                              Ok ()
+                              Ok (Cluster.Map.add src dst subst)
                             end
                           end
-                      ) (Ok ()) moves in
+                      ) (Ok subst) moves in
                     match result with
                     | Error e -> Lwt.return (Error e)
-                    | Ok () ->
+                    | Ok subst ->
                       (* If `ref_cluster` is an L1 table entry then `src` must be an
                          L2 block, and the values in `cluster_map.refs` will point to it.
                          These need to be redirected to `dst` otherwise the `cluster_map`
@@ -276,18 +278,18 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                          `Metadata.Physical.set` function in the block copier. *)
                       if Qcow_cluster_map.is_immovable cluster_map ref_cluster then begin
                         Log.info (fun f -> f "Cluster %s is L1: we must remap L2 references" (Cluster.to_string ref_cluster));
-                        Qcow_cluster_map.apply_moves cluster_map (List.map (fun m -> m.Qcow_cluster_map.move) moves)
+                        Qcow_cluster_map.update_references cluster_map subst
                       end;
-                      Lwt.return (Ok ())
+                      Lwt.return (Ok subst)
                   )
               ) (fun () ->
                 Locks.unlock lock;
                 Lwt.return_unit
               )
           end
-        ) (Ok ()) flushed
+        ) (Ok Cluster.Map.empty) flushed
     >>= function
-    | Ok () ->
+    | Ok _subst ->
       t.need_to_flush <- true;
       Lwt_condition.signal t.need_to_flush_c ();
       Lwt.return (Ok !nr_updated)
