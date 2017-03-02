@@ -220,9 +220,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 Metadata.update ~client t.metadata ref_cluster
                   (fun c ->
                     let addresses = Metadata.Physical.of_contents c in
-                    Lwt_list.fold_left_s
+                    let result = List.fold_left
                       (fun acc ({ move = { Move.src; dst }; _ } as move) -> match acc with
-                        | Error e -> Lwt.return (Error e)
+                        | Error e -> Error e
                         | Ok () ->
                           begin match Qcow_cluster_map.find cluster_map src with
                           | exception Not_found ->
@@ -230,14 +230,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                             Log.warn (fun f -> f "Not copying cluster %s to %s: %s has been discarded"
                               (Cluster.to_string src) (Cluster.to_string dst) (Cluster.to_string src)
                             );
-                            Lwt.return (Ok ())
+                            Ok ()
                           | ref_cluster, ref_cluster_within ->
                             if not(Cluster.Map.mem src (Qcow_cluster_map.moves cluster_map)) then begin
                               Log.debug (fun f -> f "Not rewriting reference in %s :%d from %s to %s: move as been cancelled"
                                 (Cluster.to_string ref_cluster) ref_cluster_within
                                 (Cluster.to_string src) (Cluster.to_string dst)
                               );
-                              Lwt.return (Ok ())
+                              Ok ()
                             end else begin
                               (* Read the current value in the referencing cluster as a sanity check *)
                               let old_reference = Metadata.Physical.get addresses ref_cluster_within in
@@ -262,10 +262,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                               set_move_state cluster_map move.move Referenced;
                               (* The move cannot be cancelled now that the metadata has
                                  been updated. *)
-                              Lwt.return (Ok ())
+                              Ok ()
                             end
                           end
-                      ) (Ok ()) moves
+                      ) (Ok ()) moves in
+                    Lwt.return result
                   )
               ) (fun () ->
                 Locks.unlock lock;
