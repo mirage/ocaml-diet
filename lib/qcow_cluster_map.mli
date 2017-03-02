@@ -156,4 +156,7 @@ val to_summary_string: t -> string
 module Debug: sig
   val assert_no_leaked_blocks: t -> unit
   (** Check no blocks have gone missing *)
+
+  val assert_equal: t -> t -> unit
+  (** Check that 2 maps have equivalent contents *)
 end
