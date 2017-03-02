@@ -195,26 +195,6 @@ module Debug = struct
     let assert_no_leaked_blocks t = check t
 
   let assert_equal a b =
-    (* symmetric difference *)
-    let set_equals name a b =
-      let not_in_b = Cluster.IntervalSet.(diff a b) in
-      let not_in_a = Cluster.IntervalSet.(diff b a) in
-      if not(Cluster.IntervalSet.is_empty not_in_b) then begin
-        Log.err (fun f -> f "%s in a but not in b: %s" name
-          (Sexplib.Sexp.to_string_hum (Cluster.IntervalSet.sexp_of_t not_in_b))
-        );
-        false
-      end else if not(Cluster.IntervalSet.is_empty not_in_a) then begin
-        Log.err (fun f -> f "%s in a but not in a: %s" name
-          (Sexplib.Sexp.to_string_hum (Cluster.IntervalSet.sexp_of_t not_in_a))
-        );
-        false
-      end else true in
-    let junk = set_equals "junk" a.junk b.junk in
-    let erased = set_equals "erased"  a.erased b.erased in
-    let available = set_equals "available" a.available b.available in
-    let roots = set_equals "roots" a.roots b.roots in
-    let copies = set_equals "copies" a.copies b.copies in
     let map_equals name pp a b =
       Cluster.Map.fold (fun k v acc ->
         let v' = try Some (Cluster.Map.find k b) with Not_found -> None in
@@ -234,7 +214,7 @@ module Debug = struct
         );
         false
       end else true in
-    if not(junk && erased && available && roots && copies && moves && refs && first_movable_cluster) then begin
+    if not(moves && refs && first_movable_cluster) then begin
       failwith "cluster maps are different"
     end
 

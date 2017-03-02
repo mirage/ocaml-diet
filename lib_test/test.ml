@@ -257,6 +257,8 @@ let write_discard_read_native sector_size size_sectors (start, length) () =
       if Cstruct.get_uint8 buf' i <> 0 then failwith "I did not Read Zero After TRIM"
     done;
     let open Lwt.Infix in
+    Writer.Debug.assert_cluster_map_in_sync b
+    >>= fun () ->
     Writer.disconnect b
     >>= fun () ->
     RawWriter.disconnect raw
@@ -561,6 +563,8 @@ let create_write_discard_all_compact clusters () =
     B.compact qcow ()
     >>= fun _report ->
     let open Lwt.Infix in
+    B.Debug.assert_cluster_map_in_sync qcow
+    >>= fun () ->
     B.disconnect qcow
     >>= fun () ->
     Block.disconnect block
@@ -688,6 +692,8 @@ let create_write_discard_compact () =
         check_contents data idx;
         Lwt.return_unit
       ) second
+    >>= fun () ->
+    B.Debug.assert_cluster_map_in_sync qcow
     >>= fun () ->
     B.disconnect qcow
     >>= fun () ->
