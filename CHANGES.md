@@ -1,3 +1,8 @@
+## 0.9.3 (2017-03-02)
+- Hold a read lock on the L1 during read/write
+- Minimise locking while updating references
+- When moving an L2 cluster, update the cluster map
+
 ## 0.9.2 (2017-02-26)
 - Don't hold the global lock while updating references
 - Log an error if a client I/O takes more than 30s
