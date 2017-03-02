@@ -266,7 +266,19 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                             end
                           end
                       ) (Ok ()) moves in
-                    Lwt.return result
+                    match result with
+                    | Error e -> Lwt.return (Error e)
+                    | Ok () ->
+                      (* If `ref_cluster` is an L1 table entry then `src` must be an
+                         L2 block, and the values in `cluster_map.refs` will point to it.
+                         These need to be redirected to `dst` otherwise the `cluster_map`
+                         will be out-of-sync. This only happens because we bypass the
+                         `Metadata.Physical.set` function in the block copier. *)
+                      if Qcow_cluster_map.is_immovable cluster_map ref_cluster then begin
+                        Log.info (fun f -> f "Cluster %s is L1: we must remap L2 references" (Cluster.to_string ref_cluster));
+                        Qcow_cluster_map.apply_moves cluster_map (List.map (fun m -> m.Qcow_cluster_map.move) moves)
+                      end;
+                      Lwt.return (Ok ())
                   )
               ) (fun () ->
                 Locks.unlock lock;

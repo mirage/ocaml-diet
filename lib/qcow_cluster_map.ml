@@ -408,3 +408,22 @@ let get_moves t =
         end
       end
     ) t.junk ([], max_cluster)
+
+let is_immovable t cluster = cluster < t.first_movable_cluster
+
+let apply_moves t moves =
+  let substitutions = List.fold_left (fun acc { Move.src; dst } ->
+    Cluster.Map.add src dst acc
+  ) Cluster.Map.empty moves in
+  let refs = Cluster.Map.fold (fun to_c (from_c, from_w) acc ->
+    (* Has the cluster [from_c] been moved? *)
+    let from_c' = try Cluster.Map.find from_c substitutions with Not_found -> from_c in
+    if from_c <> from_c' then begin
+      Log.debug (fun f -> f "Updating reference %s:%d -> %s to %s:%d -> %s"
+        (Cluster.to_string from_c) from_w (Cluster.to_string to_c)
+        (Cluster.to_string from_c') from_w (Cluster.to_string to_c)
+      );
+    end;
+    Cluster.Map.add to_c (from_c', from_w) acc
+  ) t.refs Cluster.Map.empty in
+  t.refs <- refs

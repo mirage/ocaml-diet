@@ -137,6 +137,19 @@ val get_last_block: t -> Cluster.t
     data blocks this will point to the last header block even though it is
     immovable. *)
 
+val is_immovable: t -> Cluster.t -> bool
+(** [is_immovable t cluster] is true if [cluster] is fixed and cannot be moved
+    i.e. it is before the first_movable_cluster i.e. it is part of the fixed
+    (L1) header structure. *)
+
+val apply_moves: t -> Move.t list -> unit
+(** [apply_moves t moves] updates the reference table following the given set
+    of completed moves. Any reference to a source block must be updated to the
+    destination block otherwise it will be left pointing to junk. Normally this
+    is guaranteed by the Metadata.Physical.set function, but when compacting we
+    split the operation into phases and copy the block first at the byte level,
+    leaving the map out-of-sync *)
+
 val to_summary_string: t -> string
 (** [to_summary_string t] returns a terse printable summary of [t] *)
 
