@@ -75,6 +75,8 @@ module type DEBUG = sig
 
   val assert_no_leaked_blocks: t -> unit
 
+  val assert_cluster_map_in_sync: t -> unit Lwt.t
+
   module Setting: sig
     val compact_mid_write: bool ref
   end

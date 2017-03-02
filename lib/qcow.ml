@@ -875,7 +875,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let max_possible_cluster = Cluster.of_int64 ((Int64.round_up t.h.Header.size cluster_size) |> t.cluster_bits) in
     let free = Qcow_bitmap.make_full
       ~initial_size:(Cluster.to_int max_cluster)
-      ~maximum_size:(Cluster.to_int max_possible_cluster * 10) in
+      ~maximum_size:(Cluster.to_int max_possible_cluster * 50) in
     (* The header structures are untracked by the qcow_cluster_map and we assume
        they don't move and we don't try to move them. We assume the structures
        have no holes in them, otherwise we would miscompute the `first_movable_cluster`
@@ -1818,6 +1818,13 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let assert_no_leaked_blocks t =
       Qcow_cluster_map.Debug.assert_no_leaked_blocks t.cluster_map
+
+    let assert_cluster_map_in_sync t =
+      let open Lwt.Infix in
+      Lwt_error.or_fail_with @@ make_cluster_map t
+      >>= fun cluster_map ->
+      Qcow_cluster_map.Debug.assert_equal cluster_map t.cluster_map;
+      Lwt.return_unit
 
     module Setting = DebugSetting
   end
