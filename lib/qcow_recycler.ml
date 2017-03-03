@@ -31,7 +31,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     mutable background_thread: unit Lwt.t;
     mutable need_to_flush: bool;
     need_to_flush_c: unit Lwt_condition.t;
-    m: Lwt_mutex.t;
+    flush_m: Lwt_mutex.t;
     runtime_asserts: bool;
   }
 
@@ -39,13 +39,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let zero_buffer = Io_page.(to_cstruct @@ get 256) in (* 1 MiB *)
     Cstruct.memset zero_buffer 0;
     let background_thread = Lwt.return_unit in
-    let m = Lwt_mutex.create () in
+    let flush_m = Lwt_mutex.create () in
     let cluster_map = None in
     let need_to_flush = false in
     let need_to_flush_c = Lwt_condition.create () in
     { base; sector_size; cluster_bits; cluster_map; cache; locks; metadata;
       zero_buffer; background_thread; need_to_flush; need_to_flush_c;
-      m; runtime_asserts; }
+      flush_m; runtime_asserts; }
 
   let set_cluster_map t cluster_map = t.cluster_map <- Some cluster_map
 
@@ -301,38 +301,43 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | None -> assert false (* by construction, see `make` *)
       | Some x -> x in
     let open Lwt.Infix in
-    (* Anything erased right now will become available *)
-    let erased = Qcow_cluster_map.Erased.get cluster_map in
-    let moves = Qcow_cluster_map.moves cluster_map in
-    B.flush t.base
-    >>= function
-    | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-    | Error `Disconnected -> Lwt.return (Error `Disconnected)
-    | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-    | Ok () ->
-      (* Walk over the snapshot of moves before the flush and update. This
-         ensures we don't accidentally advance the state of moves which appeared
-         after the flush. *)
-      let nr_flushed, nr_completed = Cluster.Map.fold (fun _ (move: move) (nr_flushed, nr_completed) ->
-        match move.state with
-        | Copying | Flushed -> (* no change *)
-          nr_flushed, nr_completed
-        | Copied ->
-          Qcow_cluster_map.(set_move_state cluster_map move.move Flushed);
-          nr_flushed + 1, nr_completed
-        | Referenced ->
-          Qcow_cluster_map.complete_move cluster_map move.move;
-          nr_flushed, nr_completed + 1
-        ) moves (0, 0) in
-      let nr_erased = Cluster.to_int @@ Cluster.IntervalSet.cardinal erased in
-      if nr_flushed <> 0 || nr_completed <> 0 || nr_erased <> 0 then begin
-        Log.info (fun f -> f "block recycler: %d cluster copies flushed; %d cluster copies complete; %d clusters erased"
-          nr_flushed nr_completed nr_erased);
-        Log.info (fun f -> f "block recycler: flush: %s" (Qcow_cluster_map.to_summary_string cluster_map));
-      end;
-      Qcow_cluster_map.Erased.remove cluster_map erased;
-      Qcow_cluster_map.Available.add cluster_map erased;
-      Lwt.return (Ok ())
+    (* This can be called concurrently by both the user and by the background
+       flusher thread. *)
+    Lwt_mutex.with_lock t.flush_m
+      (fun () ->
+        (* Anything erased right now will become available *)
+        let erased = Qcow_cluster_map.Erased.get cluster_map in
+        let moves = Qcow_cluster_map.moves cluster_map in
+        B.flush t.base
+        >>= function
+        | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+        | Error `Disconnected -> Lwt.return (Error `Disconnected)
+        | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+        | Ok () ->
+          (* Walk over the snapshot of moves before the flush and update. This
+             ensures we don't accidentally advance the state of moves which appeared
+             after the flush. *)
+          let nr_flushed, nr_completed = Cluster.Map.fold (fun _ (move: move) (nr_flushed, nr_completed) ->
+            match move.state with
+            | Copying | Flushed -> (* no change *)
+              nr_flushed, nr_completed
+            | Copied ->
+              Qcow_cluster_map.(set_move_state cluster_map move.move Flushed);
+              nr_flushed + 1, nr_completed
+            | Referenced ->
+              Qcow_cluster_map.complete_move cluster_map move.move;
+              nr_flushed, nr_completed + 1
+            ) moves (0, 0) in
+          let nr_erased = Cluster.to_int @@ Cluster.IntervalSet.cardinal erased in
+          if nr_flushed <> 0 || nr_completed <> 0 || nr_erased <> 0 then begin
+            Log.info (fun f -> f "block recycler: %d cluster copies flushed; %d cluster copies complete; %d clusters erased"
+              nr_flushed nr_completed nr_erased);
+            Log.info (fun f -> f "block recycler: flush: %s" (Qcow_cluster_map.to_summary_string cluster_map));
+          end;
+          Qcow_cluster_map.Erased.remove cluster_map erased;
+          Qcow_cluster_map.Available.add cluster_map erased;
+          Lwt.return (Ok ())
+      )
 
   let start_background_thread t ~keep_erased ?compact_after_unmaps () =
     let th, _ = Lwt.task () in
