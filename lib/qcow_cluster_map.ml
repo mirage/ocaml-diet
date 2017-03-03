@@ -425,9 +425,20 @@ let remove t cluster =
   Lwt_condition.signal t.c ()
 
 let with_roots t clusters f =
-  t.roots <- Cluster.IntervalSet.union clusters t.roots;
+  let open Cluster.IntervalSet in
+  let intersection = inter clusters t.roots in
+  if not @@ is_empty @@ intersection then begin
+    Log.err (fun f -> f "Clusters are already registered as roots: %s"
+      (Sexplib.Sexp.to_string @@ sexp_of_t clusters)
+    );
+    Log.err (fun f -> f "Intersection: %s"
+      (Sexplib.Sexp.to_string @@ sexp_of_t intersection)
+    );
+    assert false;
+  end;
+  t.roots <- union clusters t.roots;
   Lwt.finalize f (fun () ->
-    t.roots <- Cluster.IntervalSet.diff t.roots clusters;
+    t.roots <- diff t.roots clusters;
     Lwt_condition.signal t.c ();
     Lwt.return_unit
   )
