@@ -104,6 +104,10 @@ module Available: MutableSet
 module Copies: MutableSet
 (** Clusters which contain copies, as part of a compact *)
 
+module Roots: MutableSet
+(** Clusters which have been allocated but not yet placed somewhere reachable
+    from the GC *)
+
 val wait: t -> unit Lwt.t
 (** [wait t] wait for some amount of recycling work to become available, e.g.
     - junk could be created

@@ -255,7 +255,13 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       match Recycler.allocate t.recycler (Cluster.of_int n) with
       | Some set ->
         Log.debug (fun f -> f "Allocated %d clusters from free list" n);
-        f set
+        Lwt.finalize
+          (fun () ->
+            f set
+          ) (fun () ->
+            Qcow_cluster_map.Roots.remove t.cluster_map set;
+            Lwt.return_unit
+          )
       | None ->
         let cluster = Cluster.succ last_block in
         let free = Cluster.IntervalSet.(Interval.make cluster Cluster.(add cluster (pred (of_int n)))) in

@@ -314,6 +314,28 @@ module Copies = struct
     Lwt_condition.signal t.c ()
 end
 
+module Roots = struct
+  let get t = t.roots
+  let add t more =
+    let open Cluster.IntervalSet in
+    Log.debug (fun f -> f "Roots.add %s" (Sexplib.Sexp.to_string (sexp_of_t more)));
+    let intersection = inter more t.roots in
+    if not @@ is_empty @@ intersection then begin
+      Log.err (fun f -> f "Clusters are already registered as roots: %s"
+        (Sexplib.Sexp.to_string @@ sexp_of_t more)
+      );
+      Log.err (fun f -> f "Intersection: %s"
+        (Sexplib.Sexp.to_string @@ sexp_of_t intersection)
+      );
+      assert false;
+    end;
+    t.roots <- union t.roots more;
+    if t.runtime_asserts then Debug.check ~leaks:false t;
+    Lwt_condition.signal t.c ()
+  let remove t less =
+    t.roots <- Cluster.IntervalSet.diff t.roots less;
+    Lwt_condition.signal t.c ()
+end
 
 let wait t = Lwt_condition.wait t.c
 
@@ -425,21 +447,9 @@ let remove t cluster =
   Lwt_condition.signal t.c ()
 
 let with_roots t clusters f =
-  let open Cluster.IntervalSet in
-  let intersection = inter clusters t.roots in
-  if not @@ is_empty @@ intersection then begin
-    Log.err (fun f -> f "Clusters are already registered as roots: %s"
-      (Sexplib.Sexp.to_string @@ sexp_of_t clusters)
-    );
-    Log.err (fun f -> f "Intersection: %s"
-      (Sexplib.Sexp.to_string @@ sexp_of_t intersection)
-    );
-    assert false;
-  end;
-  t.roots <- union clusters t.roots;
+  Roots.add t clusters;
   Lwt.finalize f (fun () ->
-    t.roots <- diff t.roots clusters;
-    Lwt_condition.signal t.c ();
+    Roots.remove t clusters;
     Lwt.return_unit
   )
 

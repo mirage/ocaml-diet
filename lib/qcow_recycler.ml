@@ -57,6 +57,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     | Some (set, _free) ->
       Log.debug (fun f -> f "Allocated %s clusters from free list" (Cluster.to_string n));
       Qcow_cluster_map.Available.remove cluster_map set;
+      Qcow_cluster_map.Roots.add cluster_map set;
       Some set
     | None ->
       None
