@@ -235,20 +235,20 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let quantum = 512 in (* 32 MiB *)
 
       let max_cluster_needed = Cluster.to_int last_block + n in
-      let max_cluster = Int64.to_int size_sectors / sectors_per_cluster in
-      let max_cluster_should_be =
-        if max_cluster - max_cluster_needed < limit
-        then max_cluster + quantum
-        else max_cluster in (* keep it the same *)
-      ( if max_cluster_should_be <> max_cluster then begin
+      let len_cluster = Int64.to_int size_sectors / sectors_per_cluster in
+      let len_cluster_should_be =
+        if len_cluster - max_cluster_needed < limit
+        then len_cluster + quantum
+        else len_cluster in (* keep it the same *)
+      ( if len_cluster_should_be <> len_cluster then begin
           Log.info (fun f -> f "Allocator: %s" (Qcow_cluster_map.to_summary_string t.cluster_map));
-          Log.info (fun f -> f "Allocator: max_cluster = %d but should be %d, enlarging file" max_cluster max_cluster_should_be);
+          Log.info (fun f -> f "Allocator: file contains cluster 0 .. %d will enlarge file to 0 .. %d" (len_cluster - 1) (len_cluster_should_be - 1));
           (* Resync the file size only *)
-          let p = Physical.make (max_cluster_should_be lsl t.cluster_bits) in
+          let p = Physical.make (len_cluster_should_be lsl t.cluster_bits) in
           let size_sectors = Physical.sector ~sector_size:t.sector_size p in
           resize_base t.base t.sector_size (Some(t.cluster_map, t.cluster_bits)) p
           >>= fun () ->
-          Log.debug (fun f -> f "Resized file to %d clusters (%Ld sectors)" max_cluster_should_be size_sectors);
+          Log.debug (fun f -> f "Resized file to %d clusters (%Ld sectors)" len_cluster_should_be size_sectors);
           Lwt.return (Ok ())
         end else Lwt.return (Ok ()) ) >>= fun () ->
       (* Take them from the free list if they are available *)
