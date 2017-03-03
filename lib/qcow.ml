@@ -1047,6 +1047,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
                   let moves = get_moves map in
                   let open Lwt_write_error.Infix in
+                  Recycler.start_moves t.recycler moves;
                   Recycler.move_all t.recycler moves
                   >>= fun () ->
                   (* Flush now so that if we crash after updating some of the references, the

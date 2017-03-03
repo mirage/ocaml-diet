@@ -43,6 +43,10 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S): sig
   val copy: t -> Cluster.t -> Cluster.t -> (unit, B.write_error) result Lwt.t
   (** [copy src dst] copies the cluster [src] to [dst] *)
 
+  val start_moves: t -> Qcow_cluster_map.Move.t list -> unit
+  (** [start_moves t moves] marks the [moves] as being started. This must be called
+      before [move_all] *)
+
   val move_all: t -> Qcow_cluster_map.Move.t list -> (unit, Qcow_metadata.write_error) result Lwt.t
   (** [move_all t mv] perform the initial data copy of the move operations [mv] *)
 

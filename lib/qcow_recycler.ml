@@ -106,7 +106,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let cluster_map = match t.cluster_map with
       | Some x -> x
       | None -> assert false in
-    Qcow_cluster_map.(set_move_state cluster_map move Copying);
     let src, dst = Qcow_cluster_map.Move.(move.src, move.dst) in
     Log.debug (fun f -> f "move %s -> %s" (Cluster.to_string src) (Cluster.to_string dst));
     let open Lwt.Infix in
@@ -135,6 +134,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () -> move_all t ms
+
+  let start_moves t moves =
+    (* Set the move_state (... and remove destination clusters from the junk
+       set so they aren't immediately erased) *)
+    let cluster_map = match t.cluster_map with
+      | Some x -> x
+      | None -> assert false in
+    List.iter (fun move -> Qcow_cluster_map.(set_move_state cluster_map move Copying)) moves
 
   let erase t remaining =
     let open Lwt.Infix in
@@ -487,10 +494,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         end
       | `Junk nr_junk ->
         if t.runtime_asserts then Qcow_cluster_map.Debug.assert_no_leaked_blocks cluster_map;
-        let moves = Qcow_cluster_map.get_moves cluster_map in
         (* There must be no moves already in progress when starting new moves, otherwise
            we might move the same block twice maybe even to a different location. *)
         assert(Cluster.Map.is_empty @@ Qcow_cluster_map.moves cluster_map);
+        let moves = Qcow_cluster_map.get_moves cluster_map in
+        (* Set the initial move state and remove from Junk to prevent concurrent
+           erasure. *)
+        start_moves t moves;
         (* Add the destination clusters to the roots to prevent them being lost *)
         let dst = List.fold_left (fun set { Qcow_cluster_map.Move.dst; _ } ->
           Cluster.IntervalSet.(add (Interval.make dst dst) set)
