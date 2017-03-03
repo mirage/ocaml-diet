@@ -390,34 +390,40 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           else Some (`Erase n)
         end else None in
       (* If we need to update references, do that next *)
+      let moves = Qcow_cluster_map.moves cluster_map in
       let middle_priority =
         let flushed =
           Cluster.Map.fold (fun _src move acc ->
             match move.Qcow_cluster_map.state with
             | Qcow_cluster_map.Flushed -> true
             | _ -> acc
-          ) (Qcow_cluster_map.moves cluster_map) false in
+          ) moves false in
         if flushed then Some `Update_references else None in
       begin match highest_priority, middle_priority, compact_after_unmaps with
         | Some x, _, _ -> Lwt.return (Some x)
         | _, Some x, _ -> Lwt.return (Some x)
         | None, _, Some x when x < nr_junk ->
-          (* Wait for the junk data to stabilise before starting to copy *)
-          Log.info (fun f -> f "Discards (%Ld) over threshold (%Ld): waiting for discards to finish before beginning compaction" nr_junk x);
-          let rec wait nr_junk n =
-            Time.sleep_ns 5_000_000_000L
-            >>= fun () ->
-            let nr_junk' = Cluster.to_int64 @@ Cluster.IntervalSet.cardinal @@ Qcow_cluster_map.Junk.get cluster_map in
-            if nr_junk = nr_junk' then begin
-              Log.info (fun f -> f "Discards have finished, %Ld clusters have been discarded" nr_junk);
-              Lwt.return nr_junk
-            end else begin
-              if (n mod 60 = 0) then Log.info (fun f -> f "Total discards %Ld, still waiting" nr_junk');
-              wait nr_junk' (n + 1)
-            end in
-          wait nr_junk 0
-          >>= fun nr_junk ->
-          Lwt.return (Some (`Junk nr_junk))
+          if not(Cluster.Map.is_empty moves) then begin
+            Log.info (fun f -> f "Discards (%Ld) over threshold (%Ld) but moves in progress: waiting for them to complete" nr_junk x);
+            Lwt.return None
+          end else begin
+            (* Wait for the junk data to stabilise before starting to copy *)
+            Log.info (fun f -> f "Discards (%Ld) over threshold (%Ld): waiting for discards to finish before beginning compaction" nr_junk x);
+            let rec wait nr_junk n =
+              Time.sleep_ns 5_000_000_000L
+              >>= fun () ->
+              let nr_junk' = Cluster.to_int64 @@ Cluster.IntervalSet.cardinal @@ Qcow_cluster_map.Junk.get cluster_map in
+              if nr_junk = nr_junk' then begin
+                Log.info (fun f -> f "Discards have finished, %Ld clusters have been discarded" nr_junk);
+                Lwt.return nr_junk
+              end else begin
+                if (n mod 60 = 0) then Log.info (fun f -> f "Total discards %Ld, still waiting" nr_junk');
+                wait nr_junk' (n + 1)
+              end in
+            wait nr_junk 0
+            >>= fun nr_junk ->
+            Lwt.return (Some (`Junk nr_junk))
+          end
         | _ ->
           let last_block' = Qcow_cluster_map.get_last_block cluster_map in
           let result =
@@ -477,6 +483,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | `Junk nr_junk ->
         if t.runtime_asserts then Qcow_cluster_map.Debug.assert_no_leaked_blocks cluster_map;
         let moves = Qcow_cluster_map.get_moves cluster_map in
+        (* There must be no moves already in progress when starting new moves, otherwise
+           we might move the same block twice maybe even to a different location. *)
+        assert(Cluster.Map.is_empty @@ Qcow_cluster_map.moves cluster_map);
         (* Add the destination clusters to the roots to prevent them being lost *)
         let dst = List.fold_left (fun set { Qcow_cluster_map.Move.dst; _ } ->
           Cluster.IntervalSet.(add (Interval.make dst dst) set)

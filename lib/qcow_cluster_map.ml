@@ -327,24 +327,39 @@ let set_move_state t move state =
     if Cluster.Map.mem move.Move.src t.moves
     then Some ((Cluster.Map.find move.Move.src t.moves).state)
     else None in
+  let dst = move.Move.dst in
+  if Cluster.Map.mem dst t.moves then begin
+    let { move = dst_move; state = dst_state } = Cluster.Map.find dst t.moves in
+    Log.err (fun f -> f "Illegal cluster move: %s -> %s but destination is already moving from %s -> %s and in state %s"
+      (Cluster.to_string move.Move.src) (Cluster.to_string move.Move.dst)
+      (Cluster.to_string dst_move.Move.src) (Cluster.to_string dst_move.Move.dst)
+      (string_of_move_state dst_state)
+    );
+    assert false
+  end;
   match old_state, state with
   | None, Copying ->
-    let dst = move.Move.dst in
     let dst' = Cluster.IntervalSet.(add (Interval.make dst dst) empty) in
     (* We always move into junk blocks *)
     Junk.remove t dst';
     Log.debug (fun f -> f "Cluster %s None -> Copying" (Cluster.to_string move.Move.src));
     t.moves <- Cluster.Map.add move.Move.src m t.moves;
     Copies.add t dst'
+  | Some Copying, Copied ->
+    Log.debug (fun f -> f "Cluster %s Copying -> Copied" (Cluster.to_string move.Move.src));
+    t.moves <- Cluster.Map.add move.Move.src m t.moves
   | Some Copied, Flushed ->
     Log.debug (fun f -> f "Cluster %s Copied -> Flushed" (Cluster.to_string move.Move.src));
     t.moves <- Cluster.Map.add move.Move.src m t.moves;
     (* References now need to be rewritten *)
     Lwt_condition.signal t.c ();
-  | Some old, _ ->
-    Log.debug (fun f -> f "Cluster %s %s -> %s" (Cluster.to_string move.Move.src)
-      (string_of_move_state old) (string_of_move_state state));
+  | Some Flushed, Referenced ->
+    Log.debug (fun f -> f "Cluster %s Flushed -> Referenced" (Cluster.to_string move.Move.src));
     t.moves <- Cluster.Map.add move.Move.src m t.moves
+  | Some old, _ ->
+    Log.err (fun f -> f "Illegal cluster move state transition: %s %s -> %s" (Cluster.to_string move.Move.src)
+      (string_of_move_state old) (string_of_move_state state));
+    assert false
   | None, _ ->
     Log.warn (fun f -> f "Not updating move state of cluster %s: operation cancelled" (Cluster.to_string move.Move.src))
 

@@ -241,6 +241,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         then max_cluster + quantum
         else max_cluster in (* keep it the same *)
       ( if max_cluster_should_be <> max_cluster then begin
+          Log.info (fun f -> f "Allocator: %s" (Qcow_cluster_map.to_summary_string t.cluster_map));
           Log.info (fun f -> f "Allocator: max_cluster = %d but should be %d, enlarging file" max_cluster max_cluster_should_be);
           (* Resync the file size only *)
           let p = Physical.make (max_cluster_should_be lsl t.cluster_bits) in
