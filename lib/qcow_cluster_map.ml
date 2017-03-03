@@ -341,7 +341,16 @@ let set_move_state t move state =
   | None, Copying ->
     let dst' = Cluster.IntervalSet.(add (Interval.make dst dst) empty) in
     (* We always move into junk blocks *)
+    let old_junk = t.junk in
     Junk.remove t dst';
+    if Cluster.IntervalSet.cardinal old_junk <> (Cluster.succ @@ Cluster.IntervalSet.cardinal t.junk) then begin
+      Log.err (fun f -> f "Copying cluster from %s -> %s: destination is not in the Junk set"
+        (Cluster.to_string move.Move.src) (Cluster.to_string move.Move.dst)
+      );
+      Log.err (fun f -> f "Before = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ Cluster.IntervalSet.sexp_of_t old_junk));
+      Log.err (fun f -> f "After = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ Cluster.IntervalSet.sexp_of_t t.junk));
+      assert false;
+    end;
     Log.debug (fun f -> f "Cluster %s None -> Copying" (Cluster.to_string move.Move.src));
     t.moves <- Cluster.Map.add move.Move.src m t.moves;
     Copies.add t dst'
