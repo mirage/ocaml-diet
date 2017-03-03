@@ -55,6 +55,17 @@ type move = {
 
 val string_of_move: move -> string
 
+type cluster_state =
+  | Junk
+  | Erased
+  | Available
+  | Copies
+  | Roots
+(** The state of a cluster *)
+
+val set_cluster_state: t -> Cluster.IntervalSet.t -> cluster_state -> cluster_state -> unit
+(** Update the state of a cluster *)
+
 module type MutableSet = sig
   val get: t -> Cluster.IntervalSet.t
   (** [get t] query the current contents of the set *)
@@ -64,6 +75,7 @@ module type MutableSet = sig
 
   val remove: t -> Cluster.IntervalSet.t -> unit
   (** [remove t less] removes [less] from the set *)
+
 end
 
 val zero: t

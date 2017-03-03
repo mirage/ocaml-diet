@@ -337,6 +337,29 @@ module Roots = struct
     Lwt_condition.signal t.c ()
 end
 
+type cluster_state =
+  | Junk
+  | Erased
+  | Available
+  | Copies
+  | Roots
+
+let set_cluster_state t set src dst =
+  begin match src with
+  | Junk      -> Junk.remove      t set
+  | Erased    -> Erased.remove    t set
+  | Available -> Available.remove t set
+  | Copies    -> Copies.remove    t set
+  | Roots     -> Roots.remove     t set
+  end;
+  begin match dst with
+  | Junk      -> Junk.add         t set
+  | Erased    -> Erased.add       t set
+  | Available -> Available.add    t set
+  | Copies    -> Copies.add       t set
+  | Roots     -> Roots.add        t set
+  end
+
 let wait t = Lwt_condition.wait t.c
 
 let find t cluster = Cluster.Map.find cluster t.refs

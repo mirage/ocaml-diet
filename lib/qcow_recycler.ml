@@ -56,8 +56,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     match Cluster.IntervalSet.take (Qcow_cluster_map.Available.get cluster_map) n with
     | Some (set, _free) ->
       Log.debug (fun f -> f "Allocated %s clusters from free list" (Cluster.to_string n));
-      Qcow_cluster_map.Available.remove cluster_map set;
-      Qcow_cluster_map.Roots.add cluster_map set;
+      Qcow_cluster_map.(set_cluster_state cluster_map set Available Roots);
       Some set
     | None ->
       None
@@ -342,8 +341,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               nr_flushed nr_completed nr_erased);
             Log.info (fun f -> f "block recycler: flush: %s" (Qcow_cluster_map.to_summary_string cluster_map));
           end;
-          Qcow_cluster_map.Erased.remove cluster_map erased;
-          Qcow_cluster_map.Available.add cluster_map erased;
+          Qcow_cluster_map.(set_cluster_state cluster_map erased Erased Available);
           Lwt.return (Ok ())
       )
 
@@ -477,8 +475,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         | None -> loop ()
         | Some (to_erase, _) ->
           Log.debug (fun f -> f "block recycler: should erase %s clusters" (Cluster.to_string @@ Cluster.IntervalSet.cardinal to_erase));
-          Qcow_cluster_map.Roots.add cluster_map to_erase;
-          Lwt.finalize
+          Qcow_cluster_map.(set_cluster_state cluster_map to_erase Junk Roots);
+          Lwt.catch
             (fun () ->
               erase t to_erase
               >>= function
@@ -486,12 +484,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               | Error `Disconnected -> Lwt.fail_with "Disconnected"
               | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
               | Ok () ->
-                Qcow_cluster_map.Junk.remove cluster_map to_erase;
-                Qcow_cluster_map.Erased.add cluster_map to_erase;
+                Qcow_cluster_map.(set_cluster_state cluster_map to_erase Roots Erased);
                 Lwt.return_unit
-            ) (fun () ->
-              Qcow_cluster_map.Roots.remove cluster_map to_erase;
-              Lwt.return_unit
+            ) (fun e ->
+              Qcow_cluster_map.(set_cluster_state cluster_map to_erase Roots Junk);
+              Lwt.fail e
             )
           >>= fun () ->
           loop ()
