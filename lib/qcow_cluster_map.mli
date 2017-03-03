@@ -130,9 +130,6 @@ val complete_move: t -> Move.t -> unit
 val find: t -> Cluster.t -> reference
 (** [find t cluster] returns the reference to [cluster], or raises [Not_found] *)
 
-val with_roots: t -> Cluster.IntervalSet.t -> (unit -> 'a Lwt.t) -> 'a Lwt.t
-(** [with_roots t clusters f] calls [f ()} with [clusters] registered as in-use. *)
-
 val get_moves: t -> Move.t list
 (** [get_moves t] calculates the block moves required to compact [t] *)
 

@@ -267,10 +267,14 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         let free = Cluster.IntervalSet.(Interval.make cluster Cluster.(add cluster (pred (of_int n)))) in
         let set = Cluster.IntervalSet.(add free empty) in
         assert(Cluster.IntervalSet.(is_empty @@ inter set @@ Qcow_cluster_map.Junk.get t.cluster_map));
-        Qcow_cluster_map.with_roots t.cluster_map set
+        Qcow_cluster_map.Roots.add t.cluster_map set;
+        Lwt.finalize
           (fun () ->
             Log.debug (fun f -> f "Soft allocated span of clusters from %s (length %d)" (Cluster.to_string cluster) n);
             f set
+          ) (fun () ->
+            Qcow_cluster_map.Roots.remove t.cluster_map set;
+            Lwt.return_unit
           )
 
     module Refcount = struct

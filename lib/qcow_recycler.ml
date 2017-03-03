@@ -473,12 +473,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       wait_for_work ()
       >>= function
       | `Erase n ->
-        let junk = Qcow_cluster_map.Junk.get cluster_map in
-        begin match Cluster.IntervalSet.take junk n with
+        begin match Cluster.IntervalSet.take (Qcow_cluster_map.Junk.get cluster_map) n with
         | None -> loop ()
         | Some (to_erase, _) ->
           Log.debug (fun f -> f "block recycler: should erase %s clusters" (Cluster.to_string @@ Cluster.IntervalSet.cardinal to_erase));
-          Qcow_cluster_map.with_roots cluster_map to_erase
+          Qcow_cluster_map.Roots.add cluster_map to_erase;
+          Lwt.finalize
             (fun () ->
               erase t to_erase
               >>= function
@@ -489,6 +489,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 Qcow_cluster_map.Junk.remove cluster_map to_erase;
                 Qcow_cluster_map.Erased.add cluster_map to_erase;
                 Lwt.return_unit
+            ) (fun () ->
+              Qcow_cluster_map.Roots.remove cluster_map to_erase;
+              Lwt.return_unit
             )
           >>= fun () ->
           loop ()
@@ -499,18 +502,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
            we might move the same block twice maybe even to a different location. *)
         assert(Cluster.Map.is_empty @@ Qcow_cluster_map.moves cluster_map);
         let moves = Qcow_cluster_map.get_moves cluster_map in
-        (* Set the initial move state and remove from Junk to prevent concurrent
-           erasure. *)
+        (* Set the initial move state. The source cluster is added as a key to
+           the moves map and the destination cluster is added to the Copies set. *)
         start_moves t moves;
-        (* Add the destination clusters to the roots to prevent them being lost *)
-        let dst = List.fold_left (fun set { Qcow_cluster_map.Move.dst; _ } ->
-          Cluster.IntervalSet.(add (Interval.make dst dst) set)
-        ) Cluster.IntervalSet.empty moves in
-        Qcow_cluster_map.with_roots cluster_map dst
-          (fun () ->
-            Log.info (fun f -> f "block recycler: %Ld clusters are junk, %d moves are possible" nr_junk (List.length moves));
-            Qcow_error.Lwt_write_error.or_fail_with @@ move_all t moves
-          )
+        Log.info (fun f -> f "block recycler: %Ld clusters are junk, %d moves are possible" nr_junk (List.length moves));
+        Qcow_error.Lwt_write_error.or_fail_with @@ move_all t moves
         >>= fun () ->
         resize ()
         >>= fun () ->

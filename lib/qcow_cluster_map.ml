@@ -446,13 +446,6 @@ let remove t cluster =
   t.refs <- Cluster.Map.remove cluster t.refs;
   Lwt_condition.signal t.c ()
 
-let with_roots t clusters f =
-  Roots.add t clusters;
-  Lwt.finalize f (fun () ->
-    Roots.remove t clusters;
-    Lwt.return_unit
-  )
-
 let get_moves t =
   (* The last allocated block. Note if there are no data blocks this will
      point to the last header block even though it is immovable. *)
