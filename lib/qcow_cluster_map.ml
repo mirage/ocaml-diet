@@ -399,6 +399,7 @@ let set_move_state t move state =
     if Cluster.Map.mem move.Move.src t.moves
     then Some ((Cluster.Map.find move.Move.src t.moves).state)
     else None in
+  let src = move.Move.src in
   let dst = move.Move.dst in
   if Cluster.Map.mem dst t.moves then begin
     let { move = dst_move; state = dst_state } = Cluster.Map.find dst t.moves in
@@ -411,19 +412,37 @@ let set_move_state t move state =
   end;
   match old_state, state with
   | None, Copying ->
-    let dst' = Cluster.IntervalSet.(add (Interval.make dst dst) empty) in
+    let open Cluster.IntervalSet in
+    let dst' = add (Interval.make dst dst) empty in
     (* We always move into junk blocks *)
-    let old_junk = t.junk in
-    Junk.remove t dst';
-    if Cluster.IntervalSet.cardinal old_junk <> (Cluster.succ @@ Cluster.IntervalSet.cardinal t.junk) then begin
+    if not @@ mem dst t.junk then begin
       Log.err (fun f -> f "Copying cluster from %s -> %s: destination is not in the Junk set"
         (Cluster.to_string move.Move.src) (Cluster.to_string move.Move.dst)
       );
-      Log.err (fun f -> f "Before = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ Cluster.IntervalSet.sexp_of_t old_junk));
-      Log.err (fun f -> f "After = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ Cluster.IntervalSet.sexp_of_t t.junk));
+      Log.err (fun f -> f "Junk = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t t.junk));
+      assert false;
+    end;
+    if mem dst t.copies then begin
+      Log.err (fun f -> f "Copying cluster from %s -> %s: destination is already in the Copies set"
+        (Cluster.to_string move.Move.src) (Cluster.to_string move.Move.dst)
+      );
+      Log.err (fun f -> f "Copies = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t t.copies));
+      assert false;
+    end;
+    if Cluster.Map.mem dst t.moves then begin
+      Log.err (fun f -> f "Copying cluster from %s -> %s: destination is already in the moves list"
+        (Cluster.to_string move.Move.src) (Cluster.to_string move.Move.dst)
+      );
+      assert false;
+    end;
+    if Cluster.Map.mem src t.moves then begin
+      Log.err (fun f -> f "Copying cluster from %s -> %s: source is already in the moves list"
+        (Cluster.to_string move.Move.src) (Cluster.to_string move.Move.dst)
+      );
       assert false;
     end;
     Log.debug (fun f -> f "Cluster %s None -> Copying" (Cluster.to_string move.Move.src));
+    Junk.remove t dst';
     t.moves <- Cluster.Map.add move.Move.src m t.moves;
     Copies.add t dst'
   | Some Copying, Copied ->
