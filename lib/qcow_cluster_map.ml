@@ -508,6 +508,14 @@ let add t rf cluster =
       Log.err (fun f -> f "Adding a reference to junk cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
       failwith (Printf.sprintf "Adding a reference to junk cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
     end;
+    if Cluster.IntervalSet.mem cluster t.erased then begin
+      Log.err (fun f -> f "Adding a reference to erased cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
+      failwith (Printf.sprintf "Adding a reference to erased cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
+    end;
+    if Cluster.IntervalSet.mem cluster t.available then begin
+      Log.err (fun f -> f "Adding a reference to available cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
+      failwith (Printf.sprintf "Adding a reference to available cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
+    end;
     t.refs <- Cluster.Map.add cluster rf t.refs;
     t.copies <- Cluster.IntervalSet.(remove (Interval.make cluster cluster) t.copies);
     ()
