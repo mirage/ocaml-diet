@@ -55,7 +55,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | None -> assert false in
     match Cluster.IntervalSet.take (Qcow_cluster_map.Available.get cluster_map) n with
     | Some (set, _free) ->
-      Log.debug (fun f -> f "Allocated %s clusters from free list" (Cluster.to_string n));
+      Log.debug (fun f -> f "Allocated %s clusters from free list: %s"
+        (Cluster.to_string n) (Sexplib.Sexp.to_string_hum ~indent:2 @@ Cluster.IntervalSet.sexp_of_t set)
+      );
       Qcow_cluster_map.(set_cluster_state cluster_map set Available Roots);
       Some set
     | None ->

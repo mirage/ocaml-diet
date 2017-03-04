@@ -60,6 +60,8 @@ let string_of_move m =
     state
 
 type t = {
+  mutable all: Cluster.IntervalSet.t;
+  (** Represents the whole file *)
   mutable junk: Cluster.IntervalSet.t;
   (** These are unused clusters containing arbitrary data. They must be erased
       or fully overwritten and then flushed in order to be safely reused. *)
@@ -222,7 +224,6 @@ end
 
 module type MutableSet = sig
   val get: t -> Cluster.IntervalSet.t
-  val add: t -> Cluster.IntervalSet.t -> unit
   val remove: t -> Cluster.IntervalSet.t -> unit
 end
 
@@ -239,7 +240,21 @@ let make ~free ~refs ~cache ~first_movable_cluster ~runtime_asserts =
   let erased = Cluster.IntervalSet.empty in
   let moves = Cluster.Map.empty in
   let c = Lwt_condition.create () in
-  { junk; available; erased; copies; roots; moves; refs; first_movable_cluster; cache; c; runtime_asserts }
+  let last =
+    let last_header = Cluster.pred first_movable_cluster in
+    let last_ref =
+      try
+        fst @@ Cluster.Map.max_binding refs
+      with Not_found ->
+        Cluster.zero in
+    let last_free =
+      try
+        Cluster.IntervalSet.Interval.y @@ Cluster.IntervalSet.max_elt junk
+      with Not_found ->
+        Cluster.zero in
+    max last_header (max last_ref last_free) in
+  let all = Cluster.IntervalSet.(add (Interval.make Cluster.zero last) empty) in
+  { all; junk; available; erased; copies; roots; moves; refs; first_movable_cluster; cache; c; runtime_asserts }
 
 let zero =
   let free = Qcow_bitmap.make_empty ~initial_size:0 ~maximum_size:0 in
@@ -251,10 +266,15 @@ let zero =
   make ~free ~refs ~first_movable_cluster:Cluster.zero ~cache ~runtime_asserts:false
 
 let resize t new_size_clusters =
-  let file = Cluster.IntervalSet.(add (Interval.make Cluster.zero (Cluster.pred new_size_clusters)) empty) in
-  t.junk <- Cluster.IntervalSet.inter t.junk file;
-  t.erased <- Cluster.IntervalSet.inter t.erased file;
-  t.available <- Cluster.IntervalSet.inter t.available file
+  let open Cluster.IntervalSet in
+  let file = add (Interval.make Cluster.zero (Cluster.pred new_size_clusters)) empty in
+  t.junk <- inter t.junk file;
+  t.erased <- inter t.erased file;
+  t.available <- inter t.available file;
+  (* New blocks on the end of the file are assumed to be zeroed and therefore available *)
+  let zeroed = diff file t.all in
+  t.available <- union t.available zeroed;
+  t.all <- file
 
 module Junk = struct
   let get t = t.junk
@@ -281,11 +301,18 @@ end
 module Available = struct
   let get t = t.available
   let add t more =
-    Log.debug (fun f -> f "Available.add %s" (Sexplib.Sexp.to_string (Cluster.IntervalSet.sexp_of_t more)));
-    t.available <- Cluster.IntervalSet.union t.available more;
+    let open Cluster.IntervalSet in
+    Log.debug (fun f -> f "Available.add %s"
+      (Sexplib.Sexp.to_string (sexp_of_t more))
+    );
+    t.available <- union t.available more;
     if t.runtime_asserts then Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
+    let open Cluster.IntervalSet in
+    Log.debug (fun f -> f "Available.remove %s"
+      (Sexplib.Sexp.to_string @@ sexp_of_t less)
+    );
     t.available <- Cluster.IntervalSet.diff t.available less;
     Lwt_condition.signal t.c ()
 end

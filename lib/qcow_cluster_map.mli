@@ -70,9 +70,6 @@ module type MutableSet = sig
   val get: t -> Cluster.IntervalSet.t
   (** [get t] query the current contents of the set *)
 
-  val add: t -> Cluster.IntervalSet.t -> unit
-  (** [add t more] adds [more] to the set *)
-
   val remove: t -> Cluster.IntervalSet.t -> unit
   (** [remove t less] removes [less] from the set *)
 
