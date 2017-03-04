@@ -123,7 +123,12 @@ val wait: t -> unit Lwt.t
     - available could be used
     - a move might require a reference update *)
 
+val start_moves: t -> Move.t list
+(** [start_moves t] calculates the block moves required to compact [t] and
+    marks the clusters as moving *)
+
 val moves: t -> move Cluster.Map.t
+(** [moves t] returns the state of the current active moves *)
 
 val set_move_state: t -> Move.t -> move_state -> unit
 (** Update the state of the given move operation *)
@@ -138,9 +143,6 @@ val complete_move: t -> Move.t -> unit
 
 val find: t -> Cluster.t -> reference
 (** [find t cluster] returns the reference to [cluster], or raises [Not_found] *)
-
-val get_moves: t -> Move.t list
-(** [get_moves t] calculates the block moves required to compact [t] *)
 
 val get_last_block: t -> Cluster.t
 (** [get_last_block t] is the last allocated block in [t]. Note if there are no

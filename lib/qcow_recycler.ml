@@ -137,14 +137,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () -> move_all t ms
 
-  let start_moves t moves =
-    (* Set the move_state (... and remove destination clusters from the junk
-       set so they aren't immediately erased) *)
-    let cluster_map = match t.cluster_map with
-      | Some x -> x
-      | None -> assert false in
-    List.iter (fun move -> Qcow_cluster_map.(set_move_state cluster_map move Copying)) moves
-
   let erase t remaining =
     let open Lwt.Infix in
     let intervals = Cluster.IntervalSet.fold (fun i acc -> i :: acc) remaining [] in
@@ -500,10 +492,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         (* There must be no moves already in progress when starting new moves, otherwise
            we might move the same block twice maybe even to a different location. *)
         assert(Cluster.Map.is_empty @@ Qcow_cluster_map.moves cluster_map);
-        let moves = Qcow_cluster_map.get_moves cluster_map in
-        (* Set the initial move state. The source cluster is added as a key to
-           the moves map and the destination cluster is added to the Copies set. *)
-        start_moves t moves;
+        let moves = Qcow_cluster_map.start_moves cluster_map in
         Log.info (fun f -> f "block recycler: %Ld clusters are junk, %d moves are possible" nr_junk (List.length moves));
         Qcow_error.Lwt_write_error.or_fail_with @@ move_all t moves
         >>= fun () ->

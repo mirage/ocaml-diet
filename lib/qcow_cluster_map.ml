@@ -496,12 +496,12 @@ let remove t cluster =
   t.refs <- Cluster.Map.remove cluster t.refs;
   Lwt_condition.signal t.c ()
 
-let get_moves t =
+let start_moves t =
   (* The last allocated block. Note if there are no data blocks this will
      point to the last header block even though it is immovable. *)
   let max_cluster = get_last_block t in
   let refs = ref t.refs in
-  fst @@ Cluster.IntervalSet.fold_individual
+  let moves = fst @@ Cluster.IntervalSet.fold_individual
     (fun cluster (moves, max_cluster) ->
       (* A free block after the last allocated block will not be filled.
          It will be erased from existence when the file is truncated at the
@@ -522,7 +522,9 @@ let get_moves t =
           end
         end
       end
-    ) t.junk ([], max_cluster)
+    ) t.junk ([], max_cluster) in
+  List.iter (fun move -> set_move_state t move Copying) moves;
+  moves
 
 let is_immovable t cluster = cluster < t.first_movable_cluster
 
