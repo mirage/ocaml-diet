@@ -504,7 +504,10 @@ let add t rf cluster =
       Log.err (fun f -> f "Found two references to cluster %s: %s.%d and %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w (Cluster.to_string c') w');
       failwith (Printf.sprintf "Found two references to cluster %s: %s.%d and %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w (Cluster.to_string c') w');
     end;
-    t.junk <- Cluster.IntervalSet.(remove (Interval.make cluster cluster) t.junk);
+    if Cluster.IntervalSet.mem cluster t.junk then begin
+      Log.err (fun f -> f "Adding a reference to junk cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
+      failwith (Printf.sprintf "Adding a reference to junk cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
+    end;
     t.refs <- Cluster.Map.add cluster rf t.refs;
     t.copies <- Cluster.IntervalSet.(remove (Interval.make cluster cluster) t.copies);
     ()
