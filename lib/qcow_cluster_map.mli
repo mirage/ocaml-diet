@@ -55,15 +55,24 @@ type move = {
 
 val string_of_move: move -> string
 
+type cluster_state =
+  | Junk
+  | Erased
+  | Available
+  | Copies
+  | Roots
+(** The state of a cluster *)
+
+val set_cluster_state: t -> Cluster.IntervalSet.t -> cluster_state -> cluster_state -> unit
+(** Update the state of a cluster *)
+
 module type MutableSet = sig
   val get: t -> Cluster.IntervalSet.t
   (** [get t] query the current contents of the set *)
 
-  val add: t -> Cluster.IntervalSet.t -> unit
-  (** [add t more] adds [more] to the set *)
-
   val remove: t -> Cluster.IntervalSet.t -> unit
   (** [remove t less] removes [less] from the set *)
+
 end
 
 val zero: t
@@ -104,13 +113,22 @@ module Available: MutableSet
 module Copies: MutableSet
 (** Clusters which contain copies, as part of a compact *)
 
+module Roots: MutableSet
+(** Clusters which have been allocated but not yet placed somewhere reachable
+    from the GC *)
+
 val wait: t -> unit Lwt.t
 (** [wait t] wait for some amount of recycling work to become available, e.g.
     - junk could be created
     - available could be used
     - a move might require a reference update *)
 
+val start_moves: t -> Move.t list
+(** [start_moves t] calculates the block moves required to compact [t] and
+    marks the clusters as moving *)
+
 val moves: t -> move Cluster.Map.t
+(** [moves t] returns the state of the current active moves *)
 
 val set_move_state: t -> Move.t -> move_state -> unit
 (** Update the state of the given move operation *)
@@ -125,12 +143,6 @@ val complete_move: t -> Move.t -> unit
 
 val find: t -> Cluster.t -> reference
 (** [find t cluster] returns the reference to [cluster], or raises [Not_found] *)
-
-val with_roots: t -> Cluster.IntervalSet.t -> (unit -> 'a Lwt.t) -> 'a Lwt.t
-(** [with_roots t clusters f] calls [f ()} with [clusters] registered as in-use. *)
-
-val get_moves: t -> Move.t list
-(** [get_moves t] calculates the block moves required to compact [t] *)
 
 val get_last_block: t -> Cluster.t
 (** [get_last_block t] is the last allocated block in [t]. Note if there are no
