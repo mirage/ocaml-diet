@@ -867,7 +867,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       loop work.sector work.bufs work.metadata_locks next_sector' [] rest
 
   exception Reference_outside_file of int64 * int64
-  exception Duplicate_reference of int64 * int64 * int64
 
   let make_cluster_map t =
     let open Qcow_cluster_map in
@@ -926,10 +925,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           let c', w' = Cluster.Map.find cluster !refs in
           Log.err (fun f -> f "Found two references to cluster %s: %s.%d and %s.%d"
             (Cluster.to_string cluster) (Cluster.to_string c) w (Cluster.to_string c') w');
-          let ref1 = Int64.add (Int64.of_int w) (Cluster.to_int64 c <| (Int32.to_int t.h.Header.cluster_bits)) in
-          let ref2 = Int64.add (Int64.of_int w') (Cluster.to_int64 c' <| (Int32.to_int t.h.Header.cluster_bits)) in
-          let dst = Cluster.to_int64 cluster <| (Int32.to_int t.h.Header.cluster_bits) in
-          raise (Duplicate_reference(ref1, ref2, dst))
+          raise (Error.Duplicate_reference((Cluster.to_int64 c, w), (Cluster.to_int64 c', w'), Cluster.to_int64 cluster))
         end;
         Qcow_bitmap.(remove (Interval.make (Cluster.to_int64 cluster) (Cluster.to_int64 cluster)) free);
         refs := Cluster.Map.add cluster rf !refs;
@@ -1507,7 +1503,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Lwt.return (Ok { free; used })
       ) (function
         | Reference_outside_file(src, dst) -> Lwt.return (Error (`Reference_outside_file(src, dst)))
-        | Duplicate_reference(ref1, ref2, dst) -> Lwt.return (Error (`Duplicate_reference(ref1, ref2, dst)))
+        | Error.Duplicate_reference((c, w), (c', w'), dst) -> Lwt.return (Error (`Duplicate_reference((c, w), (c', w'), dst)))
         | e -> Lwt.fail e)
 
   let resize t ~new_size:requested_size_bytes ?(ignore_data_loss=false) () =

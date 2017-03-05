@@ -24,6 +24,7 @@ module Log = (val Logs.src_log src : Logs.LOG)
 
 open Qcow_types
 module Cache = Qcow_cache
+module Error = Qcow_error
 
 type reference = Cluster.t * int
 
