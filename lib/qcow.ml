@@ -128,8 +128,10 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       (fun c ->
         let addresses = Metadata.Physical.of_contents c in
         let within = Physical.within_cluster ~cluster_bits:t.cluster_bits offset in
-        Metadata.Physical.set addresses within v;
-        Lwt.return (Ok ())
+        try
+          Metadata.Physical.set addresses within v;
+          Lwt.return (Ok ())
+        with e -> Lwt.fail e
       )
 
   (* Unmarshal a disk physical address written at a given offset within the disk. *)
@@ -1213,10 +1215,20 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             | None ->
               (* Only the first write to this area needs to allocate, so it's ok
                  to make this a little slower *)
-              ClusterIO.walk_and_allocate ~client t vaddr
-              >>= fun (offset', l1_lock, l2_lock) ->
-              let sector = Physical.sector ~sector_size:t.sector_size offset' in
-              Lwt.return (Ok { sector; bufs = [ buf ]; metadata_locks = [ l1_lock; l2_lock ] })
+              Lwt.catch
+                (fun () ->
+                  ClusterIO.walk_and_allocate ~client t vaddr
+                  >>= fun (offset', l1_lock, l2_lock) ->
+                  let sector = Physical.sector ~sector_size:t.sector_size offset' in
+                  Lwt.return (Ok { sector; bufs = [ buf ]; metadata_locks = [ l1_lock; l2_lock ] })
+                ) (function
+                  | Error.Duplicate_reference((c, w), (c', w'), target) as e ->
+                    Log.err (fun f -> f "Duplicate_reference during %s" (describe_fn ()));
+                    Qcow_debug.on_duplicate_reference t.metadata t.cluster_map (c, w) (c', w') target
+                    >>= fun () ->
+                    Lwt.fail e
+                  | e -> Lwt.fail e
+                )
             | Some (offset', l1_lock, l2_lock) ->
               let sector = Physical.sector ~sector_size:t.sector_size offset' in
               Lwt.return (Ok { sector; bufs = [ buf ]; metadata_locks = [ l1_lock; l2_lock ] })

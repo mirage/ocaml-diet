@@ -503,7 +503,7 @@ let add t rf cluster =
     if Cluster.Map.mem cluster t.refs then begin
       let c', w' = Cluster.Map.find cluster t.refs in
       Log.err (fun f -> f "Found two references to cluster %s: %s.%d and %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w (Cluster.to_string c') w');
-      failwith (Printf.sprintf "Found two references to cluster %s: %s.%d and %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w (Cluster.to_string c') w');
+      raise (Error.Duplicate_reference((Cluster.to_int64 c, w), (Cluster.to_int64 c', w'), Cluster.to_int64 cluster))
     end;
     if Cluster.IntervalSet.mem cluster t.junk then begin
       Log.err (fun f -> f "Adding a reference to junk cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
