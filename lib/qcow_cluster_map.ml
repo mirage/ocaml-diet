@@ -582,8 +582,8 @@ let add t rf cluster =
   end
 
 let remove t cluster =
-  t.junk <- Cluster.IntervalSet.(add (Interval.make cluster cluster) t.junk);
   t.refs <- Cluster.Map.remove cluster t.refs;
+  Junk.add t (Cluster.IntervalSet.(add (Interval.make cluster cluster) empty));
   cancel_move t cluster;
   Lwt_condition.signal t.c ()
 
