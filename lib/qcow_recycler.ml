@@ -291,7 +291,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                       let open Error.Lwt_write_error.Infix in
                       Qcow_debug.on_duplicate_reference t.metadata cluster_map ~cluster_bits:t.cluster_bits (c, w) (c', w') target
                       >>= fun () ->
+                      Qcow_cluster_map.Debug.assert_no_leaked_blocks cluster_map;
                       Lwt.fail e
+                    | e ->
+                      Qcow_cluster_map.Debug.assert_no_leaked_blocks cluster_map;
+                      raise e
                   )
               ) (fun () ->
                 Locks.unlock lock;
