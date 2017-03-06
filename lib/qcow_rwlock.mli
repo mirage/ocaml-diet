@@ -19,6 +19,8 @@ type t [@@deriving sexp_of]
 (** A lock which permits multiple concurrent threads to acquire it for reading
     but demands exclusivity for writing *)
 
+type ts = t list [@@deriving sexp_of]
+
 val make: (unit -> string) -> t
 (** [make describe_fn] creates a new lock, where [describe_fn ()] returns a
     human-readable description string suitable for debug output. *)
