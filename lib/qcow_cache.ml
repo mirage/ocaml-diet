@@ -60,6 +60,13 @@ let remove t cluster =
   then Printf.fprintf stderr "Dropping cache for cluster %s\n" (Cluster.to_string cluster);
   t.clusters <- Cluster.Map.remove cluster t.clusters
 
+let resize t new_size_clusters =
+  let to_keep, to_drop = Cluster.Map.partition (fun cluster _ -> cluster < new_size_clusters) t.clusters in
+  t.clusters <- to_keep;
+  if not(Cluster.Map.is_empty to_drop)
+  then Log.info (fun f -> f "After file resize dropping cached clusters: %s" (String.concat ", " @@ List.map Cluster.to_string @@ List.map fst @@ Cluster.Map.bindings to_drop))
+
+
 module Debug = struct
   let assert_not_cached t cluster =
     if Cluster.Map.mem cluster t.clusters then begin

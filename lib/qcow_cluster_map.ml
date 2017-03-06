@@ -283,6 +283,7 @@ let zero =
 let resize t new_size_clusters =
   let open Cluster.IntervalSet in
   let file = add (Interval.make Cluster.zero (Cluster.pred new_size_clusters)) empty in
+  Cache.resize t.cache new_size_clusters;
   t.junk <- inter t.junk file;
   t.erased <- inter t.erased file;
   t.available <- inter t.available file;
