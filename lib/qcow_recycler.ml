@@ -90,10 +90,18 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () ->
-        Cache.Debug.assert_not_cached t.cache (Cluster.of_int64 dst);
-        (* If the destination block was being moved, abort the move since the
-           original copy has diverged. *)
-        Qcow_cluster_map.cancel_move cluster_map (Cluster.of_int64 dst);
+        let dst' = Cluster.of_int64 dst in
+        Cache.Debug.assert_not_cached t.cache dst';
+        if not @@ Qcow_cluster_map.Copies.mem cluster_map dst' then begin
+          Log.err (fun f -> f "Copy cluster %Ld to %Ld: but %Ld is not Junk" src dst dst);
+          Qcow_cluster_map.Debug.assert_no_leaked_blocks cluster_map;
+          assert false
+        end;
+        if Qcow_cluster_map.is_moving cluster_map dst' then begin
+          Log.err (fun f -> f "Copy cluster from %Ld to %Ld: but %Ld is also moving" src dst dst);
+          Qcow_cluster_map.Debug.assert_no_leaked_blocks cluster_map;
+          assert false
+        end;
         Lwt.return (Ok ())
 
   let copy t src dst =
