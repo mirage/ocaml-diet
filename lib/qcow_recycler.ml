@@ -429,14 +429,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               let nr_junk' = Cluster.to_int64 @@ Cluster.IntervalSet.cardinal @@ Qcow_cluster_map.Junk.get cluster_map in
               if nr_junk = nr_junk' then begin
                 Log.info (fun f -> f "Discards have finished, %Ld clusters have been discarded" nr_junk);
-                Lwt.return nr_junk
+                Lwt.return ()
               end else begin
                 if (n mod 60 = 0) then Log.info (fun f -> f "Total discards %Ld, still waiting" nr_junk');
                 wait nr_junk' (n + 1)
               end in
             wait nr_junk 0
-            >>= fun nr_junk ->
-            Lwt.return (Some (`Junk nr_junk))
+            >>= fun () ->
+            Lwt.return (Some `Junk)
           end
         | _ ->
           let last_block' = Qcow_cluster_map.get_last_block cluster_map in
@@ -496,11 +496,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           >>= fun () ->
           loop ()
         end
-      | `Junk nr_junk ->
+      | `Junk ->
         if t.runtime_asserts then Qcow_cluster_map.Debug.assert_no_leaked_blocks cluster_map;
         (* There must be no moves already in progress when starting new moves, otherwise
            we might move the same block twice maybe even to a different location. *)
         assert(Cluster.Map.is_empty @@ Qcow_cluster_map.moves cluster_map);
+        let junk = Qcow_cluster_map.Junk.get cluster_map in
+        let nr_junk = Cluster.to_int64 @@ Cluster.IntervalSet.cardinal junk in
         let moves = Qcow_cluster_map.start_moves cluster_map in
         Log.info (fun f -> f "block recycler: %Ld clusters are junk, %d moves are possible" nr_junk (List.length moves));
         Qcow_error.Lwt_write_error.or_fail_with @@ move_all t moves
