@@ -295,7 +295,15 @@ module Junk = struct
     if t.runtime_asserts then Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
+    let open Cluster.IntervalSet in
+    let old_junk = t.junk in
     t.junk <- Cluster.IntervalSet.diff t.junk less;
+    if (Cluster.sub (cardinal old_junk) (cardinal less)) <> (cardinal t.junk) then begin
+      Log.err (fun f -> f "Junk.remove: clusters were not in junk");
+      Log.err (fun f -> f "Junk = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t old_junk));
+      Log.err (fun f -> f "To remove = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t less));
+      failwith "Junk.remove: clusters were not in junk"
+    end;
     Lwt_condition.signal t.c ()
 end
 
@@ -314,7 +322,14 @@ module Available = struct
     Log.debug (fun f -> f "Available.remove %s"
       (Sexplib.Sexp.to_string @@ sexp_of_t less)
     );
+    let old_available = t.available in
     t.available <- Cluster.IntervalSet.diff t.available less;
+    if (Cluster.sub (cardinal old_available) (cardinal less)) <> (cardinal t.available) then begin
+      Log.err (fun f -> f "Available.remove: clusters were not in junk");
+      Log.err (fun f -> f "Available = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t old_available));
+      Log.err (fun f -> f "To remove = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t less));
+      failwith "Available.remove: clusters were not in available"
+    end;
     Lwt_condition.signal t.c ()
 end
 
@@ -326,7 +341,15 @@ module Erased = struct
     if t.runtime_asserts then Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
-    t.erased <- Cluster.IntervalSet.diff t.erased less;
+    let open Cluster.IntervalSet in
+    let old_erased = t.erased in
+    t.erased <- diff t.erased less;
+    if (Cluster.sub (cardinal old_erased) (cardinal less)) <> (cardinal t.erased) then begin
+      Log.err (fun f -> f "Erased.remove: clusters were not in erased");
+      Log.err (fun f -> f "Erased = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t old_erased));
+      Log.err (fun f -> f "To remove = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t less));
+      failwith "Erased.remove: clusters were not in erased"
+    end;
     Lwt_condition.signal t.c ()
 end
 
@@ -338,7 +361,15 @@ module Copies = struct
     if t.runtime_asserts then Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
-    t.copies <- Cluster.IntervalSet.diff t.copies less;
+    let open Cluster.IntervalSet in
+    let old_copies = t.copies in
+    t.copies <- diff t.copies less;
+    if (Cluster.sub (cardinal old_copies) (cardinal less)) <> (cardinal t.copies) then begin
+      Log.err (fun f -> f "Copies.remove: clusters were not in copies");
+      Log.err (fun f -> f "Copies = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t old_copies));
+      Log.err (fun f -> f "To remove = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t less));
+      failwith "Copies.remove: clusters were not in copies"
+    end;
     Lwt_condition.signal t.c ()
 end
 
@@ -361,7 +392,15 @@ module Roots = struct
     if t.runtime_asserts then Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
-    t.roots <- Cluster.IntervalSet.diff t.roots less;
+    let open Cluster.IntervalSet in
+    let old_roots = t.roots in
+    t.roots <- diff t.roots less;
+    if (Cluster.sub (cardinal old_roots) (cardinal less)) <> (cardinal t.roots) then begin
+      Log.err (fun f -> f "Roots.remove: clusters were not in roots");
+      Log.err (fun f -> f "Roots = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t old_roots));
+      Log.err (fun f -> f "To remove = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t less));
+      failwith "Roots.remove: clusters were not in roots"
+    end;
     Lwt_condition.signal t.c ()
 end
 
