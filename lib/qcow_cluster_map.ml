@@ -577,7 +577,6 @@ let add t rf cluster =
       failwith (Printf.sprintf "Adding a reference to available cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
     end;
     t.refs <- Cluster.Map.add cluster rf t.refs;
-    t.copies <- Cluster.IntervalSet.(remove (Interval.make cluster cluster) t.copies);
     ()
   end
 
