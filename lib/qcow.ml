@@ -1182,7 +1182,14 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             (fun () ->
               Locks.Read.with_locks t.locks ~first ~last
                 (fun () ->
-                  B.read t.base work.sector work.bufs
+                  Lwt.catch
+                    (fun () ->
+                      B.read t.base work.sector work.bufs
+                    ) (fun e ->
+                      Log.err (fun f -> f "%s: low-level I/O exception %s" (describe_fn ()) (Printexc.to_string e));
+                      Locks.Debug.dump_state t.locks;
+                      Lwt.fail e
+                    )
                 )
               >>= function
               | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
@@ -1262,12 +1269,19 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               loop first;
               Lwt.finalize
                 (fun () ->
-                  B.write t.base work.sector work.bufs
-                  >>= function
-                  | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-                  | Error `Disconnected -> Lwt.return (Error `Disconnected)
-                  | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-                  | Ok () -> Lwt.return (Ok ())
+                  Lwt.catch
+                    (fun () ->
+                      B.write t.base work.sector work.bufs
+                      >>= function
+                      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+                      | Error `Disconnected -> Lwt.return (Error `Disconnected)
+                      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+                      | Ok () -> Lwt.return (Ok ())
+                    ) (fun e ->
+                      Log.err (fun f -> f "%s: low-level I/O exception %s" (describe_fn ()) (Printexc.to_string e));
+                      Locks.Debug.dump_state t.locks;
+                      Lwt.fail e
+                    )
                 ) (fun () ->
                   List.iter Locks.unlock work.metadata_locks;
                   Lwt.return_unit
@@ -1384,21 +1398,35 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let offset = cluster <| cluster_bits in
       let sector = Int64.(div offset (of_int sector_size)) in
       let open Lwt.Infix in
-      B.read base sector [ buf ]
-      >>= function
-      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-      | Error `Disconnected -> Lwt.return (Error `Disconnected)
-      | Ok () -> Lwt.return (Ok buf) in
+      Lwt.catch
+        (fun () ->
+          B.read base sector [ buf ]
+          >>= function
+          | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+          | Error `Disconnected -> Lwt.return (Error `Disconnected)
+          | Ok () -> Lwt.return (Ok buf)
+        ) (fun e ->
+          Log.err (fun f -> f "read_cluster %Ld: low-level I/O exception %s" cluster (Printexc.to_string e));
+          Locks.Debug.dump_state locks;
+          Lwt.fail e
+        ) in
     let write_cluster i buf =
       let cluster = Cluster.to_int64 i in
       let offset = cluster <| cluster_bits in
       let sector = Int64.(div offset (of_int sector_size)) in
-      B.write base sector [ buf ]
-      >>= function
-      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-      | Error `Disconnected -> Lwt.return (Error `Disconnected)
-      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-      | Ok () -> Lwt.return (Ok ()) in
+      Lwt.catch
+        (fun () ->
+          B.write base sector [ buf ]
+          >>= function
+          | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+          | Error `Disconnected -> Lwt.return (Error `Disconnected)
+          | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+          | Ok () -> Lwt.return (Ok ())
+        ) (fun e ->
+          Log.err (fun f -> f "write_cluster %Ld: low-level I/O exception %s" cluster (Printexc.to_string e));
+          Locks.Debug.dump_state locks;
+          Lwt.fail e
+        ) in
     let cache = Cache.create ~read_cluster ~write_cluster () in
     let metadata = Metadata.make ~cache ~cluster_bits ~locks () in
     let recycler = Recycler.create ~base ~sector_size ~cluster_bits ~cache ~locks ~metadata ~runtime_asserts:config.Config.runtime_asserts in
