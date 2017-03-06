@@ -38,4 +38,6 @@ module Debug: sig
   val assert_not_cached: t -> Cluster.t -> unit
 
   val all_cached_clusters: t -> Cluster.IntervalSet.t
+
+  val check_disk: t -> (unit, Mirage_block.error) result Lwt.t
 end

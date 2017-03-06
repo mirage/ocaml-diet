@@ -1191,6 +1191,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                       let cluster = Cluster.of_int (Int64.to_int work.sector / sectors_per_cluster) in
                       Qcow_debug.check_references t.metadata t.cluster_map ~cluster_bits:t.cluster_bits cluster
                       >>= fun _ ->
+                      Cache.Debug.check_disk t.cache
+                      >>= fun _ ->
                       Lwt.fail e
                     )
                 )
@@ -1285,6 +1287,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                       Locks.Debug.dump_state t.locks;
                       let cluster = Cluster.of_int (Int64.to_int work.sector / sectors_per_cluster) in
                       Qcow_debug.check_references t.metadata t.cluster_map ~cluster_bits:t.cluster_bits cluster
+                      >>= fun _ ->
+                      Cache.Debug.check_disk t.cache
                       >>= fun _ ->
                       Lwt.fail e
                     )
