@@ -289,7 +289,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                         (String.concat ", " @@ List.map Qcow_cluster_map.string_of_move @@ List.concat @@ List.map snd flushed)
                       );
                       let open Error.Lwt_write_error.Infix in
-                      Qcow_debug.on_duplicate_reference t.metadata cluster_map (c, w) (c', w') target
+                      Qcow_debug.on_duplicate_reference t.metadata cluster_map ~cluster_bits:t.cluster_bits (c, w) (c', w') target
                       >>= fun () ->
                       Lwt.fail e
                   )

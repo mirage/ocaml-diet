@@ -1188,6 +1188,9 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                     ) (fun e ->
                       Log.err (fun f -> f "%s: low-level I/O exception %s" (describe_fn ()) (Printexc.to_string e));
                       Locks.Debug.dump_state t.locks;
+                      let cluster = Cluster.of_int (Int64.to_int work.sector / sectors_per_cluster) in
+                      Qcow_debug.check_references t.metadata t.cluster_map ~cluster_bits:t.cluster_bits cluster
+                      >>= fun _ ->
                       Lwt.fail e
                     )
                 )
@@ -1231,7 +1234,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 ) (function
                   | Error.Duplicate_reference((c, w), (c', w'), target) as e ->
                     Log.err (fun f -> f "Duplicate_reference during %s" (describe_fn ()));
-                    Qcow_debug.on_duplicate_reference t.metadata t.cluster_map (c, w) (c', w') target
+                    Qcow_debug.on_duplicate_reference t.metadata t.cluster_map ~cluster_bits:t.cluster_bits (c, w) (c', w') target
                     >>= fun () ->
                     Lwt.fail e
                   | e -> Lwt.fail e
@@ -1280,6 +1283,9 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                     ) (fun e ->
                       Log.err (fun f -> f "%s: low-level I/O exception %s" (describe_fn ()) (Printexc.to_string e));
                       Locks.Debug.dump_state t.locks;
+                      let cluster = Cluster.of_int (Int64.to_int work.sector / sectors_per_cluster) in
+                      Qcow_debug.check_references t.metadata t.cluster_map ~cluster_bits:t.cluster_bits cluster
+                      >>= fun _ ->
                       Lwt.fail e
                     )
                 ) (fun () ->

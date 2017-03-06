@@ -14,7 +14,13 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
+open Qcow_types
 
-val on_duplicate_reference: Qcow_metadata.t -> Qcow_cluster_map.t ->
+val on_duplicate_reference: Qcow_metadata.t -> Qcow_cluster_map.t -> cluster_bits:int ->
    (int64 * int) -> (int64 * int) -> int64 ->
    (unit, [> `Disconnected | `Is_read_only | `Msg of string | `Unimplemented ]) result Lwt.t
+
+val check_references: Qcow_metadata.t -> Qcow_cluster_map.t -> cluster_bits:int -> Cluster.t ->
+  (unit, [> `Disconnected | `Is_read_only | `Msg of string | `Unimplemented ]) result Lwt.t
+(** [check_references metadata map cluster_bits target] follows the back references
+    from physical offset [target], verifying the references on disk as it goes *)
