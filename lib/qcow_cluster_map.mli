@@ -73,6 +73,8 @@ module type MutableSet = sig
   val remove: t -> Cluster.IntervalSet.t -> unit
   (** [remove t less] removes [less] from the set *)
 
+  val mem: t -> Cluster.t -> bool
+  (** [mem t cluster] is true if [cluster] is in [t] *)
 end
 
 val zero: t

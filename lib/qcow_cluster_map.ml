@@ -243,6 +243,7 @@ end
 module type MutableSet = sig
   val get: t -> Cluster.IntervalSet.t
   val remove: t -> Cluster.IntervalSet.t -> unit
+  val mem: t -> Cluster.t -> bool
 end
 
 let make ~free ~refs ~cache ~first_movable_cluster ~runtime_asserts =
@@ -293,6 +294,10 @@ let resize t new_size_clusters =
   (* New blocks on the end of the file are assumed to be zeroed and therefore available *)
   let zeroed = diff file t.all in
   t.available <- union t.available zeroed;
+  if cardinal zeroed > Cluster.zero
+  then Log.info (fun f -> f "resize: adding available clusters %s"
+    (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t zeroed)
+  );
   t.all <- file
 
 module Junk = struct
@@ -323,6 +328,7 @@ module Junk = struct
       failwith "Junk.remove: clusters were not in junk"
     end;
     Lwt_condition.signal t.c ()
+  let mem t elt = Cluster.IntervalSet.mem elt t.junk
 end
 
 module Available = struct
@@ -349,6 +355,7 @@ module Available = struct
       failwith "Available.remove: clusters were not in available"
     end;
     Lwt_condition.signal t.c ()
+  let mem t elt = Cluster.IntervalSet.mem elt t.available
 end
 
 module Erased = struct
@@ -369,6 +376,7 @@ module Erased = struct
       failwith "Erased.remove: clusters were not in erased"
     end;
     Lwt_condition.signal t.c ()
+  let mem t elt = Cluster.IntervalSet.mem elt t.erased
 end
 
 module Copies = struct
@@ -389,6 +397,7 @@ module Copies = struct
       failwith "Copies.remove: clusters were not in copies"
     end;
     Lwt_condition.signal t.c ()
+  let mem t elt = Cluster.IntervalSet.mem elt t.copies
 end
 
 module Roots = struct
@@ -420,6 +429,7 @@ module Roots = struct
       failwith "Roots.remove: clusters were not in roots"
     end;
     Lwt_condition.signal t.c ()
+  let mem t elt = Cluster.IntervalSet.mem elt t.roots
 end
 
 type cluster_state =
@@ -564,20 +574,21 @@ let add t rf cluster =
       Log.err (fun f -> f "Found two references to cluster %s: %s.%d and %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w (Cluster.to_string c') w');
       raise (Error.Duplicate_reference((Cluster.to_int64 c, w), (Cluster.to_int64 c', w'), Cluster.to_int64 cluster))
     end;
-    if Cluster.IntervalSet.mem cluster t.junk then begin
-      Log.err (fun f -> f "Adding a reference to junk cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
-      (try Debug.check t with _ -> ());
-      failwith (Printf.sprintf "Adding a reference to junk cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
-    end;
-    if Cluster.IntervalSet.mem cluster t.erased then begin
-      Log.err (fun f -> f "Adding a reference to erased cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
-      (try Debug.check t with _ -> ());
-      failwith (Printf.sprintf "Adding a reference to erased cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
-    end;
-    if Cluster.IntervalSet.mem cluster t.available then begin
-      Log.err (fun f -> f "Adding a reference to available cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
-      (try Debug.check t with _ -> ());
-      failwith (Printf.sprintf "Adding a reference to available cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
+    let junk      = Junk.mem      t cluster in
+    let erased    = Erased.mem    t cluster in
+    let available = Available.mem t cluster in
+    let roots     = Roots.mem     t cluster in
+    let copies    = Copies.mem    t cluster in
+    if not(roots || copies) || junk || erased || available then begin
+      Log.err (fun f -> f "Adding a reference to cluster %s in %s.%d, cluster in state: %s %s %s %s %s"
+        (Cluster.to_string cluster) (Cluster.to_string c) w
+        (if junk      then "Junk "      else "")
+        (if erased    then "Erased "    else "")
+        (if available then "Available " else "")
+        (if roots     then "Roots "     else "")
+        (if copies    then "Copies "    else "")
+      );
+      failwith (Printf.sprintf "Adding a reference to unsuitable cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
     end;
     t.refs <- Cluster.Map.add cluster rf t.refs;
     ()
