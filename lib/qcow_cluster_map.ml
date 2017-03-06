@@ -94,18 +94,23 @@ let get_last_block t =
     try
       fst @@ Cluster.Map.max_binding t.refs
     with Not_found ->
-      Cluster.pred t.first_movable_cluster in
+      Cluster.zero in
   let max_root =
     try
       Cluster.IntervalSet.Interval.y @@ Cluster.IntervalSet.max_elt t.roots
     with Not_found ->
-      max_ref in
+      Cluster.zero in
   let max_copies =
     try
       Cluster.IntervalSet.Interval.y @@ Cluster.IntervalSet.max_elt t.copies
     with Not_found ->
-      max_root in
-  max (Cluster.pred t.first_movable_cluster) @@ max max_ref @@ max max_root max_copies
+      Cluster.zero in
+  let max_move =
+    try
+      fst @@ Cluster.Map.max_binding t.moves
+    with Not_found ->
+      Cluster.zero in
+  max (Cluster.pred t.first_movable_cluster) @@ max max_ref @@ max max_root @@ max max_move max_copies
 
 let total_used t =
   Int64.of_int @@ Cluster.Map.cardinal t.refs
