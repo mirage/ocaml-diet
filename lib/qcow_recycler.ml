@@ -196,6 +196,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
        cluster lock once, make all the updates and release it. *)
     let flushed' =
       Cluster.Map.fold (fun src move acc ->
+        assert (src = move.Qcow_cluster_map.move.Qcow_cluster_map.Move.src);
         match move.state with
         | Flushed ->
           begin match Qcow_cluster_map.find cluster_map src with
@@ -251,8 +252,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                                 (Cluster.to_string src) (Cluster.to_string dst) (Cluster.to_string src)
                               );
                               Ok subst
-                            | ref_cluster, ref_cluster_within ->
-                              if not(Cluster.Map.mem src (Qcow_cluster_map.moves cluster_map)) then begin
+                            | ref_cluster', ref_cluster_within ->
+                              if ref_cluster' <> ref_cluster then begin
+                                Log.info (fun f -> f "Reference to %s moved from %s:%d to %s:%d"
+                                  (Cluster.to_string src) (Cluster.to_string ref_cluster) ref_cluster_within
+                                  (Cluster.to_string ref_cluster') ref_cluster_within
+                                );
+                                Ok subst
+                              end else if not(Cluster.Map.mem src (Qcow_cluster_map.moves cluster_map)) then begin
                                 Log.debug (fun f -> f "Not rewriting reference in %s :%d from %s to %s: move as been cancelled"
                                   (Cluster.to_string ref_cluster) ref_cluster_within
                                   (Cluster.to_string src) (Cluster.to_string dst)
