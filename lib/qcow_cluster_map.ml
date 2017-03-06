@@ -519,7 +519,7 @@ let cancel_move t cluster =
            as if the write wasn't committed which is valid
          The only reason we still track this move is because when the next flush
          happens it is safe to add the src cluster to the set of junk blocks. *)
-      Log.info (fun f -> f "Not cancelling in-progress move of cluster %s: already Referenced" (Cluster.to_string cluster))
+      Log.debug (fun f -> f "Not cancelling in-progress move of cluster %s: already Referenced" (Cluster.to_string cluster))
     | { move = { Move.dst; _ }; _ } ->
       Log.debug (fun f -> f "Cancelling in-progress move of cluster %s to %s" (Cluster.to_string cluster) (Cluster.to_string dst));
       t.moves <- Cluster.Map.remove cluster t.moves;
