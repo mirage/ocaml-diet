@@ -419,7 +419,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         | _, Some x, _ -> Lwt.return (Some x)
         | None, _, Some x when x < nr_junk ->
           if not(Cluster.Map.is_empty moves) then begin
-            Log.info (fun f -> f "Discards (%Ld) over threshold (%Ld) but moves in progress: waiting for them to complete" nr_junk x);
             Lwt.return None
           end else begin
             (* Wait for the junk data to stabilise before starting to copy *)
