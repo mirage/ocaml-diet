@@ -116,14 +116,21 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       (fun () ->
          Locks.Write.with_lock t.locks dst
            (fun () ->
-             copy_already_locked t src dst
-             >>= function
-             | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-             | Error `Disconnected -> Lwt.return (Error `Disconnected)
-             | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-             | Ok () ->
-               Qcow_cluster_map.(set_move_state cluster_map move Copied);
+             (* Consider that a discard might have arrived and removed the src
+                cluster. *)
+             if not(Qcow_cluster_map.is_moving cluster_map src) then begin
+               Log.info (fun f -> f "Copy of cluster %s prevented: move operation cancelled" (Cluster.to_string src));
                Lwt.return (Ok ())
+             end else begin
+               copy_already_locked t src dst
+               >>= function
+               | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+               | Error `Disconnected -> Lwt.return (Error `Disconnected)
+               | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+               | Ok () ->
+                 Qcow_cluster_map.(set_move_state cluster_map move Copied);
+                 Lwt.return (Ok ())
+             end
             )
       )
 
@@ -262,9 +269,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                                 (* Preserve any flags but update the pointer *)
                                 let dst' = Cluster.to_int dst lsl t.cluster_bits in
                                 let new_reference = Qcow_physical.make ~is_mutable:(Qcow_physical.is_mutable old_reference) ~is_compressed:(Qcow_physical.is_compressed old_reference) dst' in
+                                set_move_state cluster_map move.move Referenced;
                                 Metadata.Physical.set addresses ref_cluster_within new_reference;
                                 nr_updated := Int64.succ !nr_updated;
-                                set_move_state cluster_map move.move Referenced;
                                 (* The move cannot be cancelled now that the metadata has
                                    been updated. *)
                                 Ok (Cluster.Map.add src dst subst)

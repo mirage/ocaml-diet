@@ -133,6 +133,9 @@ val moves: t -> move Cluster.Map.t
 val set_move_state: t -> Move.t -> move_state -> unit
 (** Update the state of the given move operation *)
 
+val is_moving: t -> Cluster.t -> bool
+(** [is_moving t cluster] returns true if [cluster] is still moving *)
+
 val cancel_move: t -> Cluster.t -> unit
 (** [cancel_move cluster] cancels any in-progress move of cluster [cluster].
     This should be called with the cluster write lock held whenever there has

@@ -497,6 +497,8 @@ let complete_move t move =
     Junk.add t src;
   end
 
+let is_moving t src = Cluster.Map.mem src t.moves
+
 let add t rf cluster =
   let c, w = rf in
   if cluster = Cluster.zero then () else begin
@@ -528,6 +530,7 @@ let add t rf cluster =
 let remove t cluster =
   t.junk <- Cluster.IntervalSet.(add (Interval.make cluster cluster) t.junk);
   t.refs <- Cluster.Map.remove cluster t.refs;
+  cancel_move t cluster;
   Lwt_condition.signal t.c ()
 
 let start_moves t =

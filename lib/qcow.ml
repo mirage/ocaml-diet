@@ -804,9 +804,19 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                                   then inner (Int64.add acc sectors_per_cluster) (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
                                   else begin
                                     (* The data at [data_offset] is about to become an unreferenced
-                                    hole in the file *)
-                                    Metadata.Physical.set addresses within Physical.unmapped;
-                                    t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
+                                       hole in the file *)
+                                    let current = Metadata.Physical.get addresses within in
+                                    ( if current <> Physical.unmapped then begin
+                                        Locks.Write.with_lock t.locks ?client (Physical.cluster ~cluster_bits:t.cluster_bits current)
+                                          (fun () ->
+                                            (* It's important to hold the write lock because we might
+                                               be about to erase or copy this block *)
+                                            Metadata.Physical.set addresses within Physical.unmapped;
+                                            t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
+                                            Lwt.return (Ok ())
+                                          )
+                                      end else Lwt.return (Ok ()) )
+                                    >>= fun () ->
                                     Refcount.decr t (Physical.cluster ~cluster_bits:t.cluster_bits data_offset)
                                     >>= fun () ->
                                     inner (Int64.add acc sectors_per_cluster) (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
