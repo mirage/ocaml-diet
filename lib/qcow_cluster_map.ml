@@ -193,8 +193,11 @@ module Debug = struct
       (* These must be disjoint *)
       if sharing then begin
         check @@ cross
-          [ junk; copies; erased; available; refs ]
-          [ junk; copies; erased; available; refs ];
+          [ junk; erased; available; refs ]
+          [ junk; erased; available; refs ];
+        check @@ cross
+          [ junk; copies; erased; available ]
+          [ junk; copies; erased; available ];
         check @@ cross
           [ cached ]
           [ junk; erased; available ]
