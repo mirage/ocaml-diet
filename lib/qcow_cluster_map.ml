@@ -198,6 +198,15 @@ module Debug = struct
         check @@ cross
           [ cached ]
           [ junk; erased; available ]
+      end;
+      (* moves and copies should be the same *)
+      let d = union (diff (snd copies) (snd moves)) (diff (snd moves) (snd copies)) in
+      if not(is_empty d) then begin
+        Log.err (fun f -> f "%s" (to_summary_string t));
+        Log.err (fun f -> f "moves and refs are not the same");
+        Log.err (fun f -> f "moves = %s" (Sexplib.Sexp.to_string_hum (sexp_of_t (snd moves))));
+        Log.err (fun f -> f "refs  = %s" (Sexplib.Sexp.to_string_hum (sexp_of_t (snd refs))));
+        Log.err (fun f -> f "diff  = %s" (Sexplib.Sexp.to_string_hum (sexp_of_t d)))
       end
     end
     let assert_no_leaked_blocks t = check t
