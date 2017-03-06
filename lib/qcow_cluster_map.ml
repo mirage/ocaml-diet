@@ -554,15 +554,24 @@ let cancel_move t cluster =
       ()
 
 let complete_move t move =
-  if not(Cluster.Map.mem move.Move.src t.moves)
-  then Log.warn (fun f -> f "Not completing move state of cluster %s: operation cancelled" (Cluster.to_string move.Move.src))
-  else begin
+  let old_state =
+    if Cluster.Map.mem move.Move.src t.moves
+    then Some ((Cluster.Map.find move.Move.src t.moves).state)
+    else None in
+  match old_state with
+  | None ->
+    Log.warn (fun f -> f "Not completing move state of cluster %s: operation cancelled" (Cluster.to_string move.Move.src))
+  | Some Referenced ->
     t.moves <- Cluster.Map.remove move.Move.src t.moves;
     let dst = Cluster.IntervalSet.(add (Interval.make move.Move.dst move.Move.dst) empty) in
     Copies.remove t dst;
     let src = Cluster.IntervalSet.(add (Interval.make move.Move.src move.Move.src) empty) in
-    Junk.add t src;
-  end
+    Junk.add t src
+  | Some old ->
+    Log.err (fun f -> f "Illegal cluster move state transition: %s %s -> Completed" (Cluster.to_string move.Move.src)
+      (string_of_move_state old)
+    );
+    failwith "Attempt to complete an incomplete cluster move"
 
 let is_moving t src = Cluster.Map.mem src t.moves
 
