@@ -114,7 +114,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
   val check: B.t -> (check_result, [
     Mirage_block.error
     | `Reference_outside_file of int64 * int64
-    | `Duplicate_reference of int64 * int64 * int64
+    | `Duplicate_reference of (int64 * int) * (int64 * int) * int64
     | `Msg of string
   ]) result io
   (** [check t] performs sanity checks of the file, looking for errors.

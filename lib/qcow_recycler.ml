@@ -13,6 +13,7 @@ let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right
 
 module Cache = Qcow_cache
+module Error = Qcow_error
 module Locks = Qcow_locks
 module Metadata = Qcow_metadata
 module Physical = Qcow_physical
@@ -89,10 +90,18 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Ok () ->
-        Cache.Debug.assert_not_cached t.cache (Cluster.of_int64 dst);
-        (* If the destination block was being moved, abort the move since the
-           original copy has diverged. *)
-        Qcow_cluster_map.cancel_move cluster_map (Cluster.of_int64 dst);
+        let dst' = Cluster.of_int64 dst in
+        Cache.Debug.assert_not_cached t.cache dst';
+        if not @@ Qcow_cluster_map.Copies.mem cluster_map dst' then begin
+          Log.err (fun f -> f "Copy cluster %Ld to %Ld: but %Ld is not Junk" src dst dst);
+          Qcow_cluster_map.Debug.assert_no_leaked_blocks cluster_map;
+          assert false
+        end;
+        if Qcow_cluster_map.is_moving cluster_map dst' then begin
+          Log.err (fun f -> f "Copy cluster from %Ld to %Ld: but %Ld is also moving" src dst dst);
+          Qcow_cluster_map.Debug.assert_no_leaked_blocks cluster_map;
+          assert false
+        end;
         Lwt.return (Ok ())
 
   let copy t src dst =
@@ -115,14 +124,21 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       (fun () ->
          Locks.Write.with_lock t.locks dst
            (fun () ->
-             copy_already_locked t src dst
-             >>= function
-             | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-             | Error `Disconnected -> Lwt.return (Error `Disconnected)
-             | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-             | Ok () ->
-               Qcow_cluster_map.(set_move_state cluster_map move Copied);
+             (* Consider that a discard might have arrived and removed the src
+                cluster. *)
+             if not(Qcow_cluster_map.is_moving cluster_map src) then begin
+               Log.info (fun f -> f "Copy of cluster %s prevented: move operation cancelled" (Cluster.to_string src));
                Lwt.return (Ok ())
+             end else begin
+               copy_already_locked t src dst
+               >>= function
+               | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+               | Error `Disconnected -> Lwt.return (Error `Disconnected)
+               | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+               | Ok () ->
+                 Qcow_cluster_map.(set_move_state cluster_map move Copied);
+                 Lwt.return (Ok ())
+             end
             )
       )
 
@@ -180,6 +196,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
        cluster lock once, make all the updates and release it. *)
     let flushed' =
       Cluster.Map.fold (fun src move acc ->
+        assert (src = move.Qcow_cluster_map.move.Qcow_cluster_map.Move.src);
         match move.state with
         | Flushed ->
           begin match Qcow_cluster_map.find cluster_map src with
@@ -219,69 +236,94 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           | Some lock ->
             Lwt.finalize
               (fun () ->
+                (* The flush function will call complete move for all moves with state Referenced.
+                   However these won't actually have hit the disk until Metadata.update returns
+                   and the disk write has been performed. *)
+                Lwt_mutex.with_lock t.flush_m
+                (fun () ->
                 Metadata.update ~client t.metadata ref_cluster
                   (fun c ->
-                    Log.debug (fun f -> f "Updating references in cluster %s" (Cluster.to_string ref_cluster));
+                    Log.info (fun f -> f "Updating %d references in cluster %s" (List.length moves) (Cluster.to_string ref_cluster));
                     let addresses = Metadata.Physical.of_contents c in
-                    let result = List.fold_left
-                      (fun acc ({ move = { Move.src; dst }; _ } as move) -> match acc with
-                        | Error e -> Error e
-                        | Ok subst ->
-                          begin match Qcow_cluster_map.find cluster_map src with
-                          | exception Not_found ->
-                            (* Block was probably discarded after we started running. *)
-                            Log.warn (fun f -> f "Not copying cluster %s to %s: %s has been discarded"
-                              (Cluster.to_string src) (Cluster.to_string dst) (Cluster.to_string src)
-                            );
-                            Ok subst
-                          | ref_cluster, ref_cluster_within ->
-                            if not(Cluster.Map.mem src (Qcow_cluster_map.moves cluster_map)) then begin
-                              Log.debug (fun f -> f "Not rewriting reference in %s :%d from %s to %s: move as been cancelled"
-                                (Cluster.to_string ref_cluster) ref_cluster_within
-                                (Cluster.to_string src) (Cluster.to_string dst)
+                    try
+                      let result = List.fold_left
+                        (fun acc ({ move = { Move.src; dst }; _ } as move) -> match acc with
+                          | Error e -> Error e
+                          | Ok subst ->
+                            begin match Qcow_cluster_map.find cluster_map src with
+                            | exception Not_found ->
+                              (* Block was probably discarded after we started running. *)
+                              Log.warn (fun f -> f "Not copying cluster %s to %s: %s has been discarded"
+                                (Cluster.to_string src) (Cluster.to_string dst) (Cluster.to_string src)
                               );
                               Ok subst
-                            end else begin
-                              (* Read the current value in the referencing cluster as a sanity check *)
-                              let old_reference = Metadata.Physical.get addresses ref_cluster_within in
-                              let old_cluster = Qcow_physical.cluster ~cluster_bits:t.cluster_bits old_reference in
-                              if old_cluster <> src then begin
-                                Log.err (fun f -> f "Rewriting reference in %s :%d from %s to %s, old reference actually pointing to %s"
+                            | ref_cluster', ref_cluster_within ->
+                              if ref_cluster' <> ref_cluster then begin
+                                Log.info (fun f -> f "Reference to %s moved from %s:%d to %s:%d"
+                                  (Cluster.to_string src) (Cluster.to_string ref_cluster) ref_cluster_within
+                                  (Cluster.to_string ref_cluster') ref_cluster_within
+                                );
+                                Ok subst
+                              end else if not(Cluster.Map.mem src (Qcow_cluster_map.moves cluster_map)) then begin
+                                Log.debug (fun f -> f "Not rewriting reference in %s :%d from %s to %s: move as been cancelled"
                                   (Cluster.to_string ref_cluster) ref_cluster_within
                                   (Cluster.to_string src) (Cluster.to_string dst)
-                                  (Cluster.to_string old_cluster)
                                 );
-                                assert false
-                              end;
-                              Log.debug (fun f -> f "Rewriting reference in %s :%d from %s to %s"
-                                (Cluster.to_string ref_cluster) ref_cluster_within
-                                (Cluster.to_string src) (Cluster.to_string dst)
-                              );
-                              (* Preserve any flags but update the pointer *)
-                              let dst' = Cluster.to_int dst lsl t.cluster_bits in
-                              let new_reference = Qcow_physical.make ~is_mutable:(Qcow_physical.is_mutable old_reference) ~is_compressed:(Qcow_physical.is_compressed old_reference) dst' in
-                              Metadata.Physical.set addresses ref_cluster_within new_reference;
-                              nr_updated := Int64.succ !nr_updated;
-                              set_move_state cluster_map move.move Referenced;
-                              (* The move cannot be cancelled now that the metadata has
-                                 been updated. *)
-                              Ok (Cluster.Map.add src dst subst)
+                                Ok subst
+                              end else begin
+                                (* Read the current value in the referencing cluster as a sanity check *)
+                                let old_reference = Metadata.Physical.get addresses ref_cluster_within in
+                                let old_cluster = Qcow_physical.cluster ~cluster_bits:t.cluster_bits old_reference in
+                                if old_cluster <> src then begin
+                                  Log.err (fun f -> f "Rewriting reference in %s :%d from %s to %s, old reference actually pointing to %s"
+                                    (Cluster.to_string ref_cluster) ref_cluster_within
+                                    (Cluster.to_string src) (Cluster.to_string dst)
+                                    (Cluster.to_string old_cluster)
+                                  );
+                                  assert false
+                                end;
+                                Log.debug (fun f -> f "Rewriting reference in %s :%d from %s to %s"
+                                  (Cluster.to_string ref_cluster) ref_cluster_within
+                                  (Cluster.to_string src) (Cluster.to_string dst)
+                                );
+                                (* Preserve any flags but update the pointer *)
+                                let dst' = Cluster.to_int dst lsl t.cluster_bits in
+                                let new_reference = Qcow_physical.make ~is_mutable:(Qcow_physical.is_mutable old_reference) ~is_compressed:(Qcow_physical.is_compressed old_reference) dst' in
+                                set_move_state cluster_map move.move Referenced;
+                                Metadata.Physical.set addresses ref_cluster_within new_reference;
+                                nr_updated := Int64.succ !nr_updated;
+                                (* The move cannot be cancelled now that the metadata has
+                                   been updated. *)
+                                Ok (Cluster.Map.add src dst subst)
                             end
                           end
                       ) (Ok subst) moves in
-                    match result with
-                    | Error e -> Lwt.return (Error e)
-                    | Ok subst ->
-                      (* If `ref_cluster` is an L1 table entry then `src` must be an
-                         L2 block, and the values in `cluster_map.refs` will point to it.
-                         These need to be redirected to `dst` otherwise the `cluster_map`
-                         will be out-of-sync. This only happens because we bypass the
-                         `Metadata.Physical.set` function in the block copier. *)
-                      if Qcow_cluster_map.is_immovable cluster_map ref_cluster then begin
-                        Log.info (fun f -> f "Cluster %s is L1: we must remap L2 references" (Cluster.to_string ref_cluster));
-                        Qcow_cluster_map.update_references cluster_map subst
-                      end;
-                      Lwt.return (Ok subst)
+                      match result with
+                      | Error e -> Lwt.return (Error e)
+                      | Ok subst ->
+                        (* If `ref_cluster` is an L1 table entry then `src` must be an
+                           L2 block, and the values in `cluster_map.refs` will point to it.
+                           These need to be redirected to `dst` otherwise the `cluster_map`
+                           will be out-of-sync. This only happens because we bypass the
+                           `Metadata.Physical.set` function in the block copier. *)
+                        if Qcow_cluster_map.is_immovable cluster_map ref_cluster then begin
+                          Log.info (fun f -> f "Cluster %s is L1: we must remap L2 references" (Cluster.to_string ref_cluster));
+                          Qcow_cluster_map.update_references cluster_map subst
+                        end;
+                        Lwt.return (Ok subst)
+                    with Error.Duplicate_reference((c, w), (c', w'), (target: int64)) as e ->
+                      Log.err (fun f -> f "Duplicate_reference during update_references of %s"
+                        (String.concat ", " @@ List.map Qcow_cluster_map.string_of_move @@ List.concat @@ List.map snd flushed)
+                      );
+                      let open Error.Lwt_write_error.Infix in
+                      Qcow_debug.on_duplicate_reference t.metadata cluster_map ~cluster_bits:t.cluster_bits (c, w) (c', w') target
+                      >>= fun () ->
+                      Qcow_cluster_map.Debug.assert_no_leaked_blocks cluster_map;
+                      Lwt.fail e
+                    | e ->
+                      Qcow_cluster_map.Debug.assert_no_leaked_blocks cluster_map;
+                      raise e
+                  )
                   )
               ) (fun () ->
                 Locks.unlock lock;
@@ -330,12 +372,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               nr_flushed, nr_completed + 1
             ) moves (0, 0) in
           let nr_erased = Cluster.to_int @@ Cluster.IntervalSet.cardinal erased in
+          Qcow_cluster_map.(set_cluster_state cluster_map erased Erased Available);
           if nr_flushed <> 0 || nr_completed <> 0 || nr_erased <> 0 then begin
             Log.info (fun f -> f "block recycler: %d cluster copies flushed; %d cluster copies complete; %d clusters erased"
               nr_flushed nr_completed nr_erased);
             Log.info (fun f -> f "block recycler: flush: %s" (Qcow_cluster_map.to_summary_string cluster_map));
           end;
-          Qcow_cluster_map.(set_cluster_state cluster_map erased Erased Available);
           Lwt.return (Ok ())
       )
 
@@ -409,7 +451,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         | _, Some x, _ -> Lwt.return (Some x)
         | None, _, Some x when x < nr_junk ->
           if not(Cluster.Map.is_empty moves) then begin
-            Log.info (fun f -> f "Discards (%Ld) over threshold (%Ld) but moves in progress: waiting for them to complete" nr_junk x);
             Lwt.return None
           end else begin
             (* Wait for the junk data to stabilise before starting to copy *)
@@ -420,14 +461,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               let nr_junk' = Cluster.to_int64 @@ Cluster.IntervalSet.cardinal @@ Qcow_cluster_map.Junk.get cluster_map in
               if nr_junk = nr_junk' then begin
                 Log.info (fun f -> f "Discards have finished, %Ld clusters have been discarded" nr_junk);
-                Lwt.return nr_junk
+                Lwt.return ()
               end else begin
                 if (n mod 60 = 0) then Log.info (fun f -> f "Total discards %Ld, still waiting" nr_junk');
                 wait nr_junk' (n + 1)
               end in
             wait nr_junk 0
-            >>= fun nr_junk ->
-            Lwt.return (Some (`Junk nr_junk))
+            >>= fun () ->
+            Lwt.return (Some `Junk)
           end
         | _ ->
           let last_block' = Qcow_cluster_map.get_last_block cluster_map in
@@ -487,11 +528,13 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           >>= fun () ->
           loop ()
         end
-      | `Junk nr_junk ->
+      | `Junk ->
         if t.runtime_asserts then Qcow_cluster_map.Debug.assert_no_leaked_blocks cluster_map;
         (* There must be no moves already in progress when starting new moves, otherwise
            we might move the same block twice maybe even to a different location. *)
         assert(Cluster.Map.is_empty @@ Qcow_cluster_map.moves cluster_map);
+        let junk = Qcow_cluster_map.Junk.get cluster_map in
+        let nr_junk = Cluster.to_int64 @@ Cluster.IntervalSet.cardinal junk in
         let moves = Qcow_cluster_map.start_moves cluster_map in
         Log.info (fun f -> f "block recycler: %Ld clusters are junk, %d moves are possible" nr_junk (List.length moves));
         Qcow_error.Lwt_write_error.or_fail_with @@ move_all t moves
@@ -507,7 +550,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
           | Error `Disconnected -> Lwt.fail_with "Disconnected"
           | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
-          | Ok _nr_updated -> loop ()
+          | Ok nr_updated ->
+            Log.info (fun f -> f "block recycler: %Ld block references updated" nr_updated);
+            loop ()
         end
       | `Resize ->
         resize ()

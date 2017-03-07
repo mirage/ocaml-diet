@@ -74,3 +74,5 @@ end
      [< `Disconnected | `Is_read_only | `Msg of string | `Unimplemented ])
       result Lwt.t -> 'a Lwt.t
 end
+
+exception Duplicate_reference of (int64 * int) * (int64 * int) * int64

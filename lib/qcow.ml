@@ -128,8 +128,10 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       (fun c ->
         let addresses = Metadata.Physical.of_contents c in
         let within = Physical.within_cluster ~cluster_bits:t.cluster_bits offset in
-        Metadata.Physical.set addresses within v;
-        Lwt.return (Ok ())
+        try
+          Metadata.Physical.set addresses within v;
+          Lwt.return (Ok ())
+        with e -> Lwt.fail e
       )
 
   (* Unmarshal a disk physical address written at a given offset within the disk. *)
@@ -802,9 +804,19 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                                   then inner (Int64.add acc sectors_per_cluster) (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
                                   else begin
                                     (* The data at [data_offset] is about to become an unreferenced
-                                    hole in the file *)
-                                    Metadata.Physical.set addresses within Physical.unmapped;
-                                    t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
+                                       hole in the file *)
+                                    let current = Metadata.Physical.get addresses within in
+                                    ( if current <> Physical.unmapped then begin
+                                        Locks.Write.with_lock t.locks ?client (Physical.cluster ~cluster_bits:t.cluster_bits current)
+                                          (fun () ->
+                                            (* It's important to hold the write lock because we might
+                                               be about to erase or copy this block *)
+                                            Metadata.Physical.set addresses within Physical.unmapped;
+                                            t.stats.Stats.nr_unmapped <- Int64.add t.stats.Stats.nr_unmapped sectors_per_cluster;
+                                            Lwt.return (Ok ())
+                                          )
+                                      end else Lwt.return (Ok ()) )
+                                    >>= fun () ->
                                     Refcount.decr t (Physical.cluster ~cluster_bits:t.cluster_bits data_offset)
                                     >>= fun () ->
                                     inner (Int64.add acc sectors_per_cluster) (Int64.add sector sectors_per_cluster) (Int64.sub n sectors_per_cluster)
@@ -867,7 +879,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       loop work.sector work.bufs work.metadata_locks next_sector' [] rest
 
   exception Reference_outside_file of int64 * int64
-  exception Duplicate_reference of int64 * int64 * int64
 
   let make_cluster_map t =
     let open Qcow_cluster_map in
@@ -926,10 +937,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           let c', w' = Cluster.Map.find cluster !refs in
           Log.err (fun f -> f "Found two references to cluster %s: %s.%d and %s.%d"
             (Cluster.to_string cluster) (Cluster.to_string c) w (Cluster.to_string c') w');
-          let ref1 = Int64.add (Int64.of_int w) (Cluster.to_int64 c <| (Int32.to_int t.h.Header.cluster_bits)) in
-          let ref2 = Int64.add (Int64.of_int w') (Cluster.to_int64 c' <| (Int32.to_int t.h.Header.cluster_bits)) in
-          let dst = Cluster.to_int64 cluster <| (Int32.to_int t.h.Header.cluster_bits) in
-          raise (Duplicate_reference(ref1, ref2, dst))
+          raise (Error.Duplicate_reference((Cluster.to_int64 c, w), (Cluster.to_int64 c', w'), Cluster.to_int64 cluster))
         end;
         Qcow_bitmap.(remove (Interval.make (Cluster.to_int64 cluster) (Cluster.to_int64 cluster)) free);
         refs := Cluster.Map.add cluster rf !refs;
@@ -1184,7 +1192,19 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             (fun () ->
               Locks.Read.with_locks t.locks ~first ~last
                 (fun () ->
-                  B.read t.base work.sector work.bufs
+                  Lwt.catch
+                    (fun () ->
+                      B.read t.base work.sector work.bufs
+                    ) (fun e ->
+                      Log.err (fun f -> f "%s: low-level I/O exception %s" (describe_fn ()) (Printexc.to_string e));
+                      Locks.Debug.dump_state t.locks;
+                      let cluster = Cluster.of_int (Int64.to_int work.sector / sectors_per_cluster) in
+                      Qcow_debug.check_references t.metadata t.cluster_map ~cluster_bits:t.cluster_bits cluster
+                      >>= fun _ ->
+                      Cache.Debug.check_disk t.cache
+                      >>= fun _ ->
+                      Lwt.fail e
+                    )
                 )
               >>= function
               | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
@@ -1217,10 +1237,20 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             | None ->
               (* Only the first write to this area needs to allocate, so it's ok
                  to make this a little slower *)
-              ClusterIO.walk_and_allocate ~client t vaddr
-              >>= fun (offset', l1_lock, l2_lock) ->
-              let sector = Physical.sector ~sector_size:t.sector_size offset' in
-              Lwt.return (Ok { sector; bufs = [ buf ]; metadata_locks = [ l1_lock; l2_lock ] })
+              Lwt.catch
+                (fun () ->
+                  ClusterIO.walk_and_allocate ~client t vaddr
+                  >>= fun (offset', l1_lock, l2_lock) ->
+                  let sector = Physical.sector ~sector_size:t.sector_size offset' in
+                  Lwt.return (Ok { sector; bufs = [ buf ]; metadata_locks = [ l1_lock; l2_lock ] })
+                ) (function
+                  | Error.Duplicate_reference((c, w), (c', w'), target) as e ->
+                    Log.err (fun f -> f "Duplicate_reference during %s" (describe_fn ()));
+                    Qcow_debug.on_duplicate_reference t.metadata t.cluster_map ~cluster_bits:t.cluster_bits (c, w) (c', w') target
+                    >>= fun () ->
+                    Lwt.fail e
+                  | e -> Lwt.fail e
+                )
             | Some (offset', l1_lock, l2_lock) ->
               let sector = Physical.sector ~sector_size:t.sector_size offset' in
               Lwt.return (Ok { sector; bufs = [ buf ]; metadata_locks = [ l1_lock; l2_lock ] })
@@ -1254,12 +1284,24 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               loop first;
               Lwt.finalize
                 (fun () ->
-                  B.write t.base work.sector work.bufs
-                  >>= function
-                  | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-                  | Error `Disconnected -> Lwt.return (Error `Disconnected)
-                  | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-                  | Ok () -> Lwt.return (Ok ())
+                  Lwt.catch
+                    (fun () ->
+                      B.write t.base work.sector work.bufs
+                      >>= function
+                      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+                      | Error `Disconnected -> Lwt.return (Error `Disconnected)
+                      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+                      | Ok () -> Lwt.return (Ok ())
+                    ) (fun e ->
+                      Log.err (fun f -> f "%s: low-level I/O exception %s" (describe_fn ()) (Printexc.to_string e));
+                      Locks.Debug.dump_state t.locks;
+                      let cluster = Cluster.of_int (Int64.to_int work.sector / sectors_per_cluster) in
+                      Qcow_debug.check_references t.metadata t.cluster_map ~cluster_bits:t.cluster_bits cluster
+                      >>= fun _ ->
+                      Cache.Debug.check_disk t.cache
+                      >>= fun _ ->
+                      Lwt.fail e
+                    )
                 ) (fun () ->
                   List.iter Locks.unlock work.metadata_locks;
                   Lwt.return_unit
@@ -1376,21 +1418,35 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       let offset = cluster <| cluster_bits in
       let sector = Int64.(div offset (of_int sector_size)) in
       let open Lwt.Infix in
-      B.read base sector [ buf ]
-      >>= function
-      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-      | Error `Disconnected -> Lwt.return (Error `Disconnected)
-      | Ok () -> Lwt.return (Ok buf) in
+      Lwt.catch
+        (fun () ->
+          B.read base sector [ buf ]
+          >>= function
+          | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+          | Error `Disconnected -> Lwt.return (Error `Disconnected)
+          | Ok () -> Lwt.return (Ok buf)
+        ) (fun e ->
+          Log.err (fun f -> f "read_cluster %Ld: low-level I/O exception %s" cluster (Printexc.to_string e));
+          Locks.Debug.dump_state locks;
+          Lwt.fail e
+        ) in
     let write_cluster i buf =
       let cluster = Cluster.to_int64 i in
       let offset = cluster <| cluster_bits in
       let sector = Int64.(div offset (of_int sector_size)) in
-      B.write base sector [ buf ]
-      >>= function
-      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-      | Error `Disconnected -> Lwt.return (Error `Disconnected)
-      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-      | Ok () -> Lwt.return (Ok ()) in
+      Lwt.catch
+        (fun () ->
+          B.write base sector [ buf ]
+          >>= function
+          | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+          | Error `Disconnected -> Lwt.return (Error `Disconnected)
+          | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+          | Ok () -> Lwt.return (Ok ())
+        ) (fun e ->
+          Log.err (fun f -> f "write_cluster %Ld: low-level I/O exception %s" cluster (Printexc.to_string e));
+          Locks.Debug.dump_state locks;
+          Lwt.fail e
+        ) in
     let cache = Cache.create ~read_cluster ~write_cluster () in
     let metadata = Metadata.make ~cache ~cluster_bits ~locks () in
     let recycler = Recycler.create ~base ~sector_size ~cluster_bits ~cache ~locks ~metadata ~runtime_asserts:config.Config.runtime_asserts in
@@ -1507,7 +1563,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Lwt.return (Ok { free; used })
       ) (function
         | Reference_outside_file(src, dst) -> Lwt.return (Error (`Reference_outside_file(src, dst)))
-        | Duplicate_reference(ref1, ref2, dst) -> Lwt.return (Error (`Duplicate_reference(ref1, ref2, dst)))
+        | Error.Duplicate_reference((c, w), (c', w'), dst) -> Lwt.return (Error (`Duplicate_reference((c, w), (c', w'), dst)))
         | e -> Lwt.fail e)
 
   let resize t ~new_size:requested_size_bytes ?(ignore_data_loss=false) () =

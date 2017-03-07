@@ -132,11 +132,6 @@ module Debug = struct
   include Qcow_rwlock.Debug
 
   let dump_state t =
-    Cluster.Map.iter
-      (fun cluster (lock, rf) ->
-        Log.info (fun f -> f "Cluster %s refcount %d locks = %s"
-          (Cluster.to_string cluster) rf
-          (Sexplib.Sexp.to_string @@ Qcow_rwlock.sexp_of_t lock)
-        )
-      ) t.locks
+    let locks = List.map fst @@ List.map snd @@ Cluster.Map.bindings t.locks in
+    Log.info (fun f -> f "%s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ Qcow_rwlock.sexp_of_ts locks))
 end

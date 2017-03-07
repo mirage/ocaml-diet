@@ -88,3 +88,5 @@ module Lwt_write_error = struct
     | Error `Disconnected -> Lwt.fail_with "disconnected"
     | Ok x -> Lwt.return x
 end
+
+exception Duplicate_reference of (int64 * int) * (int64 * int) * int64

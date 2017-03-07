@@ -43,6 +43,8 @@ and client = {
   mutable my_locks: lock list;
 }
 
+type ts = t list
+
 let make t_description_fn =
   let m = Lwt_mutex.create () in
   let c = Lwt_condition.create () in
@@ -69,6 +71,9 @@ module To_sexp = struct
     description: string;
     clients: Client.t list;
   } [@@deriving sexp_of]
+  let rec setify eq = function
+    | [] -> []
+    | x :: xs -> if List.filter (fun y -> eq x y) xs <> [] then setify eq xs else x :: (setify eq xs)
   let lock l =
     let description = l.t.t_description_fn () in
     let mode = if l.reader then `Read else `Write in
@@ -76,17 +81,20 @@ module To_sexp = struct
     { Lock.description; mode; released }
   let client c =
     let description = c.client_description_fn () in
-    let locks = List.map lock c.my_locks in
+    (* Make the per-client list easier to read by de-duplicating it *)
+    let locks = setify ( = ) @@ List.map lock c.my_locks in
     { Client.description; locks }
   let t t =
     let description = t.t_description_fn () in
-    let rec setify = function
-      | [] -> []
-      | x :: xs -> if List.filter (fun y -> x == y) xs <> [] then setify xs else x :: (setify xs) in
-    let clients = List.map client @@ setify @@ List.map (fun l -> l.client) t.all_locks in
+    let clients = List.map client @@ setify ( == ) @@ List.map (fun l -> l.client) t.all_locks in
     { description; clients }
+  type ts = Client.t list [@@deriving sexp_of]
+  let ts ts =
+    let all_locks = List.concat @@ List.map (fun t -> t.all_locks) ts in
+    List.map client @@ setify ( == ) @@ List.map (fun l -> l.client) all_locks
 end
 let sexp_of_t x = To_sexp.(sexp_of_t @@ t x)
+let sexp_of_ts xs = To_sexp.(sexp_of_ts @@ ts xs)
 let sexp_of_client x = To_sexp.(Client.sexp_of_t @@ client x)
 
 let anon_client =

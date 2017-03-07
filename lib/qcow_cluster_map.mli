@@ -73,6 +73,8 @@ module type MutableSet = sig
   val remove: t -> Cluster.IntervalSet.t -> unit
   (** [remove t less] removes [less] from the set *)
 
+  val mem: t -> Cluster.t -> bool
+  (** [mem t cluster] is true if [cluster] is in [t] *)
 end
 
 val zero: t
@@ -132,6 +134,9 @@ val moves: t -> move Cluster.Map.t
 
 val set_move_state: t -> Move.t -> move_state -> unit
 (** Update the state of the given move operation *)
+
+val is_moving: t -> Cluster.t -> bool
+(** [is_moving t cluster] returns true if [cluster] is still moving *)
 
 val cancel_move: t -> Cluster.t -> unit
 (** [cancel_move cluster] cancels any in-progress move of cluster [cluster].
