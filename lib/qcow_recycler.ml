@@ -236,9 +236,14 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           | Some lock ->
             Lwt.finalize
               (fun () ->
+                (* The flush function will call complete move for all moves with state Referenced.
+                   However these won't actually have hit the disk until Metadata.update returns
+                   and the disk write has been performed. *)
+                Lwt_mutex.with_lock t.flush_m
+                (fun () ->
                 Metadata.update ~client t.metadata ref_cluster
                   (fun c ->
-                    Log.debug (fun f -> f "Updating references in cluster %s" (Cluster.to_string ref_cluster));
+                    Log.info (fun f -> f "Updating %d references in cluster %s" (List.length moves) (Cluster.to_string ref_cluster));
                     let addresses = Metadata.Physical.of_contents c in
                     try
                       let result = List.fold_left
@@ -318,6 +323,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                     | e ->
                       Qcow_cluster_map.Debug.assert_no_leaked_blocks cluster_map;
                       raise e
+                  )
                   )
               ) (fun () ->
                 Locks.unlock lock;
