@@ -1,3 +1,21 @@
+## 0.9.4 (2017-03-07)
+- Strictly enforce the cluster move state machine
+- Don't start moving new blocks while existing moves are in progress
+  (fix bug where the same destination block could be reused)
+- Hold a lock to exclude `flush` while updating references to ensure
+  reference updates hit the disk before the move is considered complete
+- Simplify allocator by always adding blocks to the Roots set before
+  returning. The caller must transfer them somewhere else.
+- Simplify the cluster moving API by combining `get_moves` with
+  `start_moves`, so it's not possible to block and affect the moves
+  which can legally be started
+- When detecting a duplicate reference or hitting an I/O error, log
+  analysis of the internal state
+- Check for move cancellation before copying a block to avoid accidentally
+  copying a block which is now outside the file
+- Avoid adding a cluster to the Junk set twice during a reference update
+- Add lots of assertions
+
 ## 0.9.3 (2017-03-02)
 - Hold a read lock on the L1 during read/write
 - Minimise locking while updating references
