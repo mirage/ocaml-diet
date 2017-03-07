@@ -372,12 +372,12 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
               nr_flushed, nr_completed + 1
             ) moves (0, 0) in
           let nr_erased = Cluster.to_int @@ Cluster.IntervalSet.cardinal erased in
+          Qcow_cluster_map.(set_cluster_state cluster_map erased Erased Available);
           if nr_flushed <> 0 || nr_completed <> 0 || nr_erased <> 0 then begin
             Log.info (fun f -> f "block recycler: %d cluster copies flushed; %d cluster copies complete; %d clusters erased"
               nr_flushed nr_completed nr_erased);
             Log.info (fun f -> f "block recycler: flush: %s" (Qcow_cluster_map.to_summary_string cluster_map));
           end;
-          Qcow_cluster_map.(set_cluster_state cluster_map erased Erased Available);
           Lwt.return (Ok ())
       )
 
@@ -550,7 +550,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
           | Error `Disconnected -> Lwt.fail_with "Disconnected"
           | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
-          | Ok _nr_updated -> loop ()
+          | Ok nr_updated ->
+            Log.info (fun f -> f "block recycler: %Ld block references updated" nr_updated);
+            loop ()
         end
       | `Resize ->
         resize ()
