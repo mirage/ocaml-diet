@@ -564,9 +564,8 @@ let complete_move t move =
   | Some Referenced ->
     t.moves <- Cluster.Map.remove move.Move.src t.moves;
     let dst = Cluster.IntervalSet.(add (Interval.make move.Move.dst move.Move.dst) empty) in
-    Copies.remove t dst;
-    let src = Cluster.IntervalSet.(add (Interval.make move.Move.src move.Move.src) empty) in
-    Junk.add t src
+    Copies.remove t dst
+    (* The source block will have already been added to Junk by the Metadata.Physical.set *)
   | Some old ->
     Log.err (fun f -> f "Illegal cluster move state transition: %s %s -> Completed" (Cluster.to_string move.Move.src)
       (string_of_move_state old)
