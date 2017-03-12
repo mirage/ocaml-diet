@@ -1032,6 +1032,9 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
   }
 
   let compact t ?(progress_cb = fun ~percent:_ -> ()) () =
+    if t.config.Config.read_only
+    then Lwt.return (Error `Is_read_only)
+    else begin
     (* We will return a cancellable task to the caller, and on cancel we will
        set the cancel_requested flag. The main compact loop will detect this
        and complete the moves already in progress before returning. *)
@@ -1136,6 +1139,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Lwt.return_unit
       );
     th
+    end
 
   (* If a request from the client takes more than ~30s then the client may
      decide that the storage layer has failed. This could happen if a thread
@@ -1222,7 +1226,9 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   let write t sector bufs =
     let describe_fn () = Printf.sprintf "write sector = %Ld length = %d" sector (Cstructs.len bufs) in
-    with_deadline t describe_fn time_30s
+    if t.config.Config.read_only
+    then Lwt.return (Error `Is_read_only)
+    else with_deadline t describe_fn time_30s
       (fun () ->
         let open Lwt_write_error.Infix in
         let cluster_size = 1L <| t.cluster_bits in
@@ -1431,28 +1437,31 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
           Lwt.fail e
         ) in
     let write_cluster i buf =
-      let cluster = Cluster.to_int64 i in
-      let offset = cluster <| cluster_bits in
-      let sector = Int64.(div offset (of_int sector_size)) in
-      Lwt.catch
-        (fun () ->
-          B.write base sector [ buf ]
-          >>= function
-          | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-          | Error `Disconnected -> Lwt.return (Error `Disconnected)
-          | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-          | Ok () -> Lwt.return (Ok ())
-        ) (fun e ->
-          Log.err (fun f -> f "write_cluster %Ld: low-level I/O exception %s" cluster (Printexc.to_string e));
-          Locks.Debug.dump_state locks;
-          Lwt.fail e
-        ) in
+      if config.Config.read_only
+      then Lwt.return (Error `Is_read_only)
+      else begin
+        let cluster = Cluster.to_int64 i in
+        let offset = cluster <| cluster_bits in
+        let sector = Int64.(div offset (of_int sector_size)) in
+        Lwt.catch
+          (fun () ->
+            B.write base sector [ buf ]
+            >>= function
+            | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+            | Error `Disconnected -> Lwt.return (Error `Disconnected)
+            | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+            | Ok () -> Lwt.return (Ok ())
+          ) (fun e ->
+            Log.err (fun f -> f "write_cluster %Ld: low-level I/O exception %s" cluster (Printexc.to_string e));
+            Locks.Debug.dump_state locks;
+            Lwt.fail e
+          )
+      end in
     let cache = Cache.create ~read_cluster ~write_cluster () in
     let metadata = Metadata.make ~cache ~cluster_bits ~locks () in
     let recycler = Recycler.create ~base ~sector_size ~cluster_bits ~cache ~locks ~metadata ~runtime_asserts:config.Config.runtime_asserts in
     let lazy_refcounts = match h.Header.additional with Some { Header.lazy_refcounts = true; _ } -> true | _ -> false in
     let stats = Stats.zero in
-    let t = ref None in
     let cluster_map = Qcow_cluster_map.zero in
     let cluster_map_m = Lwt_mutex.create () in
     let t' = {
@@ -1474,53 +1483,60 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let size_clusters = Cluster.succ last_block in
     let p = Physical.make ((Cluster.to_int size_clusters) lsl cluster_bits) in
     let size_sectors = Physical.sector ~sector_size p in
-    Lwt_write_error.or_fail_with @@ resize_base base sector_size None p
-    >>= fun () ->
-    Log.info (fun f -> f "Resized file to %s clusters (%Ld sectors)" (Cluster.to_string size_clusters) size_sectors);
-    Qcow_cluster_map.resize cluster_map size_clusters;
-
+    ( if config.Config.read_only
+      then Lwt.return_unit
+      else begin
+        Lwt_write_error.or_fail_with @@ resize_base base sector_size None p
+        >>= fun () ->
+        Log.info (fun f -> f "Resized file to %s clusters (%Ld sectors)" (Cluster.to_string size_clusters) size_sectors);
+        Qcow_cluster_map.resize cluster_map size_clusters;
+        Lwt.return_unit
+      end ) >>= fun () ->
     t'.cluster_map <- cluster_map;
     Metadata.set_cluster_map t'.metadata cluster_map;
     Recycler.set_cluster_map t'.recycler cluster_map;
-    ( match config.Config.keep_erased with
-      | None -> ()
-      | Some sectors ->
-        let keep_erased = Int64.(div (mul sectors (of_int sector_size)) cluster_size) in
-        let compact_after_unmaps = match config.Config.compact_after_unmaps with
-          | None -> None
-          | Some sectors -> Some (Int64.(div (mul sectors (of_int sector_size)) cluster_size)) in
-        Recycler.start_background_thread t'.recycler ~keep_erased ?compact_after_unmaps () );
-    ( if config.Config.discard && not(lazy_refcounts) then begin
-        Log.info (fun f -> f "discard requested and lazy_refcounts is disabled: erasing refcount table and enabling lazy_refcounts");
-        Lwt_error.or_fail_with @@ ClusterIO.Refcount.zero_all t'
-        >>= fun () ->
-        let additional = match h.Header.additional with
-          | Some h -> { h with Header.lazy_refcounts = true }
-          | None -> {
-            Header.dirty = true;
-            corrupt = false;
-            lazy_refcounts = true;
-            autoclear_features = 0L;
-            refcount_order = 4l;
-            } in
-        let extensions = [
-          `Feature_name_table Header.Feature.understood
-        ] in
-        let h = { h with Header.additional = Some additional; extensions } in
-        Lwt_write_error.or_fail_with @@ update_header t' h
-        >>= fun () ->
-        t'.lazy_refcounts <- true;
-        Lwt.return_unit
-      end else Lwt.return_unit )
-    >>= fun () ->
-    t := Some t';
-    Recycler.flush t'.recycler
-    >>= function
-    | Error _ ->
-      Log.err (fun f -> f "initial flush failed");
-      Lwt.fail (Failure "initial flush failed")
-    | Ok () ->
-      Lwt.return t'
+    if config.Config.read_only
+    then Lwt.return t'
+    else begin
+      ( match config.Config.keep_erased with
+        | None -> ()
+        | Some sectors ->
+          let keep_erased = Int64.(div (mul sectors (of_int sector_size)) cluster_size) in
+          let compact_after_unmaps = match config.Config.compact_after_unmaps with
+            | None -> None
+            | Some sectors -> Some (Int64.(div (mul sectors (of_int sector_size)) cluster_size)) in
+          Recycler.start_background_thread t'.recycler ~keep_erased ?compact_after_unmaps () );
+      ( if config.Config.discard && not(lazy_refcounts) then begin
+          Log.info (fun f -> f "discard requested and lazy_refcounts is disabled: erasing refcount table and enabling lazy_refcounts");
+          Lwt_error.or_fail_with @@ ClusterIO.Refcount.zero_all t'
+          >>= fun () ->
+          let additional = match h.Header.additional with
+            | Some h -> { h with Header.lazy_refcounts = true }
+            | None -> {
+              Header.dirty = true;
+              corrupt = false;
+              lazy_refcounts = true;
+              autoclear_features = 0L;
+              refcount_order = 4l;
+              } in
+          let extensions = [
+            `Feature_name_table Header.Feature.understood
+          ] in
+          let h = { h with Header.additional = Some additional; extensions } in
+          Lwt_write_error.or_fail_with @@ update_header t' h
+          >>= fun () ->
+          t'.lazy_refcounts <- true;
+          Lwt.return_unit
+        end else Lwt.return_unit )
+      >>= fun () ->
+      Recycler.flush t'.recycler
+      >>= function
+      | Error _ ->
+        Log.err (fun f -> f "initial flush failed");
+        Lwt.fail (Failure "initial flush failed")
+      | Ok () ->
+        Lwt.return t'
+    end
 
   let connect ?(config=Config.default) base =
     let open Lwt.Infix in
@@ -1556,7 +1572,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let open Qcow_cluster_map in
     Lwt.catch
       (fun () ->
-        connect base
+        let config = Config.create ~read_only:true () in
+        connect ~config base
         >>= fun t ->
         let free = total_free t.cluster_map in
         let used = total_used t.cluster_map in
@@ -1567,7 +1584,9 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         | e -> Lwt.fail e)
 
   let resize t ~new_size:requested_size_bytes ?(ignore_data_loss=false) () =
-
+    if t.config.Config.read_only
+    then Lwt.return (Error `Is_read_only)
+    else begin
         let existing_size = t.h.Header.size in
         if existing_size > requested_size_bytes && not ignore_data_loss
         then Lwt.return (Error(`Msg (Printf.sprintf "Requested resize would result in data loss: requested size = %Ld but current size = %Ld" requested_size_bytes existing_size)))
@@ -1586,6 +1605,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             size
           }
         end
+    end
 
   let zero =
     let page = Io_page.(to_cstruct (get 1)) in
