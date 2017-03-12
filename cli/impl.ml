@@ -396,7 +396,8 @@ let sha _common_options_t filename =
   let t =
     Block.connect filename
     >>= fun x ->
-    B.connect x
+    let config = B.Config.create ~read_only:true () in
+    B.connect ~config x
     >>= fun x ->
     B.get_info x
     >>= fun info ->

@@ -1572,7 +1572,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     let open Qcow_cluster_map in
     Lwt.catch
       (fun () ->
-        connect base
+        let config = Config.create ~read_only:true () in
+        connect ~config base
         >>= fun t ->
         let free = total_free t.cluster_map in
         let used = total_used t.cluster_map in
