@@ -1,3 +1,8 @@
+## 0.9.5 (2017-03-12)
+- CLI: `check` and `sha` will nolonger resize the file as a side-effect
+  (#84)
+- Allow the number of `cluster_bits` to be set in `create`
+
 ## 0.9.4 (2017-03-07)
 - Strictly enforce the cluster move state machine
 - Don't start moving new blocks while existing moves are in progress
