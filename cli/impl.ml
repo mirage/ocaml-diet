@@ -81,6 +81,14 @@ module UnsafeBlock = struct
   let flush _ = Lwt.return (Ok ())
 end
 
+module ReadOnlyBlock = struct
+  include UnsafeBlock
+  let write _ _ _ =
+    failwith "write to a read-only virtual device"
+  let resize _ _ =
+    failwith "attempt to resize a read-only virtual device"
+end
+
 let handle_common common_options_t =
   if common_options_t.Common.debug then begin
     List.iter
@@ -185,7 +193,7 @@ let read filename sector length trace =
   Lwt_main.run t
 
 let check filename =
-  let module B = Qcow.Make(Block)(Time) in
+  let module B = Qcow.Make(ReadOnlyBlock)(Time) in
   let open Lwt in
   let t =
   let rec retry = function
@@ -383,7 +391,7 @@ let repair unsafe_buffering filename =
   )
 
 let sha _common_options_t filename =
-  let module B = Qcow.Make(Block)(Time) in
+  let module B = Qcow.Make(ReadOnlyBlock)(Time) in
   let open Lwt in
   let t =
     Block.connect filename
