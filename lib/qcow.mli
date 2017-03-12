@@ -28,6 +28,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
       compact_after_unmaps: int64 option; (** automatically compact after n sectors are unmapped *)
       check_on_connect: bool; (** perform an integrity check on connect *)
       runtime_asserts: bool; (** check cluster invariants at runtime *)
+      read_only: bool; (** guarantee to not modify the file *)
     }
     (** Runtime configuration of a device *)
 
@@ -35,7 +36,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
       ?keep_erased:int64 ->
       ?compact_after_unmaps:int64 ->
       ?check_on_connect:bool ->
-      ?runtime_asserts:bool -> unit -> t
+      ?runtime_asserts:bool ->
+      ?read_only:bool -> unit -> t
     (** Customise the runtime behaviour, see [connect] or [create] *)
 
     val to_string: t -> string

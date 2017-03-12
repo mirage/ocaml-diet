@@ -21,15 +21,16 @@ type t = {
   compact_after_unmaps: int64 option;
   check_on_connect: bool;
   runtime_asserts: bool;
+  read_only: bool;
 }
-let create ?(discard=false) ?keep_erased ?compact_after_unmaps ?(check_on_connect=true) ?(runtime_asserts=false) () =
-  { discard; keep_erased; compact_after_unmaps; check_on_connect; runtime_asserts }
-let to_string t = Printf.sprintf "discard=%b;keep_erased=%scompact_after_unmaps=%s;check_on_connect=%b;runtime_asserts=%b"
+let create ?(discard=false) ?keep_erased ?compact_after_unmaps ?(check_on_connect=true) ?(runtime_asserts=false) ?(read_only=false) () =
+  { discard; keep_erased; compact_after_unmaps; check_on_connect; runtime_asserts; read_only }
+let to_string t = Printf.sprintf "discard=%b;keep_erased=%scompact_after_unmaps=%s;check_on_connect=%b;runtime_asserts=%b;read_only=%b"
     t.discard
     (match t.keep_erased with None -> "0" | Some x -> Int64.to_string x)
     (match t.compact_after_unmaps with None -> "0" | Some x -> Int64.to_string x)
-    t.check_on_connect t.runtime_asserts
-let default = { discard = false; keep_erased = None; compact_after_unmaps = None; check_on_connect = true; runtime_asserts = false }
+    t.check_on_connect t.runtime_asserts t.read_only
+let default = { discard = false; keep_erased = None; compact_after_unmaps = None; check_on_connect = true; runtime_asserts = false; read_only = false }
 let of_string txt =
   let open Astring in
   try
@@ -48,6 +49,7 @@ let of_string txt =
               { t with compact_after_unmaps }
             | "check_on_connect" -> { t with check_on_connect = bool_of_string v }
             | "runtime_asserts" -> { t with runtime_asserts = bool_of_string v }
+            | "read_only" -> { t with read_only = bool_of_string v }
             | x -> failwith ("Unknown qcow configuration key: " ^ x)
           end
       ) default strings)

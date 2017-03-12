@@ -30,11 +30,14 @@ type t = {
 
   runtime_asserts: bool;
   (** constantly verify GC invariants are held *)
+
+  read_only: bool;
+  (** guarantee to not modify the file *)
 }
 
 val create: ?discard:bool -> ?keep_erased:int64 ->
   ?compact_after_unmaps:int64 -> ?check_on_connect:bool ->
-  ?runtime_asserts:bool ->
+  ?runtime_asserts:bool -> ?read_only:bool ->
   unit -> t
 
 val default: t
