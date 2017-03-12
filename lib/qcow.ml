@@ -145,11 +145,11 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     Lwt.return (Ok (Metadata.Physical.get addresses within, lock))
 
   let update_header t h =
-    let page = Io_page.(to_cstruct (get 1)) in
-    match Header.write h page with
+    let cluster = malloc t.h in
+    match Header.write h cluster with
     | Result.Ok _ -> begin
       let open Lwt.Infix in
-        B.write t.base 0L [ page ]
+        B.write t.base 0L [ cluster ]
         >>= function
         | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
         | Error `Disconnected -> Lwt.return (Error `Disconnected)
