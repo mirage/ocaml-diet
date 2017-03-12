@@ -145,11 +145,11 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     Lwt.return (Ok (Metadata.Physical.get addresses within, lock))
 
   let update_header t h =
-    let page = Io_page.(to_cstruct (get 1)) in
-    match Header.write h page with
+    let cluster = malloc t.h in
+    match Header.write h cluster with
     | Result.Ok _ -> begin
       let open Lwt.Infix in
-        B.write t.base 0L [ page ]
+        B.write t.base 0L [ cluster ]
         >>= function
         | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
         | Error `Disconnected -> Lwt.return (Error `Disconnected)
@@ -1658,11 +1658,10 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         erase t ~sector:(Int64.add sector' to_discard) ~n:(Int64.sub n' to_discard) ()
     )
 
-  let create base ~size ?(lazy_refcounts=true) ?(config = Config.default) () =
+  let create base ~size ?(lazy_refcounts=true) ?(cluster_bits=16) ?(config = Config.default) () =
     let version = `Three in
     let backing_file_offset = 0L in
     let backing_file_size = 0l in
-    let cluster_bits = 16 in
     let cluster_size = 1 lsl cluster_bits in
     let crypt_method = `None in
     (* qemu-img places the refcount table next in the file and only

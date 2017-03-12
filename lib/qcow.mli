@@ -55,12 +55,19 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
   end
 
   val create: B.t -> size:int64 -> ?lazy_refcounts:bool
+      -> ?cluster_bits:int
       -> ?config:Config.t -> unit
       -> (t, write_error) result io
-  (** [create block ~size ?lazy_refcounts ()] initialises a qcow-formatted
-      image on [block] with virtual size [size] in bytes. By default the file
-      will use lazy refcounts, but this can be overriden by supplying
-      [~lazy_refcounts:false] *)
+  (** [create block ~size ?lazy_refcounts ?cluster_bits ?config ()] initialises
+      a qcow-formatted image on [block] with virtual size [size] in bytes.
+
+      By default the file will use lazy refcounts, but this can be overriden by supplying
+      [~lazy_refcounts:false]. By default the file will use 64KiB clusters (= 16 bits)
+      but this can be overridden by supplying [?cluster_bits]. Note the cluster size
+      must be greater than the sector size on the underlying block device.
+
+      The [?config] argument does not affect the on-disk format but rather the
+      behaviour as seen from this client. *)
 
   val connect: ?config:Config.t -> B.t -> t io
   (** [connect ?config block] connects to an existing qcow-formatted image on
