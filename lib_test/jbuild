@@ -6,7 +6,7 @@
 (alias
  ((name runtest)
   (deps (test.exe))
-  (action (run ${<} -runner sequential))
+  (action (run ${<} -runner sequential -verbose true))
 ))
 
 (alias
