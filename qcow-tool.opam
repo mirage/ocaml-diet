@@ -10,7 +10,8 @@ tags: [
 ]
 
 depends: [
-  "astring"
+  "qcow"
+  "cmdliner"
   "cstruct"
   "result"
   "mirage-types-lwt" {>= "3.0.0"}
@@ -20,16 +21,14 @@ depends: [
   "mirage-block-unix" {>= "2.1.0"}
   "mirage-time"
   "mirage-time-lwt"
-  "cmdliner"
+  "sha"
   "sexplib"
   "logs"
   "fmt"
+  "astring"
   "io-page"
   "ocamlfind" {build}
   "jbuilder" {build}
-  "ppx_tools" {build}
-  "ppx_sexp_conv" {build}
-  "ppx_type_conv" {build}
   "ounit" {test}
   "mirage-block-ramdisk" {test}
   "ezjsonm" {test}
@@ -37,7 +36,7 @@ depends: [
 ]
 
 build: [
-  [ "jbuilder" "build" "--only-packages=qcow" ]
+  [ "jbuilder" "build" ]
 ]
 
 build-test: [

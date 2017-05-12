@@ -7,6 +7,7 @@ sudo: required
 dist: trusty
 env:
   global:
-    - PACKAGE="qcow-format" OCAML_VERSION=4.03
+    - PACKAGE="qcow-tool" OCAML_VERSION=4.03
+    - PINS="qcow:."
     - COV_CONF="export TESTS=--enable-tests"
     - PRE_INSTALL_HOOK="sudo apt-get install qemu-utils -y"
