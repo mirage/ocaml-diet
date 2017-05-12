@@ -67,21 +67,6 @@ module type RESIZABLE_BLOCK = sig
       mode *)
 end
 
-module type DEBUG = sig
-  type t
-  type error
-
-  val check_no_overlaps: t -> (unit, error) result Lwt.t
-
-  val assert_no_leaked_blocks: t -> unit
-
-  val assert_cluster_map_in_sync: t -> unit Lwt.t
-
-  module Setting: sig
-    val compact_mid_write: bool ref
-  end
-end
-
 module type INTERVAL_SET = sig
   type elt
   (** The type of the set elements *)
