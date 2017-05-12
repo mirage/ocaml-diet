@@ -11,7 +11,6 @@ tags: [
 
 depends: [
   "astring"
-  "cmdliner"
   "cstruct"
   "result"
   "mirage-types-lwt" {>= "3.0.0"}
@@ -22,14 +21,12 @@ depends: [
   "mirage-time"
   "mirage-time-lwt"
   "cmdliner"
-  "sha"
   "sexplib"
   "logs"
   "fmt"
-  "astring"
   "io-page"
   "ocamlfind" {build}
-  "topkg" {build}
+  "jbuilder" {build}
   "ppx_tools" {build}
   "ppx_sexp_conv" {build}
   "ppx_type_conv" {build}
@@ -40,11 +37,11 @@ depends: [
 ]
 
 build: [
-  [ "ocaml" "detect_word_size.ml" ]
-  [ "ocaml" "pkg/pkg.ml" "build" "--pinned" "%{pinned}%" "--tests" "false" ]
+  [ "jbuilder" "build" "--only-packages=qcow" ]
 ]
+
 build-test: [
-  [ "ocaml" "pkg/pkg.ml" "build" "--pinned" "%{pinned}%" "--tests" "true" ]
-  [ "ocaml" "pkg/pkg.ml" "test" ]
+  [ make "test" ]
 ]
+
 available: [ocaml-version >= "4.03.0"]
