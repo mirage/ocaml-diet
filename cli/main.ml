@@ -300,6 +300,43 @@ let sha_cmd =
   Term.(ret(pure Impl.sha $ common_options_t $ filename)),
   Term.info "sha" ~sdocs:_common_options ~doc ~man
 
+let dehydrate_cmd =
+  let doc = "Extract only the metadata blocks for debugging" in
+  let man = [
+    `S "DESCRIPTION";
+    `P "Create 2 files: one containing metadata blocks and the second containing \
+        a map of block to physical offset in the file. When rehydrated the resulting \
+        file has the same structure as the original, but with none of the data. It \
+        is therefore safe to share the dehydrated file with other people without \
+        fearing data leaks. ";
+    `P "To dehydrate a file input.qcow2 and produce dehydrated.{map,meta}:";
+    `P "qcow-tool dehydrate input.qcow2 dehydrated";
+  ] @ help in
+  let output =
+    let doc = Printf.sprintf "Prefix of the output files" in
+    Arg.(value & pos 1 string "dehydrated" & info [] ~doc) in
+  Term.(ret(pure Impl.dehydrate $ common_options_t $ filename $ output)),
+  Term.info "dehydrate" ~sdocs:_common_options ~doc ~man
+
+let rehydrate_cmd =
+  let doc = "Create a qcow2 file from a previously dehydrated file" in
+  let man = [
+    `S "DESCRIPTION";
+    `P "Convert the files created by a previous call to dehydrate into a valid \
+        qcow file which has the same structure as the original, but with none of \
+        the data.";
+    `P "To rehydrate files dehydrated.{map,meta} into output.qcow2:";
+    `P "qcow-tool rehydrate dehydrated output.qcow2";
+  ] @ help in
+  let filename =
+    let doc = Printf.sprintf "Prefix of the input files" in
+    Arg.(value & pos 0 string "dehydrated" & info [] ~doc) in
+  let output =
+    let doc = Printf.sprintf "Output qcow2 file" in
+    Arg.(value & pos 1 string "output.qcow2" & info [] ~doc) in
+  Term.(ret(pure Impl.rehydrate $ common_options_t $ filename $ output)),
+  Term.info "rehydrate" ~sdocs:_common_options ~doc ~man
+
 let default_cmd =
   let doc = "manipulate virtual disks stored in qcow2 files" in
   let man = help in
@@ -308,7 +345,7 @@ let default_cmd =
 
 let cmds = [info_cmd; create_cmd; check_cmd; repair_cmd; encode_cmd; decode_cmd;
   write_cmd; read_cmd; mapped_cmd; resize_cmd; discard_cmd; compact_cmd;
-  pattern_cmd; sha_cmd ]
+  pattern_cmd; sha_cmd; dehydrate_cmd; rehydrate_cmd ]
 
 let _ =
   Logs.set_reporter (Logs_fmt.reporter ());

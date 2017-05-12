@@ -17,6 +17,7 @@
 module Error = Qcow_error
 module Header = Qcow_header
 module Physical = Qcow_physical
+module Int64 = Qcow_types.Int64
 
 module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
   include Mirage_block_lwt.S
@@ -156,5 +157,8 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
       (** true means to trigger a compact part-way through a write to check that
           the write completes properly after the compact *)
     end
+
+    val metadata_blocks: t -> Int64.IntervalSet.t
+    (** Return the set of physical disk offsets containing metadata *)
   end
 end

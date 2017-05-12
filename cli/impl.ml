@@ -15,6 +15,7 @@
  *
  *)
 open Result
+open Sexplib.Std
 open Qcow
 
 let expect_ok = function
@@ -670,3 +671,110 @@ let mapped filename _format ignore_zeroes =
     | Error `Unimplemented -> Lwt.return (`Error(false, "Unimplemented"))
     | Ok x -> Lwt.return (`Ok x)
   )
+
+let finally f g =
+  try
+    let r = f () in
+    g ();
+    r
+  with e ->
+    g ();
+    raise e
+
+type metadata = {
+  blocks: Qcow.Int64.IntervalSet.t;
+  total_size: int64;
+} [@@deriving sexp]
+
+let dehydrate _common input_filename output_filename =
+  let module B = Qcow.Make(ReadOnlyBlock)(Time) in
+  let open Lwt.Infix in
+  let t =
+
+    (* NB: all resources are only freed when the CLI exits. Don't copy this
+       code into a long-running program! *)
+
+    (* Extract the set of metadata blocks *)
+    Block.connect input_filename
+    >>= fun x ->
+    Block.get_info x
+    >>= fun info ->
+    let total_size = Int64.(mul info.Mirage_block.size_sectors (of_int info.Mirage_block.sector_size)) in
+
+    let config = B.Config.create ~read_only:true () in
+    B.connect ~config x
+    >>= fun qcow ->
+    let blocks = B.Debug.metadata_blocks qcow in
+    (* Open input and output file descriptors *)
+    let buffer = Cstruct.create 1048576 in
+    Lwt_unix.openfile input_filename [ Unix.O_RDONLY ] 0
+    >>= fun input_fd ->
+    Lwt_unix.openfile (output_filename ^ ".meta") [ Unix.O_EXCL; Unix.O_CREAT; Unix.O_WRONLY ] 0o0644
+    >>= fun output_fd ->
+    (* Append the metadata intervals from the `input_fd` to `metadata_fd` *)
+    Qcow.Int64.IntervalSet.fold_s
+      (fun i () ->
+        let x, y = Qcow.Int64.(IntervalSet.Interval.(x i, y i)) in
+        let rec loop x =
+          let remaining = Int64.(succ @@ sub y x) in
+          if remaining = 0L then Lwt.return_unit else begin
+            let this_time = min (Cstruct.len buffer) (Int64.to_int remaining) in
+            let fragment = Cstruct.sub buffer 0 this_time in
+            Lwt_unix.LargeFile.lseek input_fd x Lwt_unix.SEEK_SET
+            >>= fun _ ->
+            Lwt_cstruct.(complete (read input_fd) fragment)
+            >>= fun () ->
+            Lwt_cstruct.(complete (write output_fd) fragment)
+            >>= fun () ->
+            loop (Int64.add x remaining)
+          end in
+        loop x
+      ) blocks ()
+    >>= fun () ->
+    let metadata = { blocks; total_size } in
+    let sexp = sexp_of_metadata metadata in
+    Sexplib.Sexp.save_hum ~perm:0o0644 (output_filename ^ ".map") sexp;
+    Lwt.return (`Ok ()) in
+  Lwt_main.run t
+
+let rehydrate _common input_filename output_filename =
+  let open Lwt.Infix in
+  let t =
+
+    (* NB: all resources are only freed when the CLI exits. Don't copy this
+       code into a long-running program! *)
+
+    let sexp = Sexplib.Sexp.load_sexp (input_filename ^ ".map") in
+    let metadata = metadata_of_sexp sexp in
+    (* Open input and output file descriptors *)
+    let buffer = Cstruct.create 1048576 in
+    Lwt_unix.openfile (input_filename ^ ".meta") [ Unix.O_RDONLY ] 0o0644
+    >>= fun input_fd ->
+    Lwt_unix.openfile output_filename [ Unix.O_EXCL; Unix.O_CREAT; Unix.O_WRONLY ] 0o0644
+    >>= fun output_fd ->
+    Lwt_unix.LargeFile.lseek output_fd (Int64.pred metadata.total_size) Lwt_unix.SEEK_SET
+    >>= fun _ ->
+    Lwt_unix.write output_fd "\000" 0 1
+    >>= fun _ ->
+    (* Append the metadata intervals from the `input_fd` to `metadata_fd` *)
+    Qcow.Int64.IntervalSet.fold_s
+      (fun i () ->
+        let x, y = Qcow.Int64.(IntervalSet.Interval.(x i, y i)) in
+        let rec loop x =
+          let remaining = Int64.(succ @@ sub y x) in
+          if remaining = 0L then Lwt.return_unit else begin
+            let this_time = min (Cstruct.len buffer) (Int64.to_int remaining) in
+            let fragment = Cstruct.sub buffer 0 this_time in
+            Lwt_unix.LargeFile.lseek output_fd x Lwt_unix.SEEK_SET
+            >>= fun _ ->
+            Lwt_cstruct.(complete (read input_fd) fragment)
+            >>= fun () ->
+            Lwt_cstruct.(complete (write output_fd) fragment)
+            >>= fun () ->
+            loop (Int64.add x remaining)
+          end in
+        loop x
+      ) metadata.blocks ()
+    >>= fun () ->
+    Lwt.return (`Ok ()) in
+  Lwt_main.run t

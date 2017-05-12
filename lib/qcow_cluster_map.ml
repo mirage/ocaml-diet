@@ -238,6 +238,13 @@ module Debug = struct
       failwith "cluster maps are different"
     end
 
+  let metadata_blocks t =
+    let open Cluster.IntervalSet in
+    let header = add (Interval.make Cluster.zero (Cluster.pred t.first_movable_cluster)) empty in
+    (* All clusters which reference other clusters must be metadata *)
+    Cluster.Map.fold (fun _ (cluster, _) set ->
+      add (Interval.make cluster cluster) set
+    ) t.refs header
 end
 
 module type MutableSet = sig
