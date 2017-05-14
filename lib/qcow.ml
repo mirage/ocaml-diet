@@ -1553,22 +1553,14 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Ok (h, _) ->
         make config base h
         >>= fun t ->
-        make_cluster_map t
-        >>= function
-        | Error (`Reference_outside_file (src, dst)) -> Lwt.fail_with (Printf.sprintf "reference from %Ld to outside file %Ld: image is corrupt" src dst)
-        | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
-        | Error `Disconnected -> Lwt.fail_with "Disconnected"
-        | Error (`Msg m) -> Lwt.fail_with m
-        | Ok block_map ->
         let open Qcow_cluster_map in
-        let free = total_free block_map in
-        let used = total_used block_map in
+        let free = total_free t.cluster_map in
+        let used = total_used t.cluster_map in
         Log.info (fun f -> f "image has %Ld free sectors and %Ld used sectors" free used);
         Lwt.return t
 
   let check base =
     let open Lwt.Infix in
-
     let open Qcow_cluster_map in
     Lwt.catch
       (fun () ->
