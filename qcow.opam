@@ -13,6 +13,7 @@ depends: [
   "astring"
   "cstruct"
   "result"
+  "prometheus"
   "mirage-types-lwt" {>= "3.0.0"}
   "lwt"
   "mirage-block" {>= "0.2"}

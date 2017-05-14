@@ -880,7 +880,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   exception Reference_outside_file of int64 * int64
 
-  let make_cluster_map t =
+  let make_cluster_map t ?id () =
     let open Qcow_cluster_map in
     let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
     let open Lwt.Infix in
@@ -1015,7 +1015,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     >>= fun () ->
 
     let map = make ~free ~refs:(!refs) ~first_movable_cluster ~cache:t.cache
-      ~runtime_asserts:t.config.Config.runtime_asserts in
+      ~runtime_asserts:t.config.Config.runtime_asserts
+      ~id in
 
     Lwt.return (Ok map)
 
@@ -1470,7 +1471,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       metadata; cache; sector_size; cluster_bits; lazy_refcounts; stats;
       cluster_map; cluster_map_m;
     } in
-    Lwt_error.or_fail_with @@ make_cluster_map t'
+    Lwt_error.or_fail_with @@ make_cluster_map t' ~id:(config.Config.id) ()
     >>= fun cluster_map ->
     if config.Config.runtime_asserts
     then Qcow_cluster_map.Debug.assert_equal cluster_map cluster_map;
@@ -1538,7 +1539,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Lwt.return t'
     end
 
-  let connect ?(config=Config.default) base =
+  let connect ?(config=Config.default ()) base =
     let open Lwt.Infix in
     B.get_info base
     >>= fun base_info ->
@@ -1670,7 +1671,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         erase t ~sector:(Int64.add sector' to_discard) ~n:(Int64.sub n' to_discard) ()
     )
 
-  let create base ~size ?(lazy_refcounts=true) ?(cluster_bits=16) ?(config = Config.default) () =
+  let create base ~size ?(lazy_refcounts=true) ?(cluster_bits=16) ?(config = Config.default ()) () =
     let version = `Three in
     let backing_file_offset = 0L in
     let backing_file_size = 0l in
@@ -1910,7 +1911,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let assert_cluster_map_in_sync t =
       let open Lwt.Infix in
-      Lwt_error.or_fail_with @@ make_cluster_map t
+      Lwt_error.or_fail_with @@ make_cluster_map t ()
       >>= fun cluster_map ->
       Qcow_cluster_map.Debug.assert_equal cluster_map t.cluster_map;
       Lwt.return_unit

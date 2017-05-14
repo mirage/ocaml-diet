@@ -16,6 +16,7 @@
  *)
 
 type t = {
+  id: string;
   discard: bool;
   keep_erased: int64 option;
   compact_after_unmaps: int64 option;
@@ -23,14 +24,20 @@ type t = {
   runtime_asserts: bool;
   read_only: bool;
 }
-let create ?(discard=false) ?keep_erased ?compact_after_unmaps ?(check_on_connect=true) ?(runtime_asserts=false) ?(read_only=false) () =
-  { discard; keep_erased; compact_after_unmaps; check_on_connect; runtime_asserts; read_only }
-let to_string t = Printf.sprintf "discard=%b;keep_erased=%scompact_after_unmaps=%s;check_on_connect=%b;runtime_asserts=%b;read_only=%b"
-    t.discard
+let fresh_id =
+  let id = ref 0 in
+  fun () ->
+    let result = "unknown_" ^ (string_of_int !id) in
+    incr id;
+    result
+let create ?(id = fresh_id ()) ?(discard=false) ?keep_erased ?compact_after_unmaps ?(check_on_connect=true) ?(runtime_asserts=false) ?(read_only=false) () =
+  { id; discard; keep_erased; compact_after_unmaps; check_on_connect; runtime_asserts; read_only }
+let to_string t = Printf.sprintf "id=%s;discard=%b;keep_erased=%scompact_after_unmaps=%s;check_on_connect=%b;runtime_asserts=%b;read_only=%b"
+    t.id t.discard
     (match t.keep_erased with None -> "0" | Some x -> Int64.to_string x)
     (match t.compact_after_unmaps with None -> "0" | Some x -> Int64.to_string x)
     t.check_on_connect t.runtime_asserts t.read_only
-let default = { discard = false; keep_erased = None; compact_after_unmaps = None; check_on_connect = true; runtime_asserts = false; read_only = false }
+let default () = { id = fresh_id (); discard = false; keep_erased = None; compact_after_unmaps = None; check_on_connect = true; runtime_asserts = false; read_only = false }
 let of_string txt =
   let open Astring in
   try
@@ -40,6 +47,7 @@ let of_string txt =
         | None -> t
         | Some (k, v) ->
           begin match String.Ascii.lowercase k with
+            | "id" -> { t with id = v }
             | "discard" -> { t with discard = bool_of_string v }
             | "keep_erased" ->
               let keep_erased = if v = "0" then None else Some (Int64.of_string v) in
@@ -52,6 +60,6 @@ let of_string txt =
             | "read_only" -> { t with read_only = bool_of_string v }
             | x -> failwith ("Unknown qcow configuration key: " ^ x)
           end
-      ) default strings)
+      ) (default ()) strings)
   with
   | e -> Error (`Msg (Printexc.to_string e))
