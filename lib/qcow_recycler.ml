@@ -142,16 +142,21 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             )
       )
 
-  let rec move_all t = function
-    | [] -> Lwt.return (Ok ())
-    | m :: ms ->
-      let open Lwt.Infix in
-      move t m
-      >>= function
-      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
-      | Error `Disconnected -> Lwt.return (Error `Disconnected)
-      | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
-      | Ok () -> move_all t ms
+  let move_all ?(progress_cb = fun ~percent:_ -> ()) t moves =
+    let total = List.length moves in
+    let rec loop i = function
+      | [] -> Lwt.return (Ok ())
+      | m :: ms ->
+        let open Lwt.Infix in
+        move t m
+        >>= function
+        | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
+        | Error `Disconnected -> Lwt.return (Error `Disconnected)
+        | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
+        | Ok () ->
+          progress_cb ~percent:((100 * i) / total);
+          loop (i + 1) ms in
+    loop 0 moves
 
   let erase t remaining =
     let open Lwt.Infix in

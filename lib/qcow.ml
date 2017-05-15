@@ -1084,12 +1084,12 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                 let cluster_bits = Int32.to_int t.h.Header.cluster_bits in
                 let sectors_per_cluster = Int64.div (1L <| cluster_bits) sector_size in
 
-                let one_pass () =
+                let one_pass ?progress_cb () =
                   Qcow_cluster_map.Debug.assert_no_leaked_blocks map;
 
                   let moves = Qcow_cluster_map.start_moves map in
                   let open Lwt_write_error.Infix in
-                  Recycler.move_all t.recycler moves
+                  Recycler.move_all ?progress_cb t.recycler moves
                   >>= fun () ->
                   (* Flush now so that if we crash after updating some of the references, the
                      destination blocks will contain the correct data. *)
@@ -1113,13 +1113,13 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
                   | Error `Disconnected -> Lwt.return (Error `Disconnected)
                   | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
                   | Ok () -> Lwt.return (Ok refs_updated) in
-                one_pass ()
+                one_pass ~progress_cb:(fun ~percent -> progress_cb ~percent:((percent * 80) / 100)) ()
                 >>= fun refs_updated ->
                 if refs_updated <> 0L
                 then Log.info (fun f -> f "Pass 1: %Ld references updated" refs_updated);
                 (* modifying a L2 metadata block will have cancelled the move, so
                    perform an additional pass. *)
-                one_pass ()
+                one_pass ~progress_cb:(fun ~percent -> progress_cb ~percent:(80 + (percent * 4) / 100)) ()
                 >>= fun refs_updated' ->
                 if refs_updated' <> 0L
                 then Log.info (fun f -> f "Pass 2: %Ld references updated" refs_updated');
