@@ -68,9 +68,9 @@ module Metrics = struct
     let help = "Number of references updated" in
     Counter.v_label ~label_name ~help ~namespace ~subsystem "referenced"
 
-  let max_cluster =
-    let help = "Maximum physical cluster" in
-    Gauge.v_label ~label_name ~help ~namespace ~subsystem "max_cluster"
+  let size =
+    let help = "File size in clusters" in
+    Gauge.v_label ~label_name ~help ~namespace ~subsystem "size"
 end
 
 module Cache = Qcow_cache
@@ -328,8 +328,7 @@ let make ~free ~refs ~cache ~first_movable_cluster ~runtime_asserts ~id =
   ( match id with
     | Some id ->
       Counter.inc (Metrics.junk id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal junk);
-      Gauge.set (Metrics.used id) (float_of_int @@ Cluster.Map.cardinal refs);
-      Gauge.set (Metrics.max_cluster id) (Cluster.to_float last);
+      Gauge.set (Metrics.used id) (float_of_int @@ Cluster.Map.cardinal refs)
     | None -> () );
   { all; junk; available; erased; copies; roots; moves; refs; first_movable_cluster; cache; c; runtime_asserts; id }
 
@@ -357,7 +356,8 @@ let resize t new_size_clusters =
   then Log.info (fun f -> f "resize: adding available clusters %s"
     (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t zeroed)
   );
-  t.all <- file
+  t.all <- file;
+  match t.id with None -> () | Some id -> Gauge.set (Metrics.size id) (Cluster.to_float new_size_clusters)
 
 module Junk = struct
   let get t = t.junk
