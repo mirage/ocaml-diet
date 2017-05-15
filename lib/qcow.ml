@@ -22,6 +22,8 @@ module Virtual = Qcow_virtual
 module Physical = Qcow_physical
 module Locks = Qcow_locks
 module Cstructs = Qcow_cstructs
+module Int = Qcow_int
+module Int64 = Qcow_types.Int64
 
 let ( <| ) = Int64.shift_left
 let ( |> ) = Int64.shift_right_logical
@@ -1924,5 +1926,18 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       Lwt.return_unit
 
     module Setting = DebugSetting
+
+    let metadata_blocks t =
+      let clusters = Qcow_cluster_map.Debug.metadata_blocks t.cluster_map in
+      Qcow_types.Cluster.(IntervalSet.(fold
+        (fun i acc ->
+          let x, y = Interval.(
+            to_int64 (x i) <| t.cluster_bits,
+            (* the last inclusive byte = next cluster start - 1 *)
+            Int64.pred (to_int64 (succ @@ y i) <| t.cluster_bits)
+          ) in
+          Qcow_types.Int64.IntervalSet.(add (Interval.make x y) acc)
+        )
+      )) clusters Qcow_types.Int64.IntervalSet.empty
   end
 end

@@ -176,4 +176,7 @@ module Debug: sig
 
   val assert_equal: t -> t -> unit
   (** Check that 2 maps have equivalent contents *)
+
+  val metadata_blocks: t -> Cluster.IntervalSet.t
+  (** Return the set of blocks containing metadata *)
 end
