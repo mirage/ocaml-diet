@@ -1036,7 +1036,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let map = make ~free ~refs:(!refs) ~first_movable_cluster ~cache:t.cache
       ~runtime_asserts:t.config.Config.runtime_asserts
-      ~id in
+      ~id ~cluster_size:(Int64.to_int cluster_size) in
 
     Lwt.return (Ok map)
 

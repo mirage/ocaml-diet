@@ -139,6 +139,8 @@ type t = {
   (** Check leak and sharing invariants on every update *)
   id: string option;
   (** value of the `id` label used in Metrics above *)
+  cluster_size: int;
+  (** the number of bytes in a cluster, for computing Metrics in bytes *)
 }
 
 let get_last_block t =
@@ -298,7 +300,7 @@ module type MutableSet = sig
   val mem: t -> Cluster.t -> bool
 end
 
-let make ~free ~refs ~cache ~first_movable_cluster ~runtime_asserts ~id =
+let make ~free ~refs ~cache ~first_movable_cluster ~runtime_asserts ~id ~cluster_size =
   let junk = Qcow_bitmap.fold
     (fun i acc ->
       let x, y = Qcow_bitmap.Interval.(x i, y i) in
@@ -327,10 +329,11 @@ let make ~free ~refs ~cache ~first_movable_cluster ~runtime_asserts ~id =
   let all = Cluster.IntervalSet.(add (Interval.make Cluster.zero last) empty) in
   ( match id with
     | Some id ->
-      Counter.inc (Metrics.junk id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal junk);
-      Gauge.set (Metrics.used id) (float_of_int @@ Cluster.Map.cardinal refs)
+      Counter.inc (Metrics.junk id) (float_of_int cluster_size *. (Cluster.to_float @@ Cluster.IntervalSet.cardinal junk));
+      Gauge.set (Metrics.used id) (float_of_int cluster_size *. (float_of_int @@ Cluster.Map.cardinal refs));
     | None -> () );
-  { all; junk; available; erased; copies; roots; moves; refs; first_movable_cluster; cache; c; runtime_asserts; id }
+  { all; junk; available; erased; copies; roots; moves; refs; first_movable_cluster; cache; c; runtime_asserts; id;
+    cluster_size }
 
 let zero =
   let free = Qcow_bitmap.make_empty ~initial_size:0 ~maximum_size:0 in
@@ -339,7 +342,7 @@ let zero =
     ~read_cluster:(fun _ -> Lwt.return (Error `Unimplemented))
     ~write_cluster:(fun _ _ -> Lwt.return (Error `Unimplemented))
     () in
-  make ~free ~refs ~first_movable_cluster:Cluster.zero ~cache ~runtime_asserts:false ~id:None
+  make ~free ~refs ~first_movable_cluster:Cluster.zero ~cache ~runtime_asserts:false ~id:None ~cluster_size:0
 
 let resize t new_size_clusters =
   let open Cluster.IntervalSet in
@@ -351,20 +354,20 @@ let resize t new_size_clusters =
   (* New blocks on the end of the file are assumed to be zeroed and therefore available *)
   let zeroed = diff file t.all in
   t.available <- union t.available zeroed;
-  ( match t.id with None -> () | Some id -> Counter.inc (Metrics.available id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal zeroed) );
+  ( match t.id with None -> () | Some id -> Counter.inc (Metrics.available id) (float_of_int t.cluster_size *. (Cluster.to_float @@ Cluster.IntervalSet.cardinal zeroed)) );
   if cardinal zeroed > Cluster.zero
   then Log.info (fun f -> f "resize: adding available clusters %s"
     (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t zeroed)
   );
   t.all <- file;
-  match t.id with None -> () | Some id -> Gauge.set (Metrics.size id) (Cluster.to_float new_size_clusters)
+  match t.id with None -> () | Some id -> Gauge.set (Metrics.size id) (Cluster.to_float new_size_clusters *. (float_of_int t.cluster_size))
 
 module Junk = struct
   let get t = t.junk
   let add t more =
     Log.debug (fun f -> f "Junk.add %s" (Sexplib.Sexp.to_string (Cluster.IntervalSet.sexp_of_t more)));
     t.junk <- Cluster.IntervalSet.union t.junk more;
-    ( match t.id with None -> () | Some id -> Counter.inc (Metrics.junk id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal more) );
+    ( match t.id with None -> () | Some id -> Counter.inc (Metrics.junk id) (float_of_int t.cluster_size *. (Cluster.to_float @@ Cluster.IntervalSet.cardinal more)) );
     (* Ensure all cached copies of junk blocks are dropped *)
     Cluster.IntervalSet.(fold (fun i () ->
       let x, y = Interval.(x i, y i) in
@@ -399,7 +402,7 @@ module Available = struct
       (Sexplib.Sexp.to_string (sexp_of_t more))
     );
     t.available <- union t.available more;
-    ( match t.id with None -> () | Some id -> Counter.inc (Metrics.available id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal more) );
+    ( match t.id with None -> () | Some id -> Counter.inc (Metrics.available id) (float_of_int t.cluster_size *. (Cluster.to_float @@ Cluster.IntervalSet.cardinal more)) );
     if t.runtime_asserts then Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
@@ -424,7 +427,7 @@ module Erased = struct
   let add t more =
     Log.debug (fun f -> f "Erased.add %s" (Sexplib.Sexp.to_string (Cluster.IntervalSet.sexp_of_t more)));
     t.erased <- Cluster.IntervalSet.union t.erased more;
-    ( match t.id with None -> () | Some id -> Counter.inc (Metrics.erased id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal more) );
+    ( match t.id with None -> () | Some id -> Counter.inc (Metrics.erased id) (float_of_int t.cluster_size *. (Cluster.to_float @@ Cluster.IntervalSet.cardinal more)) );
     if t.runtime_asserts then Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
@@ -478,7 +481,7 @@ module Roots = struct
       assert false;
     end;
     t.roots <- union t.roots more;
-    ( match t.id with None -> () | Some id -> Counter.inc (Metrics.roots id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal more) );
+    ( match t.id with None -> () | Some id -> Counter.inc (Metrics.roots id) (float_of_int t.cluster_size *. (Cluster.to_float @@ Cluster.IntervalSet.cardinal more)) );
     if t.runtime_asserts then Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
@@ -579,17 +582,17 @@ let set_move_state t move state =
   | Some Copying, Copied ->
     Log.debug (fun f -> f "Cluster %s Copying -> Copied" (Cluster.to_string move.Move.src));
     t.moves <- Cluster.Map.add move.Move.src m t.moves;
-    ( match t.id with None -> () | Some id -> Counter.inc_one (Metrics.copied id) )
+    ( match t.id with None -> () | Some id -> Counter.inc (Metrics.copied id) (float_of_int t.cluster_size) )
   | Some Copied, Flushed ->
     Log.debug (fun f -> f "Cluster %s Copied -> Flushed" (Cluster.to_string move.Move.src));
     t.moves <- Cluster.Map.add move.Move.src m t.moves;
-    ( match t.id with None -> () | Some id -> Counter.inc_one (Metrics.flushed id) );
+    ( match t.id with None -> () | Some id -> Counter.inc (Metrics.flushed id) (float_of_int t.cluster_size) );
     (* References now need to be rewritten *)
     Lwt_condition.signal t.c ();
   | Some Flushed, Referenced ->
     Log.debug (fun f -> f "Cluster %s Flushed -> Referenced" (Cluster.to_string move.Move.src));
     t.moves <- Cluster.Map.add move.Move.src m t.moves;
-    ( match t.id with None -> () | Some id -> Counter.inc_one (Metrics.referenced id) );
+    ( match t.id with None -> () | Some id -> Counter.inc (Metrics.referenced id) (float_of_int t.cluster_size) );
   | Some old, _ ->
     Log.err (fun f -> f "Illegal cluster move state transition: %s %s -> %s" (Cluster.to_string move.Move.src)
       (string_of_move_state old) (string_of_move_state state));
@@ -665,7 +668,7 @@ let add t rf cluster =
       failwith (Printf.sprintf "Adding a reference to unsuitable cluster %s in %s.%d" (Cluster.to_string cluster) (Cluster.to_string c) w);
     end;
     t.refs <- Cluster.Map.add cluster rf t.refs;
-    ( match t.id with None -> () | Some id -> Gauge.inc (Metrics.used id) 1. );
+    ( match t.id with None -> () | Some id -> Gauge.inc (Metrics.used id) (float_of_int t.cluster_size) );
     ()
   end
 

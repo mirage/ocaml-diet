@@ -82,7 +82,7 @@ val zero: t
 
 val make: free:Qcow_bitmap.t -> refs:reference Cluster.Map.t -> cache:Qcow_cache.t
   -> first_movable_cluster:Cluster.t -> runtime_asserts:bool
-  -> id:string option -> t
+  -> id:string option -> cluster_size:int -> t
 (** Given a set of free clusters, and the first cluster which can be moved
     (i.e. that isn't fixed header), construct an empty cluster map. *)
 
