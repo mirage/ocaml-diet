@@ -37,6 +37,26 @@ module DebugSetting = struct
   let compact_mid_write = ref false
 end
 
+open Prometheus
+module Metrics = struct
+
+  let namespace = "Mirage"
+  let subsystem = "qcow"
+  let label_name = "id"
+
+  let reads =
+    let help = "Number of bytes read" in
+    Counter.v_label ~label_name ~help ~namespace ~subsystem "reads"
+
+  let writes =
+    let help = "Number of bytes written" in
+    Counter.v_label ~label_name ~help ~namespace ~subsystem "writes"
+
+  let discards =
+    let help = "Number of bytes discarded" in
+    Counter.v_label ~label_name ~help ~namespace ~subsystem "discards"
+end
+
 module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   type 'a io = 'a Lwt.t
@@ -1167,6 +1187,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     with_deadline t describe_fn time_30s
       (fun () ->
         let open Lwt_error.Infix in
+        Counter.inc (Metrics.reads t.config.Config.id) (float_of_int @@ List.fold_left (+) 0 @@ List.map Cstruct.len bufs);
         let sectors_per_cluster = (1 lsl t.cluster_bits) / t.sector_size in
         let client = Locks.Client.make describe_fn in
         let cluster_size = 1L <| t.cluster_bits in
@@ -1232,6 +1253,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     else with_deadline t describe_fn time_30s
       (fun () ->
         let open Lwt_write_error.Infix in
+        Counter.inc (Metrics.writes t.config.Config.id) (float_of_int @@ List.fold_left (+) 0 @@ List.map Cstruct.len bufs);
         let cluster_size = 1L <| t.cluster_bits in
         let client = Locks.Client.make describe_fn in
         let sectors_per_cluster = (1 lsl t.cluster_bits) / t.sector_size in
@@ -1649,6 +1671,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             Lwt.return (Error `Unimplemented)
           end else Lwt.return (Ok ()) )
         >>= fun () ->
+        Counter.inc (Metrics.discards t.config.Config.id) Int64.(to_float @@ mul n @@ of_int t.sector_size);
         let client = Locks.Client.make describe_fn in
         (* we can only discard whole clusters. We will explicitly zero non-cluster
            aligned discards in order to satisfy RZAT *)
