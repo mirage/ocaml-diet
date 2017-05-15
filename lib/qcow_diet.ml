@@ -341,7 +341,11 @@ let rec node x y l r =
     (* completely within *)
     | Node n -> Node n
 
-  let union = fold add
+  let union a b =
+    let a' = cardinal a and b' = cardinal b in
+    if a' > b'
+    then fold add b a
+    else fold add a b
 
   let merge l r = match l, r with
     | l, Empty -> l
