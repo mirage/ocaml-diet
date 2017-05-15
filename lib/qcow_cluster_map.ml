@@ -37,40 +37,36 @@ module Metrics = struct
     Gauge.v_label ~label_name ~help ~namespace ~subsystem "used"
 
   let junk =
-    let help = "Number of clusters containing junk" in
-    Gauge.v_label ~label_name ~help ~namespace ~subsystem "junk"
+    let help = "Number of junk clusters created" in
+    Counter.v_label ~label_name ~help ~namespace ~subsystem "junk"
 
   let erased =
-    let help = "Number of erased clusters" in
-    Gauge.v_label ~label_name ~help ~namespace ~subsystem "erased"
+    let help = "Number of clusters erased" in
+    Counter.v_label ~label_name ~help ~namespace ~subsystem "erased"
 
   let available =
-    let help = "Number of clusters available for reallocation" in
-    Gauge.v_label ~label_name ~help ~namespace ~subsystem "available"
-
-  let copies =
-    let help = "Number of cluster copies" in
-    Gauge.v_label ~label_name ~help ~namespace ~subsystem "copies"
+    let help = "Number of clusters made available for reallocation" in
+    Counter.v_label ~label_name ~help ~namespace ~subsystem "available"
 
   let roots =
-    let help = "Number of GC root clusters" in
-    Gauge.v_label ~label_name ~help ~namespace ~subsystem "roots"
+    let help = "Number of GC root clusters registered" in
+    Counter.v_label ~label_name ~help ~namespace ~subsystem "roots"
 
   let copying =
-    let help = "Number of cluster copies in progress" in
-    Gauge.v_label ~label_name ~help ~namespace ~subsystem "copying"
+    let help = "Number of cluster copies started" in
+    Counter.v_label ~label_name ~help ~namespace ~subsystem "copying"
 
   let copied =
-    let help = "Number of unflushed cluster copies" in
-    Gauge.v_label ~label_name ~help ~namespace ~subsystem "copied"
+    let help = "Number of cluster copies completed" in
+    Counter.v_label ~label_name ~help ~namespace ~subsystem "copied"
 
   let flushed =
-    let help = "Number of unreferenced cluster copies" in
-    Gauge.v_label ~label_name ~help ~namespace ~subsystem "flushed"
+    let help = "Number of cluster copies flushed" in
+    Counter.v_label ~label_name ~help ~namespace ~subsystem "flushed"
 
   let referenced =
-    let help = "Number of unflushed reference updates" in
-    Gauge.v_label ~label_name ~help ~namespace ~subsystem "referenced"
+    let help = "Number of references updated" in
+    Counter.v_label ~label_name ~help ~namespace ~subsystem "referenced"
 
   let max_cluster =
     let help = "Maximum physical cluster" in
@@ -331,8 +327,8 @@ let make ~free ~refs ~cache ~first_movable_cluster ~runtime_asserts ~id =
   let all = Cluster.IntervalSet.(add (Interval.make Cluster.zero last) empty) in
   ( match id with
     | Some id ->
+      Counter.inc (Metrics.junk id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal junk);
       Gauge.set (Metrics.used id) (float_of_int @@ Cluster.Map.cardinal refs);
-      Gauge.set (Metrics.junk id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal junk);
       Gauge.set (Metrics.max_cluster id) (Cluster.to_float last);
     | None -> () );
   { all; junk; available; erased; copies; roots; moves; refs; first_movable_cluster; cache; c; runtime_asserts; id }
@@ -351,15 +347,12 @@ let resize t new_size_clusters =
   let file = add (Interval.make Cluster.zero (Cluster.pred new_size_clusters)) empty in
   Cache.resize t.cache new_size_clusters;
   t.junk <- inter t.junk file;
-  ( match t.id with None -> () | Some id -> Gauge.set (Metrics.junk id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal t.junk) );
   t.erased <- inter t.erased file;
-  ( match t.id with None -> () | Some id -> Gauge.set (Metrics.erased id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal t.erased) );
   t.available <- inter t.available file;
-  ( match t.id with None -> () | Some id -> Gauge.set (Metrics.available id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal t.available) );
   (* New blocks on the end of the file are assumed to be zeroed and therefore available *)
   let zeroed = diff file t.all in
   t.available <- union t.available zeroed;
-  ( match t.id with None -> () | Some id -> Gauge.set (Metrics.available id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal t.available) );
+  ( match t.id with None -> () | Some id -> Counter.inc (Metrics.available id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal zeroed) );
   if cardinal zeroed > Cluster.zero
   then Log.info (fun f -> f "resize: adding available clusters %s"
     (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t zeroed)
@@ -371,7 +364,7 @@ module Junk = struct
   let add t more =
     Log.debug (fun f -> f "Junk.add %s" (Sexplib.Sexp.to_string (Cluster.IntervalSet.sexp_of_t more)));
     t.junk <- Cluster.IntervalSet.union t.junk more;
-    ( match t.id with None -> () | Some id -> Gauge.set (Metrics.junk id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal t.junk) );
+    ( match t.id with None -> () | Some id -> Counter.inc (Metrics.junk id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal more) );
     (* Ensure all cached copies of junk blocks are dropped *)
     Cluster.IntervalSet.(fold (fun i () ->
       let x, y = Interval.(x i, y i) in
@@ -388,7 +381,6 @@ module Junk = struct
     let open Cluster.IntervalSet in
     let old_junk = t.junk in
     t.junk <- Cluster.IntervalSet.diff t.junk less;
-    ( match t.id with None -> () | Some id -> Gauge.set (Metrics.junk id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal t.junk) );
     if (Cluster.sub (cardinal old_junk) (cardinal less)) <> (cardinal t.junk) then begin
       Log.err (fun f -> f "Junk.remove: clusters were not in junk");
       Log.err (fun f -> f "Junk = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t old_junk));
@@ -407,7 +399,7 @@ module Available = struct
       (Sexplib.Sexp.to_string (sexp_of_t more))
     );
     t.available <- union t.available more;
-    ( match t.id with None -> () | Some id -> Gauge.set (Metrics.available id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal t.available) );
+    ( match t.id with None -> () | Some id -> Counter.inc (Metrics.available id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal more) );
     if t.runtime_asserts then Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
@@ -417,7 +409,6 @@ module Available = struct
     );
     let old_available = t.available in
     t.available <- Cluster.IntervalSet.diff t.available less;
-    ( match t.id with None -> () | Some id -> Gauge.set (Metrics.available id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal t.available) );
     if (Cluster.sub (cardinal old_available) (cardinal less)) <> (cardinal t.available) then begin
       Log.err (fun f -> f "Available.remove: clusters were not in junk");
       Log.err (fun f -> f "Available = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t old_available));
@@ -433,14 +424,13 @@ module Erased = struct
   let add t more =
     Log.debug (fun f -> f "Erased.add %s" (Sexplib.Sexp.to_string (Cluster.IntervalSet.sexp_of_t more)));
     t.erased <- Cluster.IntervalSet.union t.erased more;
-    ( match t.id with None -> () | Some id -> Gauge.set (Metrics.erased id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal t.erased) );
+    ( match t.id with None -> () | Some id -> Counter.inc (Metrics.erased id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal more) );
     if t.runtime_asserts then Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
     let open Cluster.IntervalSet in
     let old_erased = t.erased in
     t.erased <- diff t.erased less;
-    ( match t.id with None -> () | Some id -> Gauge.set (Metrics.erased id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal t.erased) );
     if (Cluster.sub (cardinal old_erased) (cardinal less)) <> (cardinal t.erased) then begin
       Log.err (fun f -> f "Erased.remove: clusters were not in erased");
       Log.err (fun f -> f "Erased = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t old_erased));
@@ -456,14 +446,12 @@ module Copies = struct
   let add t more =
     Log.debug (fun f -> f "Copies.add %s" (Sexplib.Sexp.to_string (Cluster.IntervalSet.sexp_of_t more)));
     t.copies <- Cluster.IntervalSet.union t.copies more;
-    ( match t.id with None -> () | Some id -> Gauge.set (Metrics.copies id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal t.copies) );
     if t.runtime_asserts then Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
     let open Cluster.IntervalSet in
     let old_copies = t.copies in
     t.copies <- diff t.copies less;
-    ( match t.id with None -> () | Some id -> Gauge.set (Metrics.copies id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal t.copies) );
     if (Cluster.sub (cardinal old_copies) (cardinal less)) <> (cardinal t.copies) then begin
       Log.err (fun f -> f "Copies.remove: clusters were not in copies");
       Log.err (fun f -> f "Copies = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t old_copies));
@@ -490,14 +478,13 @@ module Roots = struct
       assert false;
     end;
     t.roots <- union t.roots more;
-    ( match t.id with None -> () | Some id -> Gauge.set (Metrics.roots id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal t.roots) );
+    ( match t.id with None -> () | Some id -> Counter.inc (Metrics.roots id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal more) );
     if t.runtime_asserts then Debug.check ~leaks:false t;
     Lwt_condition.signal t.c ()
   let remove t less =
     let open Cluster.IntervalSet in
     let old_roots = t.roots in
     t.roots <- diff t.roots less;
-    ( match t.id with None -> () | Some id -> Gauge.set (Metrics.roots id) (Cluster.to_float @@ Cluster.IntervalSet.cardinal t.roots) );
     if (Cluster.sub (cardinal old_roots) (cardinal less)) <> (cardinal t.roots) then begin
       Log.err (fun f -> f "Roots.remove: clusters were not in roots");
       Log.err (fun f -> f "Roots = %s" (Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t old_roots));
@@ -592,19 +579,17 @@ let set_move_state t move state =
   | Some Copying, Copied ->
     Log.debug (fun f -> f "Cluster %s Copying -> Copied" (Cluster.to_string move.Move.src));
     t.moves <- Cluster.Map.add move.Move.src m t.moves;
-    ( match t.id with None -> () | Some id -> Gauge.inc (Metrics.copied id) 1. )
+    ( match t.id with None -> () | Some id -> Counter.inc_one (Metrics.copied id) )
   | Some Copied, Flushed ->
     Log.debug (fun f -> f "Cluster %s Copied -> Flushed" (Cluster.to_string move.Move.src));
     t.moves <- Cluster.Map.add move.Move.src m t.moves;
-    ( match t.id with None -> () | Some id -> Gauge.dec (Metrics.copied id) 1. );
-    ( match t.id with None -> () | Some id -> Gauge.inc (Metrics.flushed id) 1. );
+    ( match t.id with None -> () | Some id -> Counter.inc_one (Metrics.flushed id) );
     (* References now need to be rewritten *)
     Lwt_condition.signal t.c ();
   | Some Flushed, Referenced ->
     Log.debug (fun f -> f "Cluster %s Flushed -> Referenced" (Cluster.to_string move.Move.src));
     t.moves <- Cluster.Map.add move.Move.src m t.moves;
-    ( match t.id with None -> () | Some id -> Gauge.dec (Metrics.flushed id) 1. );
-    ( match t.id with None -> () | Some id -> Gauge.inc (Metrics.referenced id) 1. );
+    ( match t.id with None -> () | Some id -> Counter.inc_one (Metrics.referenced id) );
   | Some old, _ ->
     Log.err (fun f -> f "Illegal cluster move state transition: %s %s -> %s" (Cluster.to_string move.Move.src)
       (string_of_move_state old) (string_of_move_state state));
@@ -630,12 +615,7 @@ let cancel_move t cluster =
       let dst' = Cluster.IntervalSet.(add (Interval.make dst dst) empty) in
       (* The destination block can now be recycled *)
       Copies.remove t dst';
-      Junk.add t dst';
-      begin match t.id, state with
-      | Some id, Copied -> Gauge.dec (Metrics.copied id) 1.
-      | Some id, Flushed -> Gauge.dec (Metrics.flushed id) 1.
-      | _, _ -> ()
-      end
+      Junk.add t dst'
     | exception Not_found ->
       ()
 
@@ -651,7 +631,6 @@ let complete_move t move =
     t.moves <- Cluster.Map.remove move.Move.src t.moves;
     let dst = Cluster.IntervalSet.(add (Interval.make move.Move.dst move.Move.dst) empty) in
     Copies.remove t dst;
-    ( match t.id with None -> () | Some id -> Gauge.dec (Metrics.referenced id) 1. )
     (* The source block will have already been added to Junk by the Metadata.Physical.set *)
   | Some old ->
     Log.err (fun f -> f "Illegal cluster move state transition: %s %s -> Completed" (Cluster.to_string move.Move.src)
@@ -692,7 +671,6 @@ let add t rf cluster =
 
 let remove t cluster =
   t.refs <- Cluster.Map.remove cluster t.refs;
-  ( match t.id with None -> () | Some id -> Gauge.dec (Metrics.used id) 1. );
   Junk.add t (Cluster.IntervalSet.(add (Interval.make cluster cluster) empty));
   cancel_move t cluster;
   Lwt_condition.signal t.c ()
