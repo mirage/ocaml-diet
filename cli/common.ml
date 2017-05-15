@@ -18,6 +18,7 @@
 type t = {
   debug: bool;
   progress: bool;
+  progress_fd: int option;
 }
 
-let make debug progress = { debug; progress }
+let make debug progress progress_fd = { debug; progress; progress_fd }
