@@ -14,6 +14,7 @@ depends: [
   "cmdliner"
   "cstruct"
   "result"
+  "unix-type-representations"
   "mirage-types-lwt" {>= "3.0.0"}
   "lwt"
   "mirage-block" {>= "0.2"}

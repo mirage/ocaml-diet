@@ -126,6 +126,16 @@ let progress_cb ~percent =
     if percent = 100 then Printf.printf "\n"
   end
 
+let progress_cb_json fd =
+  let oc = Unix.out_channel_of_descr fd in
+  let last_percent = ref (-1) in
+  fun ~percent ->
+    if !last_percent <> percent then begin
+      last_percent := percent;
+      output_string oc (Printf.sprintf "{ \"progress\": %d }\n" percent);
+      flush_all ()
+    end
+
 let mib = Int64.mul 1024L 1024L
 
 let info filename filter =
@@ -316,7 +326,11 @@ let compact common_options_t unsafe_buffering filename =
   let module BLOCK = (val block: BLOCK) in
   let module B = Qcow.Make(BLOCK)(Time) in
   let open Lwt in
-  let progress_cb = if common_options_t.Common.progress then Some progress_cb else None in
+  let progress_cb = match common_options_t.Common.progress, common_options_t.Common.progress_fd with
+    | true, None -> Some progress_cb
+    | _, Some fd -> Some (progress_cb_json (Unix_representations.file_descr_of_int fd))
+    | _, _ -> None in
+
   (* workaround for https://github.com/mirage/mirage-block-unix/issues/59 *)
   Lwt_main.run begin
     let open Lwt.Infix in
