@@ -24,6 +24,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
 
   module Config: sig
     type t = {
+      id: string; (** unique name for prometheus metrics *)
       discard: bool; (** true if `discard` will be enabled at runtime *)
       keep_erased: int64 option; (** size of erased free pool in sectors *)
       compact_after_unmaps: int64 option; (** automatically compact after n sectors are unmapped *)
@@ -33,7 +34,9 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) : sig
     }
     (** Runtime configuration of a device *)
 
-    val create: ?discard:bool ->
+    val create:
+      ?id:string ->
+      ?discard:bool ->
       ?keep_erased:int64 ->
       ?compact_after_unmaps:int64 ->
       ?check_on_connect:bool ->

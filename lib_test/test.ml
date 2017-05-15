@@ -234,7 +234,7 @@ let write_discard_read_native sector_size size_sectors (start, length) () =
     let open Lwt.Infix in
     RawWriter.connect path
     >>= fun raw ->
-    let config = Writer.Config.create ~discard:true ~runtime_asserts:true () in
+    let config = Writer.Config.create ~discard:true ~runtime_asserts:true ~id:"id" () in
     let open Lwt_write_error.Infix in
     Writer.create raw ~size:Int64.(mul size_sectors (of_int sector_size)) ~config ()
     >>= fun b ->
@@ -333,7 +333,7 @@ let check_full_disk () =
     Ramdisk.connect ~name:"test"
     >>= fun ramdisk ->
     let open Lwt_write_error.Infix in
-    let config = B.Config.create ~runtime_asserts:true () in
+    let config = B.Config.create ~runtime_asserts:true ~id:"id" () in
     B.create ramdisk ~size:gib ~config ()
     >>= fun b ->
 
@@ -418,7 +418,7 @@ let qcow_tool size =
     Block.connect path
     >>= fun block ->
     let open Lwt_write_error.Infix in
-    let config = B.Config.create ~runtime_asserts:true () in
+    let config = B.Config.create ~runtime_asserts:true ~id:"id" () in
     B.create block ~size ~config ()
     >>= fun qcow ->
     let open Lwt.Infix in
@@ -440,7 +440,7 @@ let qcow_tool_resize ?ignore_data_loss size_from size_to =
     Block.connect path
     >>= fun block ->
     let open Lwt_write_error.Infix in
-    let config = B.Config.create ~runtime_asserts:true () in
+    let config = B.Config.create ~runtime_asserts:true ~id:"id" () in
     B.create block ~size:size_from ~config ()
     >>= fun qcow ->
     B.resize qcow ~new_size:size_to ?ignore_data_loss ()
@@ -464,7 +464,7 @@ let qcow_tool_bad_resize size_from size_to =
     Block.connect path
     >>= fun block ->
     let open Lwt_write_error.Infix in
-    let config = B.Config.create ~runtime_asserts:true () in
+    let config = B.Config.create ~runtime_asserts:true ~id:"id" () in
     B.create block ~size:size_from ~config ()
     >>= fun qcow ->
     let open Lwt.Infix in
@@ -490,7 +490,7 @@ let create_resize_equals_create size_from size_to =
     Block.connect path2
     >>= fun block ->
     let open Lwt_write_error.Infix in
-    let config = B.Config.create ~runtime_asserts:true () in
+    let config = B.Config.create ~runtime_asserts:true ~id:"id" () in
     B.create block ~size:size_from ~config ()
     >>= fun qcow ->
     B.resize qcow ~new_size:size_to ()
@@ -505,7 +505,7 @@ let create_resize_equals_create size_from size_to =
     Block.connect path1
     >>= fun block ->
     let open Lwt_write_error.Infix in
-    let config = B.Config.create ~runtime_asserts:true () in
+    let config = B.Config.create ~runtime_asserts:true ~id:"id" () in
     B.create block ~size:size_to ~config ()
     >>= fun qcow ->
     let open Lwt.Infix in
@@ -532,7 +532,7 @@ let create_write_discard_all_compact clusters () =
     >>= fun () ->
     Block.connect path
     >>= fun block ->
-    let config = B.Config.create ~discard:true ~runtime_asserts:true () in
+    let config = B.Config.create ~discard:true ~runtime_asserts:true ~id:"id" () in
     let open Lwt_write_error.Infix in
     B.create block ~size ~config ()
     >>= fun qcow ->
@@ -583,7 +583,7 @@ let create_write_discard_compact () =
     >>= fun () ->
     Block.connect path
     >>= fun block ->
-    let config = B.Config.create ~discard:true ~runtime_asserts:true () in
+    let config = B.Config.create ~discard:true ~runtime_asserts:true ~id:"id" () in
     let open Lwt_write_error.Infix in
     B.create block ~size ~config ()
     >>= fun qcow ->

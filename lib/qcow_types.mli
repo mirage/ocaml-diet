@@ -52,6 +52,8 @@ module Cluster : sig
 
   include Qcow_s.NUM with type t := t
 
+  val to_float: t -> float
+
   val round_up: t -> t -> t
   (** [round_up value to] rounds [value] to the next multiple of [to] *)
 

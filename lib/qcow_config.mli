@@ -16,6 +16,9 @@
  *)
 
 type t = {
+  id: string;
+  (** unique name for the prometheus metrics *)
+
   discard: bool;
   (** discard (aka TRIM) is enabled *)
 
@@ -35,12 +38,14 @@ type t = {
   (** guarantee to not modify the file *)
 }
 
-val create: ?discard:bool -> ?keep_erased:int64 ->
+val create:
+  ?id:string ->
+  ?discard:bool -> ?keep_erased:int64 ->
   ?compact_after_unmaps:int64 -> ?check_on_connect:bool ->
   ?runtime_asserts:bool -> ?read_only:bool ->
   unit -> t
 
-val default: t
+val default: unit -> t
 (** default configuration values *)
 
 val to_string: t -> string

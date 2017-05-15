@@ -39,6 +39,26 @@ module DebugSetting = struct
   let compact_mid_write = ref false
 end
 
+open Prometheus
+module Metrics = struct
+
+  let namespace = "Mirage"
+  let subsystem = "qcow"
+  let label_name = "id"
+
+  let reads =
+    let help = "Number of bytes read" in
+    Counter.v_label ~label_name ~help ~namespace ~subsystem "reads"
+
+  let writes =
+    let help = "Number of bytes written" in
+    Counter.v_label ~label_name ~help ~namespace ~subsystem "writes"
+
+  let discards =
+    let help = "Number of bytes discarded" in
+    Counter.v_label ~label_name ~help ~namespace ~subsystem "discards"
+end
+
 module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   type 'a io = 'a Lwt.t
@@ -882,7 +902,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   exception Reference_outside_file of int64 * int64
 
-  let make_cluster_map t =
+  let make_cluster_map t ?id () =
     let open Qcow_cluster_map in
     let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
     let open Lwt.Infix in
@@ -1017,7 +1037,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     >>= fun () ->
 
     let map = make ~free ~refs:(!refs) ~first_movable_cluster ~cache:t.cache
-      ~runtime_asserts:t.config.Config.runtime_asserts in
+      ~runtime_asserts:t.config.Config.runtime_asserts
+      ~id ~cluster_size:(Int64.to_int cluster_size) in
 
     Lwt.return (Ok map)
 
@@ -1168,6 +1189,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     with_deadline t describe_fn time_30s
       (fun () ->
         let open Lwt_error.Infix in
+        Counter.inc (Metrics.reads t.config.Config.id) (float_of_int @@ List.fold_left (+) 0 @@ List.map Cstruct.len bufs);
         let sectors_per_cluster = (1 lsl t.cluster_bits) / t.sector_size in
         let client = Locks.Client.make describe_fn in
         let cluster_size = 1L <| t.cluster_bits in
@@ -1233,6 +1255,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
     else with_deadline t describe_fn time_30s
       (fun () ->
         let open Lwt_write_error.Infix in
+        Counter.inc (Metrics.writes t.config.Config.id) (float_of_int @@ List.fold_left (+) 0 @@ List.map Cstruct.len bufs);
         let cluster_size = 1L <| t.cluster_bits in
         let client = Locks.Client.make describe_fn in
         let sectors_per_cluster = (1 lsl t.cluster_bits) / t.sector_size in
@@ -1472,7 +1495,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       metadata; cache; sector_size; cluster_bits; lazy_refcounts; stats;
       cluster_map; cluster_map_m;
     } in
-    Lwt_error.or_fail_with @@ make_cluster_map t'
+    Lwt_error.or_fail_with @@ make_cluster_map t' ~id:(config.Config.id) ()
     >>= fun cluster_map ->
     if config.Config.runtime_asserts
     then Qcow_cluster_map.Debug.assert_equal cluster_map cluster_map;
@@ -1540,7 +1563,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         Lwt.return t'
     end
 
-  let connect ?(config=Config.default) base =
+  let connect ?(config=Config.default ()) base =
     let open Lwt.Infix in
     B.get_info base
     >>= fun base_info ->
@@ -1555,22 +1578,14 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
       | Ok (h, _) ->
         make config base h
         >>= fun t ->
-        make_cluster_map t
-        >>= function
-        | Error (`Reference_outside_file (src, dst)) -> Lwt.fail_with (Printf.sprintf "reference from %Ld to outside file %Ld: image is corrupt" src dst)
-        | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
-        | Error `Disconnected -> Lwt.fail_with "Disconnected"
-        | Error (`Msg m) -> Lwt.fail_with m
-        | Ok block_map ->
         let open Qcow_cluster_map in
-        let free = total_free block_map in
-        let used = total_used block_map in
+        let free = total_free t.cluster_map in
+        let used = total_used t.cluster_map in
         Log.info (fun f -> f "image has %Ld free sectors and %Ld used sectors" free used);
         Lwt.return t
 
   let check base =
     let open Lwt.Infix in
-
     let open Qcow_cluster_map in
     Lwt.catch
       (fun () ->
@@ -1658,6 +1673,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
             Lwt.return (Error `Unimplemented)
           end else Lwt.return (Ok ()) )
         >>= fun () ->
+        Counter.inc (Metrics.discards t.config.Config.id) Int64.(to_float @@ mul n @@ of_int t.sector_size);
         let client = Locks.Client.make describe_fn in
         (* we can only discard whole clusters. We will explicitly zero non-cluster
            aligned discards in order to satisfy RZAT *)
@@ -1680,7 +1696,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
         erase t ~sector:(Int64.add sector' to_discard) ~n:(Int64.sub n' to_discard) ()
     )
 
-  let create base ~size ?(lazy_refcounts=true) ?(cluster_bits=16) ?(config = Config.default) () =
+  let create base ~size ?(lazy_refcounts=true) ?(cluster_bits=16) ?(config = Config.default ()) () =
     let version = `Three in
     let backing_file_offset = 0L in
     let backing_file_size = 0l in
@@ -1920,7 +1936,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
     let assert_cluster_map_in_sync t =
       let open Lwt.Infix in
-      Lwt_error.or_fail_with @@ make_cluster_map t
+      Lwt_error.or_fail_with @@ make_cluster_map t ()
       >>= fun cluster_map ->
       Qcow_cluster_map.Debug.assert_equal cluster_map t.cluster_map;
       Lwt.return_unit
