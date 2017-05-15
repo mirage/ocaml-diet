@@ -1,3 +1,13 @@
+## 0.10.0 (2017-05-13)
+- fix a major performance problem with `compact`
+- split into 2 packages: qcow and qcow-tool
+- add `qcow-tool dehydrate` and `qcow-tool rehydrate` for extracting
+  metadata for debug/support
+- add prometheus metrics for I/O and GC operations
+- restore the `qcow-tool compact --progress` progress bar
+- add `qcow-tool compact --progress-fd` for json-formatted progress
+- build via jbuilder
+
 ## 0.9.5 (2017-03-12)
 - CLI: `check` and `sha` will nolonger resize the file as a side-effect
   (#84)
