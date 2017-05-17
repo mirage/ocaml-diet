@@ -681,6 +681,7 @@ let add t rf cluster =
 
 let remove t cluster =
   t.refs <- Cluster.Map.remove cluster t.refs;
+  ( match t.id with None -> () | Some id -> Gauge.dec (Metrics.used id) (float_of_int t.cluster_size) );
   Junk.add t (Cluster.IntervalSet.(add (Interval.make cluster cluster) empty));
   cancel_move t cluster;
   Lwt_condition.signal t.c ()
