@@ -1,3 +1,7 @@
+## 0.10.1 (2017-06-17):
+- update to new io-page/ io-page-unix
+- fix prometheus accounting error
+
 ## 0.10.0 (2017-05-13)
 - fix a major performance problem with `compact`
 - split into 2 packages: qcow and qcow-tool
