@@ -1,3 +1,6 @@
+## 0.10.2 (2017-06-18):
+- remove false dependency on cmdliner
+
 ## 0.10.1 (2017-06-17):
 - update to new io-page/ io-page-unix
 - fix prometheus accounting error

@@ -9,6 +9,11 @@ tags: [
   "org:mirage"
 ]
 
+build: [
+  ["jbuilder" "subst" "-p" name "--name" name] {pinned}
+  ["jbuilder" "build" "-p" name "-j" jobs]
+]
+
 depends: [
   "qcow"
   "cmdliner"
@@ -34,14 +39,6 @@ depends: [
   "mirage-block-ramdisk" {test}
   "ezjsonm" {test}
   "nbd" {test & >= "2.0.1"}
-]
-
-build: [
-  [ "jbuilder" "build" ]
-]
-
-build-test: [
-  [ make "test" ]
 ]
 
 available: [ocaml-version >= "4.03.0"]
