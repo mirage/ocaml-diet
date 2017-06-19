@@ -10,7 +10,7 @@ tags: [
 ]
 
 build: [
-  ["jbuilder" "subst" "-p" name "--name" name] {pinned}
+  ["jbuilder" "subst"] {pinned}
   ["jbuilder" "build" "-p" name "-j" jobs]
 ]
 
