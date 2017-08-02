@@ -1,3 +1,6 @@
+## 0.10.3 (2017-08-02):
+- avoid linking ppx tools into the library
+
 ## 0.10.2 (2017-06-18):
 - remove false dependency on cmdliner
 
