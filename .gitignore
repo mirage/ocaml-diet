@@ -13,3 +13,4 @@ _build
 *.install
 lib/qcow_word_size.ml
 *.exe
+*.merlin
