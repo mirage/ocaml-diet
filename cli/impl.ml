@@ -768,7 +768,7 @@ let rehydrate _common input_filename output_filename =
     >>= fun output_fd ->
     Lwt_unix.LargeFile.lseek output_fd (Int64.pred metadata.total_size) Lwt_unix.SEEK_SET
     >>= fun _ ->
-    Lwt_unix.write output_fd "\000" 0 1
+    Lwt_unix.write output_fd (Bytes.of_string "\000") 0 1
     >>= fun _ ->
     (* Append the metadata intervals from the `input_fd` to `metadata_fd` *)
     Qcow.Int64.IntervalSet.fold_s
