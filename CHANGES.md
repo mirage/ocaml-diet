@@ -1,3 +1,8 @@
+## 0.10.4 (2017-12-07):
+- fix build on OCaml 4.06 (and -safe-string)
+- update to new sha.1.10 signature
+- document the prometheus support
+
 ## 0.10.3 (2017-08-02):
 - avoid linking ppx tools into the library
 

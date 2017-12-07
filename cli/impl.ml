@@ -418,13 +418,13 @@ let sha _common_options_t filename =
     >>= fun info ->
     let ctx = Sha1.init () in
     let update_cstruct c =
-      let b' : (int, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t = Obj.magic c.Cstruct.buffer in
+      let b' = c.Cstruct.buffer in
       if c.Cstruct.off = 0 && c.Cstruct.len = (Bigarray.Array1.dim b')
       then Sha1.update_buffer ctx b'
       else begin
         let c' = Cstruct.create (Cstruct.len c) in
         Cstruct.blit c 0 c' 0 (Cstruct.len c);
-        let b' : (int, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t = Obj.magic c'.Cstruct.buffer in
+        let b' = c'.Cstruct.buffer in
         Sha1.update_buffer ctx b'
       end in
     let buf = Io_page.(to_cstruct @@ get 1024) in
@@ -768,7 +768,7 @@ let rehydrate _common input_filename output_filename =
     >>= fun output_fd ->
     Lwt_unix.LargeFile.lseek output_fd (Int64.pred metadata.total_size) Lwt_unix.SEEK_SET
     >>= fun _ ->
-    Lwt_unix.write output_fd "\000" 0 1
+    Lwt_unix.write output_fd (Bytes.of_string "\000") 0 1
     >>= fun _ ->
     (* Append the metadata intervals from the `input_fd` to `metadata_fd` *)
     Qcow.Int64.IntervalSet.fold_s
