@@ -418,13 +418,13 @@ let sha _common_options_t filename =
     >>= fun info ->
     let ctx = Sha1.init () in
     let update_cstruct c =
-      let b' : (int, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t = Obj.magic c.Cstruct.buffer in
+      let b' = c.Cstruct.buffer in
       if c.Cstruct.off = 0 && c.Cstruct.len = (Bigarray.Array1.dim b')
       then Sha1.update_buffer ctx b'
       else begin
         let c' = Cstruct.create (Cstruct.len c) in
         Cstruct.blit c 0 c' 0 (Cstruct.len c);
-        let b' : (int, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t = Obj.magic c'.Cstruct.buffer in
+        let b' = c'.Cstruct.buffer in
         Sha1.update_buffer ctx b'
       end in
     let buf = Io_page.(to_cstruct @@ get 1024) in
