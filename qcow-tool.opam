@@ -24,7 +24,7 @@ depends: [
   "lwt"
   "mirage-block" {>= "0.2"}
   "mirage-block-lwt"
-  "mirage-block-unix" {>= "2.1.0"}
+  "mirage-block-unix" {>= "2.9.0"}
   "mirage-time"
   "mirage-time-lwt"
   "sha" {>= "1.10"}

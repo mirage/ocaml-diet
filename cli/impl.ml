@@ -35,11 +35,10 @@ let src =
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-module Block = struct
+module ReadWriteBlock = struct
   include Block
-  (* We're not interested in any optional arguments [connect] may or may not
-     have *)
-  let connect path = connect path
+  let original_connect = connect
+  let connect path = connect ~lock:true path
 end
 
 module Time = struct
@@ -48,7 +47,7 @@ module Time = struct
 end
 
 module TracedBlock = struct
-  include Block
+  include ReadWriteBlock
 
   let length_of bufs = List.fold_left (+) 0 (List.map Cstruct.len bufs)
 
@@ -78,12 +77,13 @@ module type BLOCK = sig
 end
 
 module UnsafeBlock = struct
-  include Block
+  include ReadWriteBlock
   let flush _ = Lwt.return (Ok ())
 end
 
 module ReadOnlyBlock = struct
   include UnsafeBlock
+  let connect path = original_connect ~lock:false path
   let write _ _ _ =
     failwith "write to a read-only virtual device"
   let resize _ _ =
@@ -159,7 +159,7 @@ let write filename sector data trace =
   let block =
      if trace
      then (module TracedBlock: BLOCK)
-     else (module Block: BLOCK) in
+     else (module ReadWriteBlock: BLOCK) in
   let module BLOCK = (val block: BLOCK) in
   let module B = Qcow.Make(BLOCK)(Time) in
   let t =
@@ -182,7 +182,7 @@ let read filename sector length trace =
   let block =
      if trace
      then (module TracedBlock: BLOCK)
-     else (module Block: BLOCK) in
+     else (module ReadWriteBlock: BLOCK) in
   let module BLOCK = (val block: BLOCK) in
   let module B = Qcow.Make(BLOCK)(Time) in
   let t =
@@ -214,17 +214,17 @@ let check filename =
       Printf.fprintf stderr "quickly for us to read a consistent view.\n";
       return (`Ok ())
     | n ->
-      Block.connect filename
+      ReadOnlyBlock.connect filename
       >>= fun block ->
       B.check block
       >>= function
       | Error (`Reference_outside_file(src, dst)) ->
         begin
-          Block.disconnect block
+          ReadOnlyBlock.disconnect block
           >>= fun () ->
-          Block.connect filename
+          ReadOnlyBlock.connect filename
           >>= fun block ->
-          Block.get_info block
+          ReadOnlyBlock.get_info block
           >>= fun info ->
           let size = Int64.(mul info.Mirage_block.size_sectors (of_int info.Mirage_block.sector_size)) in
           if dst > size then begin
@@ -232,7 +232,7 @@ let check filename =
             exit 1
           end else begin
             (* The file has grown, try again *)
-            Block.disconnect block
+            ReadOnlyBlock.disconnect block
             >>= fun () ->
             retry (n - 1)
           end
@@ -261,7 +261,7 @@ let discard unsafe_buffering filename =
   let block =
      if unsafe_buffering
      then (module UnsafeBlock: BLOCK)
-     else (module Block: BLOCK) in
+     else (module ReadWriteBlock: BLOCK) in
   let module BLOCK = (val block: BLOCK) in
   let module B = Qcow.Make(BLOCK)(Time) in
   let open Lwt in
@@ -322,7 +322,7 @@ let compact common_options_t unsafe_buffering filename =
   let block =
      if unsafe_buffering
      then (module UnsafeBlock: BLOCK)
-     else (module Block: BLOCK) in
+     else (module ReadWriteBlock: BLOCK) in
   let module BLOCK = (val block: BLOCK) in
   let module B = Qcow.Make(BLOCK)(Time) in
   let open Lwt in
@@ -381,7 +381,7 @@ let repair unsafe_buffering filename =
   let block =
      if unsafe_buffering
      then (module UnsafeBlock: BLOCK)
-     else (module Block: BLOCK) in
+     else (module ReadWriteBlock: BLOCK) in
   let module BLOCK = (val block: BLOCK) in
   let module B = Qcow.Make(BLOCK)(Time) in
   let open Lwt in
@@ -475,19 +475,19 @@ let decode filename output =
   Lwt_main.run t
 
 let encode filename output =
-  let module B = Qcow.Make(Block)(Time) in
+  let module B = Qcow.Make(ReadWriteBlock)(Time) in
   let open Lwt in
   let t =
-    Block.connect filename
+    ReadWriteBlock.connect filename
     >>= fun raw_input ->
-    Block.get_info raw_input
+    ReadWriteBlock.get_info raw_input
     >>= fun raw_input_info ->
     let total_size = Int64.(mul raw_input_info.Mirage_block.size_sectors (of_int raw_input_info.Mirage_block.sector_size)) in
     Lwt_unix.openfile output [ Lwt_unix.O_WRONLY; Lwt_unix.O_CREAT ] 0o0644
     >>= fun fd ->
     Lwt_unix.close fd
     >>= fun () ->
-    Block.connect output
+    ReadWriteBlock.connect output
     >>= fun raw_output ->
     B.create raw_output ~size:total_size ()
     >>= function
@@ -504,7 +504,7 @@ let create size strict_refcounts trace filename =
   let block =
      if trace
      then (module TracedBlock: BLOCK)
-     else (module Block: BLOCK) in
+     else (module ReadWriteBlock: BLOCK) in
   let module BLOCK = (val block: BLOCK) in
   let module B = Qcow.Make(BLOCK)(Time) in
   let open Lwt in
@@ -525,7 +525,7 @@ let pattern common_options_t trace filename size number =
   let block =
      if trace
      then (module TracedBlock: BLOCK)
-     else (module Block: BLOCK) in
+     else (module ReadWriteBlock: BLOCK) in
   let module Uncached = (val block: BLOCK) in
   let module BLOCK = Qcow_block_cache.Make(Uncached) in
   let module B = Qcow.Make(BLOCK)(Time) in
@@ -626,7 +626,7 @@ let resize trace filename new_size ignore_data_loss =
   let block =
      if trace
      then (module TracedBlock: BLOCK)
-     else (module Block: BLOCK) in
+     else (module ReadWriteBlock: BLOCK) in
   let module BLOCK = (val block: BLOCK) in
   let module B = Qcow.Make(BLOCK)(Time) in
   let open Lwt in
