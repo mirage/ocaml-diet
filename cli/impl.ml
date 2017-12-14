@@ -37,9 +37,8 @@ module Log = (val Logs.src_log src : Logs.LOG)
 
 module ReadWriteBlock = struct
   include Block
-  (* We're not interested in any optional arguments [connect] may or may not
-     have *)
-  let connect path = connect path
+  let original_connect = connect
+  let connect path = connect ~lock:true path
 end
 
 module Time = struct
@@ -84,6 +83,7 @@ end
 
 module ReadOnlyBlock = struct
   include UnsafeBlock
+  let connect path = original_connect ~lock:false path
   let write _ _ _ =
     failwith "write to a read-only virtual device"
   let resize _ _ =
