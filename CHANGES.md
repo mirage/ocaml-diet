@@ -1,3 +1,6 @@
+## 0.10.5 (2017-12-14):
+- CLI: use the disk locking feature in mirage-block-unix >= 0.9.0
+
 ## 0.10.4 (2017-12-07):
 - fix build on OCaml 4.06 (and -safe-string)
 - update to new sha.1.10 signature
