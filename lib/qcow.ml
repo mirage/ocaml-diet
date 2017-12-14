@@ -1920,10 +1920,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time_lwt.S) = struct
 
   let header t = t.h
 
-  type t' = t
   module Debug = struct
-    type t = t'
-    type error = write_error
     let check_no_overlaps t =
       let within = Physical.within_cluster ~cluster_bits:t.cluster_bits t.h.Header.l1_table_offset in
       assert (within = 0);

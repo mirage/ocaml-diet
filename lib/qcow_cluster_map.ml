@@ -52,10 +52,6 @@ module Metrics = struct
     let help = "Number of GC root clusters registered" in
     Counter.v_label ~label_name ~help ~namespace ~subsystem "roots"
 
-  let copying =
-    let help = "Number of cluster copies started" in
-    Counter.v_label ~label_name ~help ~namespace ~subsystem "copying"
-
   let copied =
     let help = "Number of cluster copies completed" in
     Counter.v_label ~label_name ~help ~namespace ~subsystem "copied"
@@ -619,7 +615,7 @@ let cancel_move t cluster =
          The only reason we still track this move is because when the next flush
          happens it is safe to add the src cluster to the set of junk blocks. *)
       Log.debug (fun f -> f "Not cancelling in-progress move of cluster %s: already Referenced" (Cluster.to_string cluster))
-    | { move = { Move.dst; _ }; state; _ } ->
+    | { move = { Move.dst; _ }; _ } ->
       Log.debug (fun f -> f "Cancelling in-progress move of cluster %s to %s" (Cluster.to_string cluster) (Cluster.to_string dst));
       t.moves <- Cluster.Map.remove cluster t.moves;
       let dst' = Cluster.IntervalSet.(add (Interval.make dst dst) empty) in
