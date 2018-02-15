@@ -16,6 +16,6 @@
 open OUnit
 
 let _ =
-  let diet_tests = List.map (fun (name, fn) -> name >:: fn) Qcow_diet.Test.all in
+  let diet_tests = List.map (fun (name, fn) -> name >:: fn) Diet.Qcow_diet.Test.all in
   let suite = "diet" >::: diet_tests in
   OUnit2.run_test_tt_main (ounit2_of_ounit1 suite)
