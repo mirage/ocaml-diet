@@ -1,5 +1,4 @@
 (executables
- ((names (test compact_random))
-  (libraries   (qcow io-page.unix logs logs.fmt oUnit ezjsonm nbd.lwt mirage-block-ramdisk))
-  (preprocess (pps (ppx_sexp_conv)))
+ ((names (test))
+  (libraries   (diet ounit))
 ))
