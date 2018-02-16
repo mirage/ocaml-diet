@@ -1,5 +1,5 @@
 (*
- * Copyright (C) 2015 David Scott <dave@recoil.org>
+ * Copyright (C) 2016 David Scott <dave@recoil.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -15,7 +15,27 @@
  *
  *)
 
-(** Common signatures used by the library *)
+module type ELT = sig
+  type t [@@deriving sexp]
+  (** The type of the set elements. *)
+
+  include Set.OrderedType with type t := t
+
+  val zero: t
+  (** The zeroth element *)
+
+  val pred: t -> t
+  (** Predecessor of an element *)
+
+  val succ: t -> t
+  (** Successor of an element *)
+
+  val sub: t -> t -> t
+  (** [sub a b] returns [a] - [b] *)
+
+  val add: t -> t -> t
+  (** [add a b] returns [a] + [b] *)
+end
 
 module type INTERVAL_SET = sig
   type elt
@@ -87,4 +107,11 @@ module type INTERVAL_SET = sig
 
   val inter: t -> t -> t
   (** set intersection *)
+end
+
+
+module Make(Elt: ELT): INTERVAL_SET with type elt = Elt.t
+
+module Test: sig
+  val all: (string * (unit -> unit)) list
 end
