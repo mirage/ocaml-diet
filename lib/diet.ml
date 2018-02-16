@@ -16,7 +16,6 @@
  *)
 (*
 #require "ppx_sexp_conv";;
-#require "lwt";;
 *)
 open Sexplib.Std
 
@@ -29,6 +28,33 @@ module type ELT = sig
   val sub: t -> t -> t
   val add: t -> t -> t
 end
+
+module type INTERVAL_SET = sig
+  type elt
+  type interval
+  module Interval: sig
+    val make: elt -> elt -> interval
+    val x: interval -> elt
+    val y: interval -> elt
+  end
+  type t [@@deriving sexp]
+  val empty: t
+  val is_empty: t -> bool
+  val cardinal: t -> elt
+  val mem: elt -> t -> bool
+  val fold: (interval -> 'a -> 'a) -> t -> 'a -> 'a
+  val fold_individual: (elt -> 'a -> 'a) -> t -> 'a -> 'a
+  val add: interval -> t -> t
+  val remove: interval -> t -> t
+  val min_elt: t -> interval
+  val max_elt: t -> interval
+  val choose: t -> interval
+  val take: t -> elt -> (t * t) option
+  val union: t -> t -> t
+  val diff: t -> t -> t
+  val inter: t -> t -> t
+end
+
 
 exception Interval_pairs_should_be_ordered of string
 exception Intervals_should_not_overlap of string
