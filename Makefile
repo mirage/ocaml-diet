@@ -18,6 +18,16 @@ doc:
 	jbuilder build @doc
 	open _build/default/_doc/_html/diet/Diet/module-type-INTERVAL_SET/index.html || echo 'Try pointing your browser at _build/default/_doc/_html/index.html'
 
+doc-update:
+	jbuilder build @doc
+	cp -R _build/default/_doc/_html ./html
+	git checkout gh-pages
+	cp -R html/* .
+	rm -rf html
+	git commit -a -s -m 'Update gh-pages'
+	git push origin gh-pages
+	git checkout master
+
 install:
 	jbuilder install
 
