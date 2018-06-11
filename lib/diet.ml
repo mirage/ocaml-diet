@@ -44,6 +44,7 @@ module type INTERVAL_SET = sig
   val mem: elt -> t -> bool
   val fold: (interval -> 'a -> 'a) -> t -> 'a -> 'a
   val fold_individual: (elt -> 'a -> 'a) -> t -> 'a -> 'a
+  val iter: (interval -> unit) -> t -> unit
   val add: interval -> t -> t
   val remove: interval -> t -> t
   val min_elt: t -> interval
@@ -295,6 +296,12 @@ let rec node x y l r =
     fold range t acc
 
   let elements t = fold_individual (fun x acc -> x :: acc) t [] |> List.rev
+
+  (* iterate over maximal contiguous intervals *)
+  let iter f t =
+    let f' itl () =
+      f itl in
+    fold f' t ()
 
   (* return (x, y, l) where (x, y) is the maximal interval and [l] is
      the rest of the tree on the left (whose intervals are all smaller). *)
