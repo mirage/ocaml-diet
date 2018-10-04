@@ -8,14 +8,14 @@ bug-reports: "https://github.com/djs55/ocaml-diet/issues"
 doc: "https://djs55.github.io/ocaml-diet"
 
 build: [
-  ["jbuilder" "subst"] {pinned}
-  ["jbuilder" "build" "-p" name "-j" jobs]
+  ["dune" "subst"] {pinned}
+  ["dune" "build" "-p" name "-j" jobs]
 ]
 
 depends: [
   "result"
   "sexplib"
-  "jbuilder" {build & >="1.0+beta10"}
+  "dune" {build}
   "ppx_tools" {build}
   "ppx_sexp_conv" {build}
   "ppx_type_conv" {build}
