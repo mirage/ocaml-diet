@@ -16,9 +16,7 @@ depends: [
   "result"
   "sexplib"
   "dune" {build}
-  "ppx_tools" {build}
   "ppx_sexp_conv" {build}
-  "ppx_type_conv" {build}
   "ounit" {test}
 ]
 
