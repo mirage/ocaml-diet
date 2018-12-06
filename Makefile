@@ -6,7 +6,7 @@ build:
 
 test:
 	dune build lib_test/test.exe
-	./_build/default/lib_test/test.exe -runner sequential
+	dune exec -- lib_test/test.exe -runner sequential
 
 fuzz:
 	dune build fuzz/fuzz.exe
