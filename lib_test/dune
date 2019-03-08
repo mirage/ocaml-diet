@@ -1,4 +1,3 @@
-(executables
+(tests
  (names test)
- (libraries diet oUnit)
-)
+ (libraries diet oUnit))

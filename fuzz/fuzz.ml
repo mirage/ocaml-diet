@@ -36,7 +36,7 @@ let interval = map [ positive_int; positive_int ] (fun a b ->
     if a <= b then IntDiet.Interval.make a b else IntDiet.Interval.make b a
 )
 
-let rec diet = fix (fun diet ->
+let diet = fix (fun diet ->
     choose [
         const IntDiet.empty;
         map [ interval; diet ] (fun interval diet -> IntDiet.add interval diet);

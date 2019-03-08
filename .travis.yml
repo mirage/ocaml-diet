@@ -7,4 +7,4 @@ sudo: required
 dist: trusty
 env:
   global:
-    - PACKAGE="diet" OCAML_VERSION=4.06
+    - PACKAGE="diet" OCAML_VERSION=4.07

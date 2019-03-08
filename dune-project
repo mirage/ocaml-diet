@@ -1,3 +1,2 @@
-(lang dune 1.2)
+(lang dune 1.0)
 (name diet)
-(version 0.1)
