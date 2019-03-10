@@ -1,7 +1,8 @@
 ## v0.3 (2019-03-07)
-- switch to `dune-release` (@avsm)
-- run the tests as well as build them (@avsm)
-- update metadata to opam 2.0 format (@avsm)
+- Add `find_next_gap` function (#9 @g2p)
+- switch to `dune-release` (#10 @avsm)
+- run the tests as well as build them (#10 @avsm)
+- update metadata to opam 2.0 format (#10 @avsm)
 
 ## 0.2 (2018-10-04):
 - Add an `iter` function (#5 from @g2p)
