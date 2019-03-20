@@ -14,19 +14,16 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  *)
-(*
-#require "ppx_sexp_conv";;
-*)
-open Sexplib.Std
 
 module type ELT = sig
-  type t [@@deriving sexp]
+  type t
   val compare: t -> t -> int
   val zero: t
   val pred: t -> t
   val succ: t -> t
   val sub: t -> t -> t
   val add: t -> t -> t
+  val to_string: t -> string
 end
 
 module type INTERVAL_SET = sig
@@ -37,7 +34,8 @@ module type INTERVAL_SET = sig
     val x: interval -> elt
     val y: interval -> elt
   end
-  type t [@@deriving sexp]
+  type t
+  val pp: Format.formatter -> t -> unit
   val empty: t
   val is_empty: t -> bool
   val cardinal: t -> elt
@@ -85,7 +83,7 @@ let _ =
     )
 
 module Make(Elt: ELT) = struct
-  type elt = Elt.t [@@deriving sexp]
+  type elt = Elt.t
 
   module Elt = struct
     include Elt
@@ -114,7 +112,23 @@ module Make(Elt: ELT) = struct
     | Empty
     | Node: node -> t
   and node = { x: elt; y: elt; l: t; r: t; h: int; cardinal: elt }
-  [@@deriving sexp]
+
+  let rec pp fmt = function
+    | Empty -> Format.fprintf fmt "Empty"
+    | Node n -> pp_node fmt n
+
+  and pp_node fmt {x ;y; l; r; h; cardinal } =
+    Format.pp_open_vbox fmt 0;
+    Format.fprintf fmt "x: %s@," (Elt.to_string x);
+    Format.fprintf fmt "y: %s@," (Elt.to_string y);
+    Format.fprintf fmt "l:@[@\n%a@]@," pp l;
+    Format.fprintf fmt "r:@[@\n%a@]@," pp r;
+    Format.fprintf fmt "h: %d@," h;
+    Format.fprintf fmt "cardinal: %s" (Elt.to_string cardinal);
+    Format.pp_close_box fmt ()
+
+  let to_string_internal t =
+    Format.asprintf "%a" pp t
 
   let height = function
     | Empty -> 0
@@ -162,8 +176,6 @@ let rec node x y l r =
           depth n.r (fun dr ->
             k (1 + (max dl dr))))
     in depth tree (fun d -> d)
-
-  let to_string_internal t = Sexplib.Sexp.to_string_hum ~indent:2 @@ sexp_of_t t
 
   module Invariant = struct
 
@@ -458,13 +470,14 @@ end
 
 
 module Int = struct
-  type t = int [@@deriving sexp]
+  type t = int
   let compare (x: t) (y: t) = Pervasives.compare x y
   let zero = 0
   let succ x = x + 1
   let pred x = x - 1
   let add x y = x + y
   let sub x y = x - y
+  let to_string = string_of_int
 end
 module IntDiet = Make(Int)
 module IntSet = Set.Make(Int)
@@ -589,6 +602,29 @@ module Test = struct
       assert (find_next_gap e set = e)
     done
 
+  let test_printer () =
+    let open IntDiet in
+    let t = add (1, 2) @@ add (4, 5) empty in
+    let got = Format.asprintf "%a" pp t in
+    let expected = {|
+x: 4
+y: 5
+l:
+  x: 1
+  y: 2
+  l:
+    Empty
+  r:
+    Empty
+  h: 1
+  cardinal: 2
+r:
+  Empty
+h: 2
+cardinal: 4|}
+    in
+    assert (String.trim expected = got)
+
   let all = [
     "adding an element to the right", test_add_1;
     "removing an element on the left", test_remove_1;
@@ -600,5 +636,6 @@ module Test = struct
     "diff", test_operator IntSet.diff IntDiet.diff;
     "intersection", test_operator IntSet.inter IntDiet.inter;
     "finding the next gap", test_find_next;
+    "printer", test_printer;
   ]
 end

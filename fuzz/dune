@@ -1,5 +1,3 @@
-(executables
- (names fuzz)
- (libraries  diet crowbar)
- (preprocess (pps ppx_sexp_conv))
-)
+(executable
+ (name fuzz)
+ (libraries diet crowbar))

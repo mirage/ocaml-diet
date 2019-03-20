@@ -16,7 +16,7 @@
  *)
 
 module type ELT = sig
-  type t [@@deriving sexp]
+  type t
   (** The type of the set elements. *)
 
   include Set.OrderedType with type t := t
@@ -35,6 +35,9 @@ module type ELT = sig
 
   val add: t -> t -> t
   (** [add a b] returns [a] + [b] *)
+
+  val to_string: t -> string
+  (** Display an element. *)
 end
 
 module type INTERVAL_SET = sig
@@ -57,8 +60,11 @@ module type INTERVAL_SET = sig
     (** the ending element of the interval *)
   end
 
-  type t [@@deriving sexp]
+  type t
   (** The type of sets *)
+
+  val pp: Format.formatter -> t -> unit
+  (** Pretty-print a set *)
 
   val empty: t
   (** The empty set *)
