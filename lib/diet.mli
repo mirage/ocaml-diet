@@ -120,6 +120,11 @@ module type INTERVAL_SET = sig
   val find_next_gap: elt -> t -> elt
   (** [find_next_gap from t] returns the next element that's
       absent in set [t] and greater than or equal to [from] **)
+
+  (**/**)
+
+  val check_invariants : t -> unit
+  (** Check that underlying invariants hold. *)
 end
 
 

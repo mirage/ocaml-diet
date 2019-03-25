@@ -31,7 +31,14 @@ module IntDiet = struct
 
   let add (x, y) t =
     add (Interval.make x y) t
+
+  let remove (x, y) t =
+    remove (Interval.make x y) t
+
+  let elements t = fold_individual (fun x acc -> x :: acc) t [] |> List.rev
 end
+
+module IntSet = Set.Make(Int)
 
 let test_printer ctxt =
   let open IntDiet in
@@ -74,6 +81,49 @@ let test_find_next_gap ctxt =
     assert (find_next_gap e set = e)
   done
 
+let make_random n m =
+  let rec loop set diet = function
+    | 0 -> set, diet
+    | m ->
+      let r = Random.int n in
+      let r' = Random.int (n - r) + r in
+      let add = Random.bool () in
+      let rec range from upto =
+        if from > upto then [] else from :: (range (from + 1) upto) in
+      let set = List.fold_left (fun set elt -> (if add then IntSet.add else IntSet.remove) elt set) set (range r r') in
+      let diet' = (if add then IntDiet.add else IntDiet.remove) (r, r') diet in
+      begin
+        try
+          IntDiet.check_invariants diet'
+        with e ->
+          Format.eprintf "%s %d\nBefore: %a\nAfter: %a\n"
+            (if add then "Add" else "Remove") r
+            IntDiet.pp diet IntDiet.pp diet';
+          raise e
+      end;
+      loop set diet' (m - 1) in
+  loop IntSet.empty IntDiet.empty m
+
+let show_list show l =
+  Printf.sprintf "[%s]" (String.concat "; " (List.map show l))
+
+let check_equals ~ctxt set diet =
+  let set' = IntSet.elements set in
+  let diet' = IntDiet.elements diet in
+  let printer = show_list string_of_int in
+  assert_equal ~ctxt ~printer set' diet'
+
+let test_operator set_op diet_op ctxt =
+  for _ = 1 to 100 do
+    let set1, diet1 = make_random 1000 1000 in
+    let set2, diet2 = make_random 1000 1000 in
+    check_equals ~ctxt set1 diet1;
+    check_equals ~ctxt set2 diet2;
+    let set3 = set_op set1 set2 in
+    let diet3 = diet_op diet1 diet2 in
+    check_equals ~ctxt set3 diet3
+  done
+
 let suite =
   "diet" >:::
   (
@@ -81,7 +131,8 @@ let suite =
     (fun (name, fn) -> name >:: (fun _ctx -> fn ()))
     Diet.Test.all
   @
-  [ "finding the next gap" >:: test_find_next_gap
+  [ "intersection" >:: test_operator IntSet.inter IntDiet.inter
+  ; "finding the next gap" >:: test_find_next_gap
   ; "printer" >:: test_printer
   ]
   )

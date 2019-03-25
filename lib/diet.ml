@@ -53,6 +53,7 @@ module type INTERVAL_SET = sig
   val diff: t -> t -> t
   val inter: t -> t -> t
   val find_next_gap: elt -> t -> elt
+  val check_invariants : t -> unit
 end
 
 
@@ -466,6 +467,7 @@ let rec node x y l r =
       end in
     loop empty t n
 
+  let check_invariants = Invariant.check
 end
 
 
@@ -597,6 +599,5 @@ module Test = struct
     "adding and removing elements acts like a Set", test_adds;
     "union", test_operator IntSet.union IntDiet.union;
     "diff", test_operator IntSet.diff IntDiet.diff;
-    "intersection", test_operator IntSet.inter IntDiet.inter;
   ]
 end
