@@ -588,20 +588,6 @@ module Test = struct
 
   let test_depth () = check_depth 1048576
 
-  let test_find_next () =
-    let open IntDiet in
-    let set = add (9, 9) @@ add (5, 7) empty in
-    assert (find_next_gap 0 set = 0);
-    assert (find_next_gap 5 set = 8);
-    assert (find_next_gap 9 set = 10);
-    for i = 0 to 12 do
-      let e = find_next_gap i set in
-      assert (e >= i);
-      assert (not @@ mem e set);
-      assert (e == i || mem i set);
-      assert (find_next_gap e set = e)
-    done
-
   let all = [
     "adding an element to the right", test_add_1;
     "removing an element on the left", test_remove_1;
@@ -612,6 +598,5 @@ module Test = struct
     "union", test_operator IntSet.union IntDiet.union;
     "diff", test_operator IntSet.diff IntDiet.diff;
     "intersection", test_operator IntSet.inter IntDiet.inter;
-    "finding the next gap", test_find_next;
   ]
 end

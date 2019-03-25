@@ -56,6 +56,24 @@ cardinal: 4|}
   in
   assert_equal ~ctxt ~printer:(fun s -> s) ~cmp:String.equal expected got
 
+let test_find_next_gap ctxt =
+  let open IntDiet in
+  let set = add (9, 9) @@ add (5, 7) empty in
+  let test n ~expected =
+    let got = find_next_gap n set in
+    assert_equal ~ctxt ~printer:string_of_int expected got
+  in
+  test 0 ~expected:0;
+  test 5 ~expected:8;
+  test 9 ~expected:10;
+  for i = 0 to 12 do
+    let e = find_next_gap i set in
+    assert (e >= i);
+    assert (not @@ mem e set);
+    assert (e == i || mem i set);
+    assert (find_next_gap e set = e)
+  done
+
 let suite =
   "diet" >:::
   (
@@ -63,7 +81,8 @@ let suite =
     (fun (name, fn) -> name >:: (fun _ctx -> fn ()))
     Diet.Test.all
   @
-  [ "printer" >:: test_printer
+  [ "finding the next gap" >:: test_find_next_gap
+  ; "printer" >:: test_printer
   ]
   )
 
