@@ -501,60 +501,6 @@ module Test = struct
     let d = IntDiet.height set in
     assert (d == 1)
 
-  let make_random n m =
-    let rec loop set diet = function
-      | 0 -> set, diet
-      | m ->
-        let r = Random.int n in
-        let r' = Random.int (n - r) + r in
-        let add = Random.bool () in
-        let rec range from upto =
-          if from > upto then [] else from :: (range (from + 1) upto) in
-        let set = List.fold_left (fun set elt -> (if add then IntSet.add else IntSet.remove) elt set) set (range r r') in
-        let diet' = (if add then IntDiet.add else IntDiet.remove) (IntDiet.Interval.make r r') diet in
-        begin
-          try
-            IntDiet.Invariant.check diet';
-          with e ->
-            Printf.fprintf stderr "%s %d\nBefore: %s\nAfter: %s\n"
-              (if add then "Add" else "Remove") r
-              (IntDiet.to_string_internal diet) (IntDiet.to_string_internal diet');
-            raise e
-        end;
-        loop set diet' (m - 1) in
-    loop IntSet.empty IntDiet.empty m
-    (*
-  let set_to_string set =
-    String.concat "; " @@ List.map string_of_int @@ IntSet.elements set
-  let diet_to_string diet =
-    String.concat "; " @@ List.map string_of_int @@ IntDiet.elements diet
-    *)
-  let check_equals set diet =
-    let set' = IntSet.elements set in
-    let diet' = IntDiet.elements diet in
-    if set' <> diet' then begin
-      (*
-      Printf.fprintf stderr "Set contains: [ %s ]\n" @@ set_to_string set;
-      Printf.fprintf stderr "Diet contains: [ %s ]\n" @@ diet_to_string diet;
-      *)
-      failwith "check_equals"
-    end
-
-  let test_adds () =
-    for _ = 1 to 100 do
-      let set, diet = make_random 1000 1000 in
-      begin
-        try
-          IntDiet.Invariant.check diet
-        with e ->
-          (*
-          Printf.fprintf stderr "Diet contains: [ %s ]\n" @@ IntDiet.to_string_internal diet;
-          *)
-          raise e
-      end;
-      check_equals set diet;
-    done
-
   let test_add_1 () =
     let open IntDiet in
     assert (elements @@ add (3, 4) @@ add (3, 3) empty = [ 3; 4 ])
@@ -580,6 +526,5 @@ module Test = struct
     "removing an elements from two intervals", test_remove_2;
     "test adjacent intervals are coalesced", test_adjacent_1;
     "logarithmic depth", test_depth;
-    "adding and removing elements acts like a Set", test_adds;
   ]
 end
