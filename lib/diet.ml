@@ -171,44 +171,37 @@ let rec node x y l r =
         on_every_node n.r f
 
     (* The pairs (x, y) in each interval are ordered such that x <= y *)
-    let ordered t =
-      on_every_node t
-        (fun { x; y; _ } ->
-           ensure
-             (x <= y)
-             "Pairs within each interval should be ordered")
+    let ordered { x; y; _ } =
+      ensure
+        (x <= y)
+        "Pairs within each interval should be ordered"
 
     (* The intervals don't overlap *)
-    let no_overlap t =
+    let no_overlap { x; y; l; r; _ } n =
       let error = "Intervals should be ordered without overlap" in
-      on_every_node t
-        (fun { x; y; l; r; _ } n ->
-           begin match l with
-             | Empty -> Ok ()
-             | Node left ->
-               ensure (left.y < x) error n
-           end >>= fun () ->
-           begin match r with
-             | Empty -> Ok ()
-             | Node right ->
-               ensure (right.x > y) error n
-           end
-        )
+      begin match l with
+        | Empty -> Ok ()
+        | Node left ->
+          ensure (left.y < x) error n
+      end >>= fun () ->
+      begin match r with
+        | Empty -> Ok ()
+        | Node right ->
+          ensure (right.x > y) error n
+      end
 
-    let no_adjacent t =
+    let no_adjacent { x; y; l; r; _ } n =
       let error = "Intervals should not be adjacent" in
-      on_every_node t
-        (fun { x; y; l; r; _ } n ->
-           begin match l with
-             | Empty -> Ok ()
-             | Node left ->
-               ensure (Elt.succ left.y < x) error n
-           end >>= fun () ->
-           begin match r with
-             | Empty -> Ok ()
-             | Node right ->
-               ensure (Elt.pred right.x > y) error n
-           end)
+      begin match l with
+        | Empty -> Ok ()
+        | Node left ->
+          ensure (Elt.succ left.y < x) error n
+      end >>= fun () ->
+      begin match r with
+        | Empty -> Ok ()
+        | Node right ->
+          ensure (Elt.pred right.x > y) error n
+      end
 
     let node_height n =
       n.h
@@ -217,36 +210,30 @@ let rec node x y l r =
       depth (Node n)
 
     (* The height is being stored correctly *)
-    let height_equals_depth t =
-      on_every_node t
-        (fun n ->
-           ensure
-             (node_height n = node_depth n)
-             "The height is not being maintained correctly")
+    let height_equals_depth n =
+      ensure
+        (node_height n = node_depth n)
+        "The height is not being maintained correctly"
 
-    let balanced t =
-      on_every_node t
-        (fun { l; r; _ } ->
-           let diff = height l - (height r) in
-           let open Pervasives in
-           ensure
-             (-2 <= diff && diff <= 2)
-             "The tree has become imbalanced")
+    let balanced { l; r; _ } =
+      let diff = height l - (height r) in
+      let open Pervasives in
+      ensure
+        (-2 <= diff && diff <= 2)
+        "The tree has become imbalanced"
 
-    let check_cardinal t =
-      on_every_node t
-        (fun { x; y; l; r; cardinal = c; _ } ->
-           ensure
-             Elt.((c - cardinal l - cardinal r - y + x) = succ zero)
-             "The cardinal value stored in the node is wrong")
+    let check_cardinal { x; y; l; r; cardinal = c; _ } =
+      ensure
+        Elt.((c - cardinal l - cardinal r - y + x) = succ zero)
+        "The cardinal value stored in the node is wrong"
 
     let check t =
-      ordered t >>= fun () ->
-      no_overlap t >>= fun () ->
-      height_equals_depth t >>= fun () ->
-      balanced t >>= fun () ->
-      check_cardinal t >>= fun () ->
-      no_adjacent t
+      on_every_node t ordered >>= fun () ->
+      on_every_node t no_overlap >>= fun () ->
+      on_every_node t height_equals_depth >>= fun () ->
+      on_every_node t balanced >>= fun () ->
+      on_every_node t check_cardinal >>= fun () ->
+      on_every_node t no_adjacent
   end
 
   let empty = Empty
