@@ -162,96 +162,83 @@ let rec node x y l r =
       else
         Error (Format.asprintf "%s: %a" msg pp t)
 
-    (* The pairs (x, y) in each interval are ordered such that x <= y *)
-    let rec ordered t = match t with
+    let rec on_every_node d f =
+      match d with
       | Empty -> Ok ()
-      | Node { x; y; l; r; _ } ->
-        ensure
-          (x <= y)
-          "Pairs within each interval should be ordered"
-          t
-        >>= fun () ->
-        ordered l >>= fun () ->
-        ordered r
+      | Node n ->
+        f n d >>= fun () ->
+        on_every_node n.l f >>= fun () ->
+        on_every_node n.r f
+
+    (* The pairs (x, y) in each interval are ordered such that x <= y *)
+    let ordered t =
+      on_every_node t
+        (fun { x; y; _ } ->
+           ensure
+             (x <= y)
+             "Pairs within each interval should be ordered")
 
     (* The intervals don't overlap *)
-    let rec no_overlap t =
+    let no_overlap t =
       let error = "Intervals should be ordered without overlap" in
-      match t with
-      | Empty -> Ok ()
-      | Node { x; y; l; r; _ } ->
-        begin match l with
-          | Empty -> Ok ()
-          | Node left ->
-            ensure (left.y < x) error t
-        end >>= fun () ->
-        begin match r with
-          | Empty -> Ok ()
-          | Node right ->
-            ensure (right.x > y) error t
-        end >>= fun () ->
-        no_overlap l >>= fun () ->
-        no_overlap r
+      on_every_node t
+        (fun { x; y; l; r; _ } n ->
+           begin match l with
+             | Empty -> Ok ()
+             | Node left ->
+               ensure (left.y < x) error n
+           end >>= fun () ->
+           begin match r with
+             | Empty -> Ok ()
+             | Node right ->
+               ensure (right.x > y) error n
+           end
+        )
 
-    let rec no_adjacent t =
+    let no_adjacent t =
       let error = "Intervals should not be adjacent" in
-      let biggest = function
-        | Empty -> None
-        | Node { y; _ } -> Some y in
-      let smallest = function
-        | Empty -> None
-        | Node { x; _ } -> Some x in
-      match t with
-      | Empty -> Ok ()
-      | Node { x; y; l; r; _ } ->
-        begin match biggest l with
-          | Some ly ->
-            ensure (Elt.succ ly < x) error t
-          | None -> Ok ()
-        end >>= fun () ->
-        begin match smallest r with
-          | Some rx ->
-            ensure (Elt.pred rx > y) error t
-          | None -> Ok ()
-        end >>= fun () ->
-        no_adjacent l >>= fun () ->
-        no_adjacent r
+      on_every_node t
+        (fun { x; y; l; r; _ } n ->
+           begin match l with
+             | Empty -> Ok ()
+             | Node left ->
+               ensure (Elt.succ left.y < x) error n
+           end >>= fun () ->
+           begin match r with
+             | Empty -> Ok ()
+             | Node right ->
+               ensure (Elt.pred right.x > y) error n
+           end)
+
+    let node_height n =
+      n.h
+
+    let node_depth n =
+      depth (Node n)
 
     (* The height is being stored correctly *)
-    let rec height_equals_depth t =
-      ensure
-        (height t = depth t)
-        "The height is not being maintained correctly"
-        t
-      >>= fun () ->
-      match t with
-      | Empty -> Ok ()
-      | Node { l; r; _ } ->
-        height_equals_depth l >>= fun () ->
-        height_equals_depth r
+    let height_equals_depth t =
+      on_every_node t
+        (fun n ->
+           ensure
+             (node_height n = node_depth n)
+             "The height is not being maintained correctly")
 
-    let rec balanced = function
-      | Empty -> Ok ()
-      | Node { l; r; _ } as t ->
-        let diff = height l - (height r) in
-        let open Pervasives in
-        ensure
-          (-2 <= diff && diff <= 2)
-          "The tree has become imbalanced"
-          t
-        >>= fun () ->
-        balanced l >>= fun () ->
-        balanced r
+    let balanced t =
+      on_every_node t
+        (fun { l; r; _ } ->
+           let diff = height l - (height r) in
+           let open Pervasives in
+           ensure
+             (-2 <= diff && diff <= 2)
+             "The tree has become imbalanced")
 
-    let rec check_cardinal = function
-      | Empty -> Ok ()
-      | Node { x; y; l; r; cardinal = c; _ } as t ->
-        check_cardinal l >>= fun () ->
-        check_cardinal r >>= fun () ->
-        ensure
-          Elt.((c - cardinal l - cardinal r - y + x) = succ zero)
-          "The cardinal value stored in the node is wrong"
-          t
+    let check_cardinal t =
+      on_every_node t
+        (fun { x; y; l; r; cardinal = c; _ } ->
+           ensure
+             Elt.((c - cardinal l - cardinal r - y + x) = succ zero)
+             "The cardinal value stored in the node is wrong")
 
     let check t =
       ordered t >>= fun () ->
