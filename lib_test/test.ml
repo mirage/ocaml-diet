@@ -15,10 +15,56 @@
  *)
 open OUnit2
 
+module Int = struct
+  type t = int
+  let compare (x: t) (y: t) = Pervasives.compare x y
+  let zero = 0
+  let succ x = x + 1
+  let pred x = x - 1
+  let add x y = x + y
+  let sub x y = x - y
+  let to_string = string_of_int
+end
+
+module IntDiet = struct
+  include Diet.Make(Int)
+
+  let add (x, y) t =
+    add (Interval.make x y) t
+end
+
+let test_printer ctxt =
+  let open IntDiet in
+  let t = add (1, 2) @@ add (4, 5) empty in
+  let got = Format.asprintf "%a" pp t in
+  let expected = String.trim {|
+x: 4
+y: 5
+l:
+  x: 1
+  y: 2
+  l:
+    Empty
+  r:
+    Empty
+  h: 1
+  cardinal: 2
+r:
+  Empty
+h: 2
+cardinal: 4|}
+  in
+  assert_equal ~ctxt ~printer:(fun s -> s) ~cmp:String.equal expected got
+
 let suite =
   "diet" >:::
+  (
   List.map
     (fun (name, fn) -> name >:: (fun _ctx -> fn ()))
     Diet.Test.all
+  @
+  [ "printer" >:: test_printer
+  ]
+  )
 
 let () = run_test_tt_main suite

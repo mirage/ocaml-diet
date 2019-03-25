@@ -602,29 +602,6 @@ module Test = struct
       assert (find_next_gap e set = e)
     done
 
-  let test_printer () =
-    let open IntDiet in
-    let t = add (1, 2) @@ add (4, 5) empty in
-    let got = Format.asprintf "%a" pp t in
-    let expected = {|
-x: 4
-y: 5
-l:
-  x: 1
-  y: 2
-  l:
-    Empty
-  r:
-    Empty
-  h: 1
-  cardinal: 2
-r:
-  Empty
-h: 2
-cardinal: 4|}
-    in
-    assert (String.trim expected = got)
-
   let all = [
     "adding an element to the right", test_add_1;
     "removing an element on the left", test_remove_1;
@@ -636,6 +613,5 @@ cardinal: 4|}
     "diff", test_operator IntSet.diff IntDiet.diff;
     "intersection", test_operator IntSet.inter IntDiet.inter;
     "finding the next gap", test_find_next;
-    "printer", test_printer;
   ]
 end
