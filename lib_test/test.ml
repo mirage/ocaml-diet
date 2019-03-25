@@ -126,6 +126,22 @@ let test_operators ops ctxt =
       ) ops
   done
 
+let test_depth ctxt =
+  let n = 0x100000 in
+  let init = IntDiet.add (0, n) IntDiet.empty in
+  (* take away every other block *)
+  let rec sub m acc =
+    if m <= 0 then acc
+    else sub (m - 2) (IntDiet.remove (m, m) acc) in
+  let set = sub n init in
+  let d = IntDiet.height set in
+  let bound = int_of_float (log (float_of_int n) /. (log 2.)) + 1 in
+  assert_bool "Depth lower than bound" (d <= bound);
+  let set = sub (n - 1) set in
+  let got = IntDiet.height set in
+  let expected = 1 in
+  assert_equal ~ctxt ~printer:string_of_int expected got
+
 let suite =
   "diet" >:::
   (
@@ -133,7 +149,8 @@ let suite =
     (fun (name, fn) -> name >:: (fun _ctx -> fn ()))
     Diet.Test.all
   @
-  [ "operators" >:: test_operators
+  [ "logarithmic depth" >:: test_depth
+  ; "operators" >:: test_operators
     [ ("union", IntSet.union, IntDiet.union)
     ; ("diff", IntSet.diff, IntDiet.diff)
     ; ("intersection", IntSet.inter, IntDiet.inter)

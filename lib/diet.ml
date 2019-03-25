@@ -54,6 +54,7 @@ module type INTERVAL_SET = sig
   val inter: t -> t -> t
   val find_next_gap: elt -> t -> elt
   val check_invariants : t -> unit
+  val height : t -> int
 end
 
 
@@ -486,21 +487,6 @@ module IntSet = Set.Make(Int)
 
 module Test = struct
 
-  let check_depth n =
-    let init = IntDiet.add (IntDiet.Interval.make 0 n) IntDiet.empty in
-    (* take away every other block *)
-    let rec sub m acc =
-      (* Printf.printf "acc = %s\n%!" (IntDiet.to_string_internal acc); *)
-      if m <= 0 then acc
-      else sub (m - 2) IntDiet.(remove (Interval.make m m) acc) in
-    let set = sub n init in
-    let d = IntDiet.height set in
-    if d > (int_of_float (log (float_of_int n) /. (log 2.)) + 1)
-    then failwith "Depth larger than expected";
-    let set = sub (n - 1) set in
-    let d = IntDiet.height set in
-    assert (d == 1)
-
   let test_add_1 () =
     let open IntDiet in
     assert (elements @@ add (3, 4) @@ add (3, 3) empty = [ 3; 4 ])
@@ -518,13 +504,10 @@ module Test = struct
     let set = add (9, 9) @@ add (8, 8) empty in
     IntDiet.Invariant.check set
 
-  let test_depth () = check_depth 1048576
-
   let all = [
     "adding an element to the right", test_add_1;
     "removing an element on the left", test_remove_1;
     "removing an elements from two intervals", test_remove_2;
     "test adjacent intervals are coalesced", test_adjacent_1;
-    "logarithmic depth", test_depth;
   ]
 end
