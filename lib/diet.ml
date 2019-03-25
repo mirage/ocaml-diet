@@ -310,8 +310,6 @@ let rec node x y l r =
       loop acc from in
     fold range t acc
 
-  let elements t = fold_individual (fun x acc -> x :: acc) t [] |> List.rev
-
   (* iterate over maximal contiguous intervals *)
   let iter f t =
     let f' itl () =
@@ -469,45 +467,4 @@ let rec node x y l r =
     loop empty t n
 
   let check_invariants = Invariant.check
-end
-
-
-module Int = struct
-  type t = int
-  let compare (x: t) (y: t) = Pervasives.compare x y
-  let zero = 0
-  let succ x = x + 1
-  let pred x = x - 1
-  let add x y = x + y
-  let sub x y = x - y
-  let to_string = string_of_int
-end
-module IntDiet = Make(Int)
-module IntSet = Set.Make(Int)
-
-module Test = struct
-
-  let test_add_1 () =
-    let open IntDiet in
-    assert (elements @@ add (3, 4) @@ add (3, 3) empty = [ 3; 4 ])
-
-  let test_remove_1 () =
-    let open IntDiet in
-    assert (elements @@ remove (6, 7) @@ add (7, 8) empty = [ 8 ])
-
-  let test_remove_2 () =
-    let open IntDiet in
-    assert (elements @@ diff (add (9, 9) @@ add (5, 7) empty) (add (7, 9) empty) = [5; 6])
-
-  let test_adjacent_1 () =
-    let open IntDiet in
-    let set = add (9, 9) @@ add (8, 8) empty in
-    IntDiet.Invariant.check set
-
-  let all = [
-    "adding an element to the right", test_add_1;
-    "removing an element on the left", test_remove_1;
-    "removing an elements from two intervals", test_remove_2;
-    "test adjacent intervals are coalesced", test_adjacent_1;
-  ]
 end

@@ -107,11 +107,16 @@ let make_random n m =
 let show_list show l =
   Printf.sprintf "[%s]" (String.concat "; " (List.map show l))
 
-let check_equals ?msg ~ctxt set diet =
-  let set' = IntSet.elements set in
-  let diet' = IntDiet.elements diet in
+let assert_equal_int_list ?msg ~ctxt expected got =
   let printer = show_list string_of_int in
-  assert_equal ?msg ~ctxt ~printer set' diet'
+  assert_equal ?msg ~ctxt ~printer expected got
+
+let check_equals ?msg ~ctxt set diet =
+  assert_equal_int_list
+    ?msg
+    ~ctxt
+    (IntSet.elements set)
+    (IntDiet.elements diet)
 
 let test_operators ops ctxt =
   for _ = 1 to 100 do
@@ -142,14 +147,36 @@ let test_depth ctxt =
   let expected = 1 in
   assert_equal ~ctxt ~printer:string_of_int expected got
 
+let test_add_1 ctxt =
+  let open IntDiet in
+  assert_equal_int_list ~ctxt
+    [3; 4]
+    (elements @@ add (3, 4) @@ add (3, 3) empty)
+
+let test_remove_1 ctxt =
+  let open IntDiet in
+  assert_equal_int_list ~ctxt
+    [8]
+    (elements @@ remove (6, 7) @@ add (7, 8) empty)
+
+let test_remove_2 ctxt =
+  let open IntDiet in
+  assert_equal_int_list ~ctxt
+    [5; 6]
+    (elements @@ diff (add (9, 9) @@ add (5, 7) empty) (add (7, 9) empty))
+
+let test_adjacent_1 _ctxt =
+  let open IntDiet in
+  let set = add (9, 9) @@ add (8, 8) empty in
+  check_invariants set
+
 let suite =
   "diet" >:::
-  (
-  List.map
-    (fun (name, fn) -> name >:: (fun _ctx -> fn ()))
-    Diet.Test.all
-  @
-  [ "logarithmic depth" >:: test_depth
+  [ "adding an element to the right" >:: test_add_1
+  ; "removing an element on the left" >:: test_remove_1
+  ; "removing an elements from two intervals" >:: test_remove_2
+  ; "test adjacent intervals are coalesced" >:: test_adjacent_1
+  ; "logarithmic depth" >:: test_depth
   ; "operators" >:: test_operators
     [ ("union", IntSet.union, IntDiet.union)
     ; ("diff", IntSet.diff, IntDiet.diff)
@@ -158,6 +185,5 @@ let suite =
   ; "finding the next gap" >:: test_find_next_gap
   ; "printer" >:: test_printer
   ]
-  )
 
 let () = run_test_tt_main suite

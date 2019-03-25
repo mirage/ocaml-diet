@@ -132,7 +132,3 @@ end
 
 
 module Make(Elt: ELT): INTERVAL_SET with type elt = Elt.t
-
-module Test: sig
-  val all: (string * (unit -> unit)) list
-end
