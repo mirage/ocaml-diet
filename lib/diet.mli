@@ -123,8 +123,9 @@ module type INTERVAL_SET = sig
 
   (**/**)
 
-  val check_invariants : t -> unit
-  (** Check that underlying invariants hold. *)
+  val check_invariants : t -> (unit, string) result
+  (** [check_invariants t] returns [Ok ()] if the underlying invariants hold, or
+      an error message. *)
 
   val height : t -> int
   (** [height t] return the height of the corresponding tree. *)

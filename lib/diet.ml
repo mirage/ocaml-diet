@@ -53,36 +53,9 @@ module type INTERVAL_SET = sig
   val diff: t -> t -> t
   val inter: t -> t -> t
   val find_next_gap: elt -> t -> elt
-  val check_invariants : t -> unit
+  val check_invariants : t -> (unit, string) result
   val height : t -> int
 end
-
-
-exception Interval_pairs_should_be_ordered of string
-exception Intervals_should_not_overlap of string
-exception Intervals_should_not_be_adjacent of string
-exception Height_not_equals_depth of string
-exception Unbalanced of string
-exception Cardinal of string
-
-let _ =
-  Printexc.register_printer
-    (function
-      | Interval_pairs_should_be_ordered txt ->
-        Some ("Pairs within each interval should be ordered: " ^ txt)
-      | Intervals_should_not_overlap txt ->
-        Some ("Intervals should be ordered without overlap: " ^ txt)
-      | Intervals_should_not_be_adjacent txt ->
-        Some ("Intervals should not be adjacent: " ^ txt)
-      | Height_not_equals_depth txt ->
-        Some ("The height is not being maintained correctly: " ^ txt)
-      | Unbalanced txt ->
-        Some ("The tree has become imbalanced: " ^ txt)
-      | Cardinal txt ->
-        Some ("The cardinal value stored in the node is wrong: " ^ txt)
-      | _ ->
-        None
-    )
 
 module Make(Elt: ELT) = struct
   type elt = Elt.t
@@ -128,9 +101,6 @@ module Make(Elt: ELT) = struct
     Format.fprintf fmt "h: %d@," h;
     Format.fprintf fmt "cardinal: %s" (Elt.to_string cardinal);
     Format.pp_close_box fmt ()
-
-  let to_string_internal t =
-    Format.asprintf "%a" pp t
 
   let height = function
     | Empty -> 0
@@ -181,87 +151,114 @@ let rec node x y l r =
 
   module Invariant = struct
 
+    let (>>=) xr f =
+      match xr with
+      | Ok x -> f x
+      | e -> e
+
+    let ensure b msg t =
+      if b then
+        Ok ()
+      else
+        Error (Format.asprintf "%s: %a" msg pp t)
+
     (* The pairs (x, y) in each interval are ordered such that x <= y *)
     let rec ordered t = match t with
-      | Empty -> ()
+      | Empty -> Ok ()
       | Node { x; y; l; r; _ } ->
-        if x > y then raise (Interval_pairs_should_be_ordered (to_string_internal t));
-        ordered l;
+        ensure
+          (x <= y)
+          "Pairs within each interval should be ordered"
+          t
+        >>= fun () ->
+        ordered l >>= fun () ->
         ordered r
 
     (* The intervals don't overlap *)
-    let rec no_overlap t = match t with
-      | Empty -> ()
+    let rec no_overlap t =
+      let error = "Intervals should be ordered without overlap" in
+      match t with
+      | Empty -> Ok ()
       | Node { x; y; l; r; _ } ->
         begin match l with
-          | Empty -> ()
-          | Node left -> if left.y >= x then raise (Intervals_should_not_overlap (to_string_internal t))
-        end;
+          | Empty -> Ok ()
+          | Node left ->
+            ensure (left.y < x) error t
+        end >>= fun () ->
         begin match r with
-          | Empty -> ()
-          | Node right -> if right.x <= y then raise (Intervals_should_not_overlap (to_string_internal t))
-        end;
-        no_overlap l;
+          | Empty -> Ok ()
+          | Node right ->
+            ensure (right.x > y) error t
+        end >>= fun () ->
+        no_overlap l >>= fun () ->
         no_overlap r
 
     let rec no_adjacent t =
+      let error = "Intervals should not be adjacent" in
       let biggest = function
         | Empty -> None
         | Node { y; _ } -> Some y in
       let smallest = function
         | Empty -> None
         | Node { x; _ } -> Some x in
-     match t with
-      | Empty -> ()
+      match t with
+      | Empty -> Ok ()
       | Node { x; y; l; r; _ } ->
         begin match biggest l with
-        | Some ly when Elt.succ ly >= x -> raise (Intervals_should_not_be_adjacent (to_string_internal t))
-        | _ -> ()
-        end;
+          | Some ly ->
+            ensure (Elt.succ ly < x) error t
+          | None -> Ok ()
+        end >>= fun () ->
         begin match smallest r with
-        | Some rx when Elt.pred rx <= y -> raise (Intervals_should_not_be_adjacent (to_string_internal t))
-        | _ -> ()
-        end;
-        no_adjacent l;
+          | Some rx ->
+            ensure (Elt.pred rx > y) error t
+          | None -> Ok ()
+        end >>= fun () ->
+        no_adjacent l >>= fun () ->
         no_adjacent r
 
     (* The height is being stored correctly *)
     let rec height_equals_depth t =
-      if height t <> (depth t) then raise (Height_not_equals_depth (to_string_internal t));
+      ensure
+        (height t = depth t)
+        "The height is not being maintained correctly"
+        t
+      >>= fun () ->
       match t with
-      | Empty -> ()
+      | Empty -> Ok ()
       | Node { l; r; _ } ->
-        height_equals_depth l;
+        height_equals_depth l >>= fun () ->
         height_equals_depth r
 
     let rec balanced = function
-      | Empty -> ()
+      | Empty -> Ok ()
       | Node { l; r; _ } as t ->
         let diff = height l - (height r) in
         let open Pervasives in
-        if (diff > 2) || (diff < -2) then begin
-          Printf.fprintf stdout "height l = %d = %s\n" (height l) (to_string_internal l);
-          Printf.fprintf stdout "height r = %d = %s\n" (height r) (to_string_internal r);
-          raise (Unbalanced (to_string_internal t));
-        end;
-        balanced l;
+        ensure
+          (-2 <= diff && diff <= 2)
+          "The tree has become imbalanced"
+          t
+        >>= fun () ->
+        balanced l >>= fun () ->
         balanced r
 
     let rec check_cardinal = function
-      | Empty -> ()
+      | Empty -> Ok ()
       | Node { x; y; l; r; cardinal = c; _ } as t ->
-        check_cardinal l;
-        check_cardinal r;
-        if Elt.(c - (cardinal l) - (cardinal r) - y + x) <> Elt.(succ zero) then begin
-          raise (Cardinal (to_string_internal t));
-        end
+        check_cardinal l >>= fun () ->
+        check_cardinal r >>= fun () ->
+        ensure
+          Elt.((c - cardinal l - cardinal r - y + x) = succ zero)
+          "The cardinal value stored in the node is wrong"
+          t
 
     let check t =
-      ordered t;
-      no_overlap t;
-      height_equals_depth t;
-      balanced t;
-      check_cardinal t;
+      ordered t >>= fun () ->
+      no_overlap t >>= fun () ->
+      height_equals_depth t >>= fun () ->
+      balanced t >>= fun () ->
+      check_cardinal t >>= fun () ->
       no_adjacent t
   end
 

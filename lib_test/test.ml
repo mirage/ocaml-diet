@@ -81,6 +81,16 @@ let test_find_next_gap ctxt =
     assert (find_next_gap e set = e)
   done
 
+
+let check_invariants_ok diet =
+  let expected = Ok () in
+  let got = IntDiet.check_invariants diet in
+  let printer = function
+    | Ok () -> "no error"
+    | Error e -> e
+  in
+  assert_equal ~printer expected got
+
 let make_random n m =
   let rec loop set diet = function
     | 0 -> set, diet
@@ -92,15 +102,7 @@ let make_random n m =
         if from > upto then [] else from :: (range (from + 1) upto) in
       let set = List.fold_left (fun set elt -> (if add then IntSet.add else IntSet.remove) elt set) set (range r r') in
       let diet' = (if add then IntDiet.add else IntDiet.remove) (r, r') diet in
-      begin
-        try
-          IntDiet.check_invariants diet'
-        with e ->
-          Format.eprintf "%s %d\nBefore: %a\nAfter: %a\n"
-            (if add then "Add" else "Remove") r
-            IntDiet.pp diet IntDiet.pp diet';
-          raise e
-      end;
+      check_invariants_ok diet';
       loop set diet' (m - 1) in
   loop IntSet.empty IntDiet.empty m
 
@@ -168,7 +170,7 @@ let test_remove_2 ctxt =
 let test_adjacent_1 _ctxt =
   let open IntDiet in
   let set = add (9, 9) @@ add (8, 8) empty in
-  check_invariants set
+  check_invariants_ok set
 
 let suite =
   "diet" >:::
