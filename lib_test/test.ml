@@ -107,21 +107,23 @@ let make_random n m =
 let show_list show l =
   Printf.sprintf "[%s]" (String.concat "; " (List.map show l))
 
-let check_equals ~ctxt set diet =
+let check_equals ?msg ~ctxt set diet =
   let set' = IntSet.elements set in
   let diet' = IntDiet.elements diet in
   let printer = show_list string_of_int in
-  assert_equal ~ctxt ~printer set' diet'
+  assert_equal ?msg ~ctxt ~printer set' diet'
 
-let test_operator set_op diet_op ctxt =
+let test_operators ops ctxt =
   for _ = 1 to 100 do
     let set1, diet1 = make_random 1000 1000 in
     let set2, diet2 = make_random 1000 1000 in
     check_equals ~ctxt set1 diet1;
-    check_equals ~ctxt set2 diet2;
-    let set3 = set_op set1 set2 in
-    let diet3 = diet_op diet1 diet2 in
-    check_equals ~ctxt set3 diet3
+    List.iter (fun (op_name, set_op, diet_op) ->
+      let msg = "When checking " ^ op_name in
+      let set3 = set_op set1 set2 in
+      let diet3 = diet_op diet1 diet2 in
+      check_equals ~msg ~ctxt set3 diet3
+      ) ops
   done
 
 let suite =
@@ -131,7 +133,11 @@ let suite =
     (fun (name, fn) -> name >:: (fun _ctx -> fn ()))
     Diet.Test.all
   @
-  [ "intersection" >:: test_operator IntSet.inter IntDiet.inter
+  [ "operators" >:: test_operators
+    [ ("union", IntSet.union, IntDiet.union)
+    ; ("diff", IntSet.diff, IntDiet.diff)
+    ; ("intersection", IntSet.inter, IntDiet.inter)
+    ]
   ; "finding the next gap" >:: test_find_next_gap
   ; "printer" >:: test_printer
   ]

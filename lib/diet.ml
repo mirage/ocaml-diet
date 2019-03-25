@@ -555,22 +555,6 @@ module Test = struct
       check_equals set diet;
     done
 
-  let test_operator set_op diet_op () =
-    for _ = 1 to 100 do
-      let set1, diet1 = make_random 1000 1000 in
-      let set2, diet2 = make_random 1000 1000 in
-      check_equals set1 diet1;
-      check_equals set2 diet2;
-      let set3 = set_op set1 set2 in
-      let diet3 = diet_op diet1 diet2 in
-      (*
-      Printf.fprintf stderr "diet1 = %s\n" (IntDiet.to_string_internal diet1);
-      Printf.fprintf stderr "diet3 = %s\n" (IntDiet.to_string_internal diet2);
-      Printf.fprintf stderr "diet2 = %s\n" (IntDiet.to_string_internal diet3);
-      *)
-      check_equals set3 diet3
-    done
-
   let test_add_1 () =
     let open IntDiet in
     assert (elements @@ add (3, 4) @@ add (3, 3) empty = [ 3; 4 ])
@@ -597,7 +581,5 @@ module Test = struct
     "test adjacent intervals are coalesced", test_adjacent_1;
     "logarithmic depth", test_depth;
     "adding and removing elements acts like a Set", test_adds;
-    "union", test_operator IntSet.union IntDiet.union;
-    "diff", test_operator IntSet.diff IntDiet.diff;
   ]
 end
