@@ -13,9 +13,12 @@
  * OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
  *)
-open OUnit
+open OUnit2
 
-let _ =
-  let diet_tests = List.map (fun (name, fn) -> name >:: fn) Diet.Test.all in
-  let suite = "diet" >::: diet_tests in
-  OUnit2.run_test_tt_main (ounit2_of_ounit1 suite)
+let suite =
+  "diet" >:::
+  List.map
+    (fun (name, fn) -> name >:: (fun _ctx -> fn ()))
+    Diet.Test.all
+
+let () = run_test_tt_main suite
