@@ -1,5 +1,3 @@
 (library
- (name        diet)
- (public_name diet)
- (libraries   sexplib)
- (preprocess (pps ppx_sexp_conv)))
+ (name diet)
+ (public_name diet))

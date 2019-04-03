@@ -17,14 +17,14 @@
 open Crowbar
 
 module Int = struct
-  open Sexplib.Std
-  type t = int [@@deriving sexp]
+  type t = int
   let compare (x: t) (y: t) = Pervasives.compare x y
   let zero = 0
   let succ x = x + 1
   let pred x = x - 1
   let add x y = x + y
   let sub x y = x - y
+  let to_string = string_of_int
 end
 module IntDiet = Diet.Make(Int)
 
@@ -43,7 +43,7 @@ let diet = fix (fun diet ->
     ]
 )
 
-let pp_diet ppf t = pp ppf "%s" (Sexplib.Sexp.to_string_hum @@ IntDiet.sexp_of_t t)
+let pp_diet = IntDiet.pp
 let diet = with_printer pp_diet diet
 
 (* FIXME: add equals / compare to the diet signature *)
