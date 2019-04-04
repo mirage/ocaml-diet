@@ -52,16 +52,22 @@ let eq a b =
   intervals a = (intervals b)
 
 let () =
-  (add_test ~name:"union is commutative" [diet; diet] @@ fun d1 d2 ->
-    check_eq ~pp:pp_diet ~eq IntDiet.(union d1 d2) IntDiet.(union d2 d1));
-  (add_test ~name:"union is associative" [diet; diet; diet] @@ fun d1 d2 d3 ->
-    check_eq ~pp:pp_diet ~eq IntDiet.(union d1 (union d2 d3)) IntDiet.(union (union d1 d2) d3));
-  (add_test ~name:"intersection is commutative" [diet; diet] @@ fun d1 d2 ->
-    check_eq ~pp:pp_diet ~eq IntDiet.(inter d1 d2) IntDiet.(inter d2 d1));
-  (add_test ~name:"intersection is associative" [diet; diet; diet] @@ fun d1 d2 d3 ->
-    check_eq ~pp:pp_diet ~eq IntDiet.(inter d1 (inter d2 d3)) IntDiet.(inter (inter d1 d2) d3));
-  (add_test ~name:"distributive 1" [diet; diet; diet] @@ fun d1 d2 d3 ->
-    check_eq ~pp:pp_diet ~eq IntDiet.(union d1 (inter d2 d3)) IntDiet.(inter (union d1 d2) (union d1 d3)));
-  (add_test ~name:"distributive 2" [diet; diet; diet] @@ fun d1 d2 d3 ->
-    check_eq ~pp:pp_diet ~eq IntDiet.(inter d1 (union d2 d3)) IntDiet.(union (inter d1 d2) (inter d1 d3)));
+  add_test ~name:"union is commutative" [diet; diet]
+    (fun d1 d2 ->
+       check_eq ~pp:pp_diet ~eq IntDiet.(union d1 d2) IntDiet.(union d2 d1));
+  add_test ~name:"union is associative" [diet; diet; diet]
+    (fun d1 d2 d3 ->
+       check_eq ~pp:pp_diet ~eq IntDiet.(union d1 (union d2 d3)) IntDiet.(union (union d1 d2) d3));
+  add_test ~name:"intersection is commutative" [diet; diet]
+    (fun d1 d2 ->
+       check_eq ~pp:pp_diet ~eq IntDiet.(inter d1 d2) IntDiet.(inter d2 d1));
+  add_test ~name:"intersection is associative" [diet; diet; diet]
+    (fun d1 d2 d3 ->
+       check_eq ~pp:pp_diet ~eq IntDiet.(inter d1 (inter d2 d3)) IntDiet.(inter (inter d1 d2) d3));
+  add_test ~name:"distributive 1" [diet; diet; diet]
+    (fun d1 d2 d3 ->
+       check_eq ~pp:pp_diet ~eq IntDiet.(union d1 (inter d2 d3)) IntDiet.(inter (union d1 d2) (union d1 d3)));
+  add_test ~name:"distributive 2" [diet; diet; diet]
+    (fun d1 d2 d3 ->
+       check_eq ~pp:pp_diet ~eq IntDiet.(inter d1 (union d2 d3)) IntDiet.(union (inter d1 d2) (inter d1 d3)));
   ()
