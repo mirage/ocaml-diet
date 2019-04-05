@@ -51,6 +51,25 @@ let eq a b =
   let intervals t = IntDiet.fold (fun x acc -> x :: acc) t [] |> List.rev in
   intervals a = (intervals b)
 
+let shuffle_a st a =
+  for i = Array.length a-1 downto 1 do
+    let j = Random.State.int st (i+1) in
+    let tmp = a.(i) in
+    a.(i) <- a.(j);
+    a.(j) <- tmp;
+  done
+
+let check_equality interval_list rng_state =
+  let state = Random.State.make (Array.of_list rng_state) in
+  let interval_array = Array.of_list interval_list in
+  let diet_of_array array =
+    Array.fold_left (fun diet interval -> IntDiet.add interval diet) IntDiet.empty array
+  in
+  let diet1 = diet_of_array interval_array in
+  shuffle_a state interval_array;
+  let diet2 = diet_of_array interval_array in
+  check (IntDiet.equal diet2 diet1)
+
 let () =
   add_test ~name:"union is commutative" [diet; diet]
     (fun d1 d2 ->
@@ -70,4 +89,5 @@ let () =
   add_test ~name:"distributive 2" [diet; diet; diet]
     (fun d1 d2 d3 ->
        check_eq ~pp:pp_diet ~eq IntDiet.(inter d1 (union d2 d3)) IntDiet.(union (inter d1 d2) (inter d1 d3)));
+  add_test ~name:"equality" [list1 interval; list1 int] check_equality;
   ()

@@ -35,6 +35,8 @@ module type INTERVAL_SET = sig
     val y: interval -> elt
   end
   type t
+  val equal: t -> t -> bool
+  val compare: t -> t -> int
   val pp: Format.formatter -> t -> unit
   val empty: t
   val is_empty: t -> bool
@@ -87,6 +89,32 @@ module Make(Elt: ELT) = struct
     | Empty
     | Node: node -> t
   and node = { x: elt; y: elt; l: t; r: t; h: int; cardinal: elt }
+
+  type enum = End | More of interval * t * enum
+
+  let rec cons_enum t enum =
+    match t with
+    | Empty -> enum
+    | Node {x; y; l; r; _} -> cons_enum l (More ((x, y), r, enum))
+
+  let compare_with_invariant (x, y) (x', y') =
+    if eq x x' && eq y y' then 0
+    else if y < x' then -1
+    else 1
+
+  let rec compare_aux enum enum' =
+    match enum, enum' with
+    | End, End -> 0
+    | End, _ -> -1
+    | _, End -> 1
+    | More (interval, r, enum), More (interval', r', enum') ->
+      (match compare_with_invariant interval interval' with
+       | 0 -> compare_aux (cons_enum r enum) (cons_enum r' enum')
+       | c -> c)
+
+  let compare t t' = compare_aux (cons_enum t End) (cons_enum t' End)
+
+  let equal t t' = compare t t' = 0
 
   let rec pp fmt = function
     | Empty -> Format.fprintf fmt "Empty"

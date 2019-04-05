@@ -172,6 +172,33 @@ let test_adjacent_1 _ctxt =
   let set = add (9, 9) @@ add (8, 8) empty in
   check_invariants_ok set
 
+let test_equal =
+  let open IntDiet in
+  let make l = List.fold_left (fun diet intvl -> add intvl diet) empty l in
+  let test ~nodes ~nodes' ~expected ctxt =
+    let diet = make nodes in
+    let diet' = make nodes' in
+    assert_equal ~ctxt expected (IntDiet.equal diet diet')
+  in
+  [ "Empty" >:: test ~nodes:[] ~nodes':[] ~expected:true
+  ; "Single node" >:: test ~nodes:[(1, 2)] ~nodes':[(1, 2)] ~expected:true
+  ; "Two nodes swapped" >:: test ~nodes:[(1, 2); (4, 5)] ~nodes':[(4, 5); (1, 2)] ~expected:true
+  ; "Swapped nodes 1" >:: test
+      ~nodes:[(7, 8); (1, 2); (10, 11); (4, 5); (13, 14)]
+      ~nodes':[(7, 8); (4, 5); (13, 14); (1, 2); (10, 11)]
+      ~expected:true
+  ; "Swapped nodes 2" >:: test
+      ~nodes:[(4, 5); (1, 2); (10, 11); (7, 8)]
+      ~nodes':[(7, 8); (4, 5); (10, 11); (1, 2)]
+      ~expected:true
+  ; "Swapped nodes 3" >:: test
+      ~nodes:[(7, 8); (4, 5); (1, 2)]
+      ~nodes':[(1, 2); (7, 8); (4, 5)]
+      ~expected:true
+  ; "Non-empty and empty" >:: test ~nodes:[(1, 2)] ~nodes':[] ~expected:false
+  ; "Different roots" >:: test ~nodes:[(1, 2)] ~nodes':[(4, 5)] ~expected:false
+  ]
+
 let suite =
   "diet" >:::
   [ "adding an element to the right" >:: test_add_1
@@ -186,6 +213,7 @@ let suite =
     ]
   ; "finding the next gap" >:: test_find_next_gap
   ; "printer" >:: test_printer
+  ; "equality" >::: test_equal
   ]
 
 let () = run_test_tt_main suite
