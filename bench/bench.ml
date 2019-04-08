@@ -38,25 +38,36 @@ let diet_from_array arr =
     ~f:(fun diet intvl -> IntDiet.add intvl diet)
     arr
 
-let gen_diets n =
+let gen_equal_diets n =
   let intervals = gen_array n in
   let regular = diet_from_array intervals in
   fisher_yates_shuffle intervals;
   let shuffled = diet_from_array intervals in
-  let different = diet_from_array (gen_array n) in
-  regular, shuffled, different
+  regular, shuffled
 
-let d10, d10', e10 = gen_diets 10
-let d100, d100', e100 = gen_diets 100
-let d1000, d1000', e1000 = gen_diets 1000
+let gen_non_equal_diets n =
+  let one = diet_from_array @@ gen_array n in
+  let other = diet_from_array @@ gen_array n in
+  one, other
+
+let create_indexed_with_initialization ~name ~args f =
+  Bench.Test.create_group ~name @@
+    List.map args
+      ~f:
+        (fun size ->
+           let name = Printf.sprintf "size %d" size in
+           Bench.Test.create_with_initialization ~name (f size)
+        )
 
 let () =
   Command.run
     (Bench.make_command
-       [ Bench.Test.create ~name:"Equal (size 10)" (fun () -> ignore @@ IntDiet.equal d10 d10')
-       ; Bench.Test.create ~name:"Equal (size 100)" (fun () -> ignore @@ IntDiet.equal d100 d100')
-       ; Bench.Test.create ~name:"Equal (size 1000)" (fun () -> ignore @@ IntDiet.equal d1000 d1000')
-       ; Bench.Test.create ~name:"Not equal (size 10)" (fun () -> ignore @@ IntDiet.equal d10 e10)
-       ; Bench.Test.create ~name:"Not equal (size 100)" (fun () -> ignore @@ IntDiet.equal d100 e100)
-       ; Bench.Test.create ~name:"Not equal (size 1000)" (fun () -> ignore @@ IntDiet.equal d1000 e1000)
+       [ create_indexed_with_initialization ~name:"Equal" ~args:[10; 100; 1000]
+           (fun size `init ->
+              let d, d' = gen_equal_diets size in
+              (fun () -> IntDiet.equal d d'))
+       ; create_indexed_with_initialization ~name:"Not equal" ~args:[10; 100; 1000]
+           (fun size `init ->
+              let d, d' = gen_non_equal_diets size in
+              (fun () -> ignore @@ IntDiet.equal d d'))
        ])
