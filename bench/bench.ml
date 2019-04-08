@@ -12,6 +12,9 @@ module IntDiet = Diet.Make(struct
     let to_string = string_of_int
   end)
 
+(** This fix state ensures that the benchmarks are reproducible.
+    Those constants have been generated using [Random.int 1_073_741_823].
+*)
 let state = Random.State.make [|994326685; 290180182; 366831641|]
 
 let shuffle a =
