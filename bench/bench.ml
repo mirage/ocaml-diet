@@ -17,7 +17,7 @@ module IntDiet = Diet.Make(struct
 *)
 let state = Random.State.make [|994326685; 290180182; 366831641|]
 
-let shuffle a =
+let fisher_yates_shuffle a =
   for i = Array.length a-1 downto 1 do
     let j = Random.State.int state (i + 1) in
     let tmp = a.(i) in
@@ -41,7 +41,7 @@ let diet_from_array arr =
 let gen_diets n =
   let intervals = gen_array n in
   let regular = diet_from_array intervals in
-  shuffle intervals;
+  fisher_yates_shuffle intervals;
   let shuffled = diet_from_array intervals in
   let different = diet_from_array (gen_array n) in
   regular, shuffled, different
