@@ -120,11 +120,16 @@ module type INTERVAL_SET = sig
   val find_next_gap: elt -> t -> elt
   (** [find_next_gap from t] returns the next element that's
       absent in set [t] and greater than or equal to [from] **)
+
+  (**/**)
+
+  val check_invariants : t -> (unit, string) result
+  (** [check_invariants t] returns [Ok ()] if the underlying invariants hold, or
+      an error message. *)
+
+  val height : t -> int
+  (** [height t] return the height of the corresponding tree. *)
 end
 
 
 module Make(Elt: ELT): INTERVAL_SET with type elt = Elt.t
-
-module Test: sig
-  val all: (string * (unit -> unit)) list
-end

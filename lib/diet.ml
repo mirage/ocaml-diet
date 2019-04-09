@@ -53,34 +53,9 @@ module type INTERVAL_SET = sig
   val diff: t -> t -> t
   val inter: t -> t -> t
   val find_next_gap: elt -> t -> elt
+  val check_invariants : t -> (unit, string) result
+  val height : t -> int
 end
-
-
-exception Interval_pairs_should_be_ordered of string
-exception Intervals_should_not_overlap of string
-exception Intervals_should_not_be_adjacent of string
-exception Height_not_equals_depth of string
-exception Unbalanced of string
-exception Cardinal of string
-
-let _ =
-  Printexc.register_printer
-    (function
-      | Interval_pairs_should_be_ordered txt ->
-        Some ("Pairs within each interval should be ordered: " ^ txt)
-      | Intervals_should_not_overlap txt ->
-        Some ("Intervals should be ordered without overlap: " ^ txt)
-      | Intervals_should_not_be_adjacent txt ->
-        Some ("Intervals should not be adjacent: " ^ txt)
-      | Height_not_equals_depth txt ->
-        Some ("The height is not being maintained correctly: " ^ txt)
-      | Unbalanced txt ->
-        Some ("The tree has become imbalanced: " ^ txt)
-      | Cardinal txt ->
-        Some ("The cardinal value stored in the node is wrong: " ^ txt)
-      | _ ->
-        None
-    )
 
 module Make(Elt: ELT) = struct
   type elt = Elt.t
@@ -126,9 +101,6 @@ module Make(Elt: ELT) = struct
     Format.fprintf fmt "h: %d@," h;
     Format.fprintf fmt "cardinal: %s" (Elt.to_string cardinal);
     Format.pp_close_box fmt ()
-
-  let to_string_internal t =
-    Format.asprintf "%a" pp t
 
   let height = function
     | Empty -> 0
@@ -179,88 +151,89 @@ let rec node x y l r =
 
   module Invariant = struct
 
+    let (>>=) xr f =
+      match xr with
+      | Ok x -> f x
+      | e -> e
+
+    let ensure b msg t =
+      if b then
+        Ok ()
+      else
+        Error (Format.asprintf "%s: %a" msg pp t)
+
+    let rec on_every_node d f =
+      match d with
+      | Empty -> Ok ()
+      | Node n ->
+        f n d >>= fun () ->
+        on_every_node n.l f >>= fun () ->
+        on_every_node n.r f
+
     (* The pairs (x, y) in each interval are ordered such that x <= y *)
-    let rec ordered t = match t with
-      | Empty -> ()
-      | Node { x; y; l; r; _ } ->
-        if x > y then raise (Interval_pairs_should_be_ordered (to_string_internal t));
-        ordered l;
-        ordered r
+    let ordered { x; y; _ } =
+      ensure
+        (x <= y)
+        "Pairs within each interval should be ordered"
 
     (* The intervals don't overlap *)
-    let rec no_overlap t = match t with
-      | Empty -> ()
-      | Node { x; y; l; r; _ } ->
-        begin match l with
-          | Empty -> ()
-          | Node left -> if left.y >= x then raise (Intervals_should_not_overlap (to_string_internal t))
-        end;
-        begin match r with
-          | Empty -> ()
-          | Node right -> if right.x <= y then raise (Intervals_should_not_overlap (to_string_internal t))
-        end;
-        no_overlap l;
-        no_overlap r
+    let no_overlap { x; y; l; r; _ } n =
+      let error = "Intervals should be ordered without overlap" in
+      begin match l with
+        | Empty -> Ok ()
+        | Node left ->
+          ensure (left.y < x) error n
+      end >>= fun () ->
+      begin match r with
+        | Empty -> Ok ()
+        | Node right ->
+          ensure (right.x > y) error n
+      end
 
-    let rec no_adjacent t =
-      let biggest = function
-        | Empty -> None
-        | Node { y; _ } -> Some y in
-      let smallest = function
-        | Empty -> None
-        | Node { x; _ } -> Some x in
-     match t with
-      | Empty -> ()
-      | Node { x; y; l; r; _ } ->
-        begin match biggest l with
-        | Some ly when Elt.succ ly >= x -> raise (Intervals_should_not_be_adjacent (to_string_internal t))
-        | _ -> ()
-        end;
-        begin match smallest r with
-        | Some rx when Elt.pred rx <= y -> raise (Intervals_should_not_be_adjacent (to_string_internal t))
-        | _ -> ()
-        end;
-        no_adjacent l;
-        no_adjacent r
+    let no_adjacent { x; y; l; r; _ } n =
+      let error = "Intervals should not be adjacent" in
+      begin match l with
+        | Empty -> Ok ()
+        | Node left ->
+          ensure (Elt.succ left.y < x) error n
+      end >>= fun () ->
+      begin match r with
+        | Empty -> Ok ()
+        | Node right ->
+          ensure (Elt.pred right.x > y) error n
+      end
+
+    let node_height n =
+      n.h
+
+    let node_depth n =
+      depth (Node n)
 
     (* The height is being stored correctly *)
-    let rec height_equals_depth t =
-      if height t <> (depth t) then raise (Height_not_equals_depth (to_string_internal t));
-      match t with
-      | Empty -> ()
-      | Node { l; r; _ } ->
-        height_equals_depth l;
-        height_equals_depth r
+    let height_equals_depth n =
+      ensure
+        (node_height n = node_depth n)
+        "The height is not being maintained correctly"
 
-    let rec balanced = function
-      | Empty -> ()
-      | Node { l; r; _ } as t ->
-        let diff = height l - (height r) in
-        let open Pervasives in
-        if (diff > 2) || (diff < -2) then begin
-          Printf.fprintf stdout "height l = %d = %s\n" (height l) (to_string_internal l);
-          Printf.fprintf stdout "height r = %d = %s\n" (height r) (to_string_internal r);
-          raise (Unbalanced (to_string_internal t));
-        end;
-        balanced l;
-        balanced r
+    let balanced { l; r; _ } =
+      let diff = height l - (height r) in
+      let open Pervasives in
+      ensure
+        (-2 <= diff && diff <= 2)
+        "The tree has become imbalanced"
 
-    let rec check_cardinal = function
-      | Empty -> ()
-      | Node { x; y; l; r; cardinal = c; _ } as t ->
-        check_cardinal l;
-        check_cardinal r;
-        if Elt.(c - (cardinal l) - (cardinal r) - y + x) <> Elt.(succ zero) then begin
-          raise (Cardinal (to_string_internal t));
-        end
+    let check_cardinal { x; y; l; r; cardinal = c; _ } =
+      ensure
+        Elt.((c - cardinal l - cardinal r - y + x) = succ zero)
+        "The cardinal value stored in the node is wrong"
 
     let check t =
-      ordered t;
-      no_overlap t;
-      height_equals_depth t;
-      balanced t;
-      check_cardinal t;
-      no_adjacent t
+      on_every_node t ordered >>= fun () ->
+      on_every_node t no_overlap >>= fun () ->
+      on_every_node t height_equals_depth >>= fun () ->
+      on_every_node t balanced >>= fun () ->
+      on_every_node t check_cardinal >>= fun () ->
+      on_every_node t no_adjacent
   end
 
   let empty = Empty
@@ -307,8 +280,6 @@ let rec node x y l r =
         if eq x (succ upto) then acc else loop (f x acc) (succ x) in
       loop acc from in
     fold range t acc
-
-  let elements t = fold_individual (fun x acc -> x :: acc) t [] |> List.rev
 
   (* iterate over maximal contiguous intervals *)
   let iter f t =
@@ -466,176 +437,5 @@ let rec node x y l r =
       end in
     loop empty t n
 
-end
-
-
-module Int = struct
-  type t = int
-  let compare (x: t) (y: t) = Pervasives.compare x y
-  let zero = 0
-  let succ x = x + 1
-  let pred x = x - 1
-  let add x y = x + y
-  let sub x y = x - y
-  let to_string = string_of_int
-end
-module IntDiet = Make(Int)
-module IntSet = Set.Make(Int)
-
-module Test = struct
-
-  let check_depth n =
-    let init = IntDiet.add (IntDiet.Interval.make 0 n) IntDiet.empty in
-    (* take away every other block *)
-    let rec sub m acc =
-      (* Printf.printf "acc = %s\n%!" (IntDiet.to_string_internal acc); *)
-      if m <= 0 then acc
-      else sub (m - 2) IntDiet.(remove (Interval.make m m) acc) in
-    let set = sub n init in
-    let d = IntDiet.height set in
-    if d > (int_of_float (log (float_of_int n) /. (log 2.)) + 1)
-    then failwith "Depth larger than expected";
-    let set = sub (n - 1) set in
-    let d = IntDiet.height set in
-    assert (d == 1)
-
-  let make_random n m =
-    let rec loop set diet = function
-      | 0 -> set, diet
-      | m ->
-        let r = Random.int n in
-        let r' = Random.int (n - r) + r in
-        let add = Random.bool () in
-        let rec range from upto =
-          if from > upto then [] else from :: (range (from + 1) upto) in
-        let set = List.fold_left (fun set elt -> (if add then IntSet.add else IntSet.remove) elt set) set (range r r') in
-        let diet' = (if add then IntDiet.add else IntDiet.remove) (IntDiet.Interval.make r r') diet in
-        begin
-          try
-            IntDiet.Invariant.check diet';
-          with e ->
-            Printf.fprintf stderr "%s %d\nBefore: %s\nAfter: %s\n"
-              (if add then "Add" else "Remove") r
-              (IntDiet.to_string_internal diet) (IntDiet.to_string_internal diet');
-            raise e
-        end;
-        loop set diet' (m - 1) in
-    loop IntSet.empty IntDiet.empty m
-    (*
-  let set_to_string set =
-    String.concat "; " @@ List.map string_of_int @@ IntSet.elements set
-  let diet_to_string diet =
-    String.concat "; " @@ List.map string_of_int @@ IntDiet.elements diet
-    *)
-  let check_equals set diet =
-    let set' = IntSet.elements set in
-    let diet' = IntDiet.elements diet in
-    if set' <> diet' then begin
-      (*
-      Printf.fprintf stderr "Set contains: [ %s ]\n" @@ set_to_string set;
-      Printf.fprintf stderr "Diet contains: [ %s ]\n" @@ diet_to_string diet;
-      *)
-      failwith "check_equals"
-    end
-
-  let test_adds () =
-    for _ = 1 to 100 do
-      let set, diet = make_random 1000 1000 in
-      begin
-        try
-          IntDiet.Invariant.check diet
-        with e ->
-          (*
-          Printf.fprintf stderr "Diet contains: [ %s ]\n" @@ IntDiet.to_string_internal diet;
-          *)
-          raise e
-      end;
-      check_equals set diet;
-    done
-
-  let test_operator set_op diet_op () =
-    for _ = 1 to 100 do
-      let set1, diet1 = make_random 1000 1000 in
-      let set2, diet2 = make_random 1000 1000 in
-      check_equals set1 diet1;
-      check_equals set2 diet2;
-      let set3 = set_op set1 set2 in
-      let diet3 = diet_op diet1 diet2 in
-      (*
-      Printf.fprintf stderr "diet1 = %s\n" (IntDiet.to_string_internal diet1);
-      Printf.fprintf stderr "diet3 = %s\n" (IntDiet.to_string_internal diet2);
-      Printf.fprintf stderr "diet2 = %s\n" (IntDiet.to_string_internal diet3);
-      *)
-      check_equals set3 diet3
-    done
-
-  let test_add_1 () =
-    let open IntDiet in
-    assert (elements @@ add (3, 4) @@ add (3, 3) empty = [ 3; 4 ])
-
-  let test_remove_1 () =
-    let open IntDiet in
-    assert (elements @@ remove (6, 7) @@ add (7, 8) empty = [ 8 ])
-
-  let test_remove_2 () =
-    let open IntDiet in
-    assert (elements @@ diff (add (9, 9) @@ add (5, 7) empty) (add (7, 9) empty) = [5; 6])
-
-  let test_adjacent_1 () =
-    let open IntDiet in
-    let set = add (9, 9) @@ add (8, 8) empty in
-    IntDiet.Invariant.check set
-
-  let test_depth () = check_depth 1048576
-
-  let test_find_next () =
-    let open IntDiet in
-    let set = add (9, 9) @@ add (5, 7) empty in
-    assert (find_next_gap 0 set = 0);
-    assert (find_next_gap 5 set = 8);
-    assert (find_next_gap 9 set = 10);
-    for i = 0 to 12 do
-      let e = find_next_gap i set in
-      assert (e >= i);
-      assert (not @@ mem e set);
-      assert (e == i || mem i set);
-      assert (find_next_gap e set = e)
-    done
-
-  let test_printer () =
-    let open IntDiet in
-    let t = add (1, 2) @@ add (4, 5) empty in
-    let got = Format.asprintf "%a" pp t in
-    let expected = {|
-x: 4
-y: 5
-l:
-  x: 1
-  y: 2
-  l:
-    Empty
-  r:
-    Empty
-  h: 1
-  cardinal: 2
-r:
-  Empty
-h: 2
-cardinal: 4|}
-    in
-    assert (String.trim expected = got)
-
-  let all = [
-    "adding an element to the right", test_add_1;
-    "removing an element on the left", test_remove_1;
-    "removing an elements from two intervals", test_remove_2;
-    "test adjacent intervals are coalesced", test_adjacent_1;
-    "logarithmic depth", test_depth;
-    "adding and removing elements acts like a Set", test_adds;
-    "union", test_operator IntSet.union IntDiet.union;
-    "diff", test_operator IntSet.diff IntDiet.diff;
-    "intersection", test_operator IntSet.inter IntDiet.inter;
-    "finding the next gap", test_find_next;
-    "printer", test_printer;
-  ]
+  let check_invariants = Invariant.check
 end
