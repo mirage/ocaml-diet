@@ -1,0 +1,13 @@
+(executable
+  (name bench)
+  (libraries
+    core
+    core_bench
+    diet
+  )
+)
+
+(alias
+  (name bench)
+  (action (run ./bench.exe))
+)

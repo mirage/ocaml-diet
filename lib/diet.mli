@@ -63,6 +63,12 @@ module type INTERVAL_SET = sig
   type t
   (** The type of sets *)
 
+  val equal : t -> t -> bool
+  (** Equality over sets *)
+
+  val compare : t -> t -> int
+  (** Comparison over sets *)
+
   val pp: Format.formatter -> t -> unit
   (** Pretty-print a set *)
 
