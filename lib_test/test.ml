@@ -15,19 +15,13 @@
  *)
 open OUnit2
 
-module Int = struct
+module Int_comparable = struct
   type t = int
   let compare (x: t) (y: t) = Pervasives.compare x y
-  let zero = 0
-  let succ x = x + 1
-  let pred x = x - 1
-  let add x y = x + y
-  let sub x y = x - y
-  let to_string = string_of_int
 end
 
 module IntDiet = struct
-  include Diet.Make(Int)
+  include Diet.Int
 
   let add (x, y) t =
     add (Interval.make x y) t
@@ -38,7 +32,7 @@ module IntDiet = struct
   let elements t = fold_individual (fun x acc -> x :: acc) t [] |> List.rev
 end
 
-module IntSet = Set.Make(Int)
+module IntSet = Set.Make(Int_comparable)
 
 let test_printer ctxt =
   let open IntDiet in
