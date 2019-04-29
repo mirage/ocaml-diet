@@ -139,3 +139,6 @@ end
 
 
 module Make(Elt: ELT): INTERVAL_SET with type elt = Elt.t
+
+module Int : INTERVAL_SET with type elt = int
+module Int64 : INTERVAL_SET with type elt = int64

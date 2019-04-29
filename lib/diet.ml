@@ -465,3 +465,17 @@ let rec node x y l r =
 
   let check_invariants = Invariant.check
 end
+
+module Int_elt = struct
+  type t = int
+  let compare a b = compare (a:int) b
+  let zero = 0
+  let pred = pred
+  let succ = succ
+  let sub = (-)
+  let add = (+)
+  let to_string = string_of_int
+end
+
+module Int = Make(Int_elt)
+module Int64 = Make(Int64)
