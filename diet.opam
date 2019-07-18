@@ -7,7 +7,8 @@ doc: "https://mirage.github.io/ocaml-diet/"
 bug-reports: "https://github.com/mirage/ocaml-diet/issues"
 depends: [
   "ocaml" {>= "4.03.0"}
-  "dune" {build}
+  "dune"
+  "stdlib-shims"
   "ounit" {with-test}
 ]
 build: [

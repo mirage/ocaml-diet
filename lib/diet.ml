@@ -143,7 +143,7 @@ let create x y l r =
 
 let rec node x y l r =
   let hl = height l and hr = height r in
-  let open Pervasives in
+  let open Stdlib in
   if hl > hr + 2 then begin
     match l with
     | Empty -> assert false
@@ -243,7 +243,7 @@ let rec node x y l r =
 
     let balanced { l; r; _ } =
       let diff = height l - (height r) in
-      let open Pervasives in
+      let open Stdlib in
       ensure
         (-2 <= diff && diff <= 2)
         "The tree has become imbalanced"
@@ -452,7 +452,7 @@ let rec node x y l r =
             let i = choose free in
             let x, y = Interval.(x i, y i) in
             let len = Elt.(succ @@ y - x) in
-            let will_use = if Pervasives.(Elt.compare n len < 0) then n else len in
+            let will_use = if Stdlib.(Elt.compare n len < 0) then n else len in
             let i' = Interval.make x Elt.(pred @@ x + will_use) in
             Some ((add i' acc), (remove i' free), Elt.(n - will_use))
           with

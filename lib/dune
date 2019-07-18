@@ -1,3 +1,4 @@
 (library
  (name diet)
- (public_name diet))
+ (public_name diet)
+ (libraries stdlib-shims))
