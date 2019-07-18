@@ -1,3 +1,7 @@
+## v0.4 (2019-07-16)
+
+- support OCaml 4.08 deprecations by using Stdlib (@avsm)
+
 ## v0.3 (2019-03-07)
 - switch to `dune-release` (@avsm)
 - run the tests as well as build them (@avsm)
