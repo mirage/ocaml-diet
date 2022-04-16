@@ -9,7 +9,7 @@ depends: [
   "ocaml" {>= "4.03.0"}
   "dune"
   "stdlib-shims"
-  "ounit" {with-test}
+  "ounit2" {with-test}
 ]
 build: [
   ["dune" "subst"] {pinned}
